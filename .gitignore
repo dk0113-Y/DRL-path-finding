@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pyo
+
+.vscode/
+.idea/
+.pytest_cache/
+.mypy_cache/
+
+outputs/
+perf_runs/
+tmp_plot_smoke/
+
