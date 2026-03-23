@@ -1,4 +1,4 @@
-# Grid Exploration DDQN
+# DRL-path-finding
 
 这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前已经实现了从随机地图生成、局部观测、累计 belief map、frontier 候选提取，到 DDQN 训练、周期评估、checkpoint 保存和离线绘图的一整套训练闭环。
 
