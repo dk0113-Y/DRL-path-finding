@@ -1,6 +1,6 @@
 # DRL-path-finding
 
-这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前已经实现了从随机地图生成、局部观测、累计 belief map、共享环境语义解析，到 DDQN 训练、周期评估、checkpoint 保存和离线绘图的一整套训练闭环。
+这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前主线已经收口到“共享语义双状态架构”：从随机地图生成、局部观测、累计 belief map、共享环境语义解析，到 DDQN 训练、周期评估、checkpoint 保存与可选离线绘图，形成了一整套训练闭环。
 
 ## 当前主要功能
 
@@ -14,12 +14,23 @@
   - value 分支读取 block-tree 结构化状态；
   - 再由语义分离的 dueling head 输出 Q 值。
 - 使用 Double DQN + n-step transition 的方式训练。
-- 训练过程中自动记录 CSV 日志、周期 greedy evaluation、保存 `last.pt` / `best.pt`，并在结束后生成训练与评估曲线。
+- 训练过程中默认记录 CSV 日志、周期 greedy evaluation、保存 `last.pt` / `best.pt`。
+- 训练结束后的离线绘图、轨迹图导出、额外可视化产物属于可选开关，当前默认关闭以降低 wall-clock 开销。
+
+## 当前主线说明
+
+- 当前训练 / 评估 / final_probe 主链已经不再使用旧的 `near / mid / token` 三分支语义。
+- 当前主输入主线是：
+  - `SharedSemanticLayer`
+  - `Advantage State`（local decision canvas）
+  - `Value State`（Accessible Unknown Block tree）
+  - `Semantic Dueling Head`
+- 仓库里仍保留部分旧模块文件作为历史参考或底层算子来源，但它们不再是当前训练主路径。
 
 ## 代码结构
 
 - `train_q_agent.py`
-  - 主训练入口，负责参数配置、系统组装、训练循环、评估、checkpoint 与绘图。
+  - 主训练入口，负责参数配置、系统组装、训练循环、评估、checkpoint 与可选绘图。
 - `agents/`
   - Q 网络与状态适配逻辑。
 - `encoders/`
@@ -30,6 +41,16 @@
   - 地图生成、局部观测、belief map、shared semantic layer、advantage/value 状态构造。
 - `training/`
   - collector、replay buffer、learner、evaluator、logger、plotting。
+
+当前主线之外的历史参考模块包括但不限于：
+
+- `env/frontier_token_builder.py`
+- `env/local_state_builder.py`
+- `encoders/global_encoder.py`
+- `encoders/local_encoder.py`
+- `heads/q_head.py`
+
+这些文件目前不作为训练入口的主语义解释路径。
 
 ## 训练流程概览
 
@@ -45,17 +66,38 @@
 
 ## 运行方式
 
-最直接的训练命令：
+推荐的常规主训练命令：
 
 ```bash
 python train_q_agent.py --device cuda
 ```
+
+这条命令对应当前默认主训练基线：
+
+- `enable_amp = False`
+- `enable_inference_amp = False`
+- `enable_torch_compile = False`
+- `enable_channels_last = False`
+- `enable_tf32 = True`
+- `enable_cudnn_benchmark = True`
 
 快速 smoke 测试：
 
 ```bash
 python train_q_agent.py --smoke --device cpu
 ```
+
+常用 profiling 命令：
+
+```bash
+python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup-steps 4000 --eval-interval-env-steps 24000 --eval-episodes 4 --final-greedy-episodes 1 --timing-log-interval 4000 --episode-print-interval 0 --no-save-eval-trajectories --no-save-train-representative-trajectories --no-save-final-probe-trajectories --no-generate-plots-on-finish
+```
+
+实验性快速 CUDA 路径：
+
+- 可通过 `--fast-cuda` 或 `build_fast_cuda_config()` 启用。
+- 该路径会打开 AMP / inference AMP / torch.compile / channels-last 等运行时性能开关。
+- 目前这条路径在当前机器与当前模型上**未验证形成稳定净收益**，因此保留为实验性入口，不作为默认推荐主训练配置。
 
 常用可调参数包括：
 
@@ -85,7 +127,7 @@ python train_q_agent.py --smoke --device cpu
 
 - `logs/`：训练与评估 CSV
 - `checkpoints/`：`last.pt`、`best.pt`
-- `plots/`：离线生成的指标曲线
-- `trajectories/`：评估轨迹图
+- `plots/`：离线生成的指标曲线，仅在启用相关开关时生成
+- `trajectories/`：评估轨迹图，仅在启用相关开关时生成
 
 这些目录属于实验产物，不适合作为源码仓库的默认提交内容，因此已经在 `.gitignore` 中排除。
