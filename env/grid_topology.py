@@ -227,7 +227,11 @@ class GridTopology:
         return best, best_size
 
     @staticmethod
-    def frontier_mask(known_map: np.ndarray, min_unknown_neighbors: int = 1) -> np.ndarray:
+    def frontier_mask(
+        known_map: np.ndarray,
+        min_unknown_neighbors: int = 1,
+        connectivity: int = 8,
+    ) -> np.ndarray:
         """
         Canonical frontier geometry on belief map:
           known_free cells adjacent to unknown cells.
@@ -239,10 +243,20 @@ class GridTopology:
         known_free = (known_map == EMPTY)
 
         p = np.pad(unknown, 1, mode="constant", constant_values=0)
-        neigh_unknown = (
-            p[:-2, :-2] + p[:-2, 1:-1] + p[:-2, 2:] + p[1:-1, :-2] +
-            p[1:-1, 2:] + p[2:, :-2] + p[2:, 1:-1] + p[2:, 2:]
-        )
+        if int(connectivity) == 4:
+            neigh_unknown = (
+                p[:-2, 1:-1] +
+                p[1:-1, :-2] +
+                p[1:-1, 2:] +
+                p[2:, 1:-1]
+            )
+        elif int(connectivity) == 8:
+            neigh_unknown = (
+                p[:-2, :-2] + p[:-2, 1:-1] + p[:-2, 2:] + p[1:-1, :-2] +
+                p[1:-1, 2:] + p[2:, :-2] + p[2:, 1:-1] + p[2:, 2:]
+            )
+        else:
+            raise ValueError(f"frontier connectivity must be 4 or 8, got {connectivity}")
         return known_free & (neigh_unknown >= int(min_unknown_neighbors))
 
     @staticmethod

@@ -1,3 +1,3 @@
-from heads.q_head import DecisionHeadConfig, SplitDuelingDecisionHead
+from heads.semantic_dueling_head import SemanticDuelingHead, SemanticDuelingHeadConfig
 
-__all__ = ["DecisionHeadConfig", "SplitDuelingDecisionHead"]
+__all__ = ["SemanticDuelingHead", "SemanticDuelingHeadConfig"]

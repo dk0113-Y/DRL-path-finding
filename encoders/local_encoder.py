@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Legacy near-map encoder path kept only as historical reference."""
+
 from dataclasses import dataclass
 from typing import Optional
 

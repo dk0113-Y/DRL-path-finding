@@ -39,6 +39,26 @@ class LocalObservationModel:
             return int(lr), int(lc)
         return None
 
+    def _corner_occluded_global(self, prev_rc: Tuple[int, int], cur_rc: Tuple[int, int]) -> bool:
+        if not bool(getattr(self.sensor, "block_corner_peeking", True)):
+            return False
+
+        pr, pc = int(prev_rc[0]), int(prev_rc[1])
+        cr, cc = int(cur_rc[0]), int(cur_rc[1])
+        dr = cr - pr
+        dc = cc - pc
+        if abs(dr) != 1 or abs(dc) != 1:
+            return False
+
+        side_a = (cr, pc)
+        side_b = (pr, cc)
+        for rr, cc_ in (side_a, side_b):
+            if not (0 <= rr < self._rows and 0 <= cc_ < self._cols):
+                return False
+        return bool(self.grid[side_a[0], side_a[1]] == OBSTACLE) and bool(
+            self.grid[side_b[0], side_b[1]] == OBSTACLE
+        )
+
     def _render_local_snap(self, agent_state: Tuple[int, int], los_lines: Sequence[Sequence[Tuple[int, int]]]) -> np.ndarray:
         """
         Full-disk visibility semantics:
@@ -49,7 +69,11 @@ class LocalObservationModel:
         snap = np.full(self.local_shape, INVISIBLE, dtype=np.int8)
 
         for line in los_lines:
+            prev_global: Optional[Tuple[int, int]] = None
             for r, c in line:
+                if prev_global is not None and self._corner_occluded_global(prev_global, (r, c)):
+                    break
+
                 local = self._global_to_local(agent_state, r, c)
                 if local is None:
                     break
@@ -60,6 +84,7 @@ class LocalObservationModel:
                     snap[lr, lc] = OBSTACLE
                     break
                 snap[lr, lc] = EMPTY
+                prev_global = (int(r), int(c))
 
         return snap
 
@@ -80,12 +105,22 @@ class LocalObservationModel:
             if not (0 <= tr < self._rows and 0 <= tc < self._cols):
                 continue
 
+            prev_rel: Optional[Tuple[int, int]] = None
             for rel_r, rel_c, local_r, local_c in ray:
+                if prev_rel is not None:
+                    prev_rel_r, prev_rel_c = prev_rel
+                    if self._corner_occluded_global(
+                        (ar + prev_rel_r, ac + prev_rel_c),
+                        (ar + rel_r, ac + rel_c),
+                    ):
+                        break
+
                 value = int(self.grid[ar + rel_r, ac + rel_c])
                 if value == OBSTACLE:
                     snap[local_r, local_c] = OBSTACLE
                     break
                 snap[local_r, local_c] = EMPTY
+                prev_rel = (int(rel_r), int(rel_c))
 
         return snap
 

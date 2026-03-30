@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Legacy local-state builder kept only as historical reference."""
+
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -13,6 +15,7 @@ LOCAL_STATE_CHANNELS = (
     "unknown",
     "obstacle",
     "free",
+    "frontier",
     "trajectory_recency",
     "global_row_norm",
     "global_col_norm",
@@ -40,10 +43,9 @@ class LocalStateBuilder:
     Semantics:
     - local window size is controlled by LocalStateConfig.local_window_shape;
       it is not inferred from sensor local_snap or scan_radius.
-    - near = local geometry + short-term recency + global normalized position context.
+    - near = local geometry + local frontier cue + short-term recency + global normalized position context.
     - all channels come from cumulative belief/state (belief map, visit history, agent global position).
-    - shared frontier artifacts remain accepted for interface compatibility, but near no longer
-      consumes a dense frontier channel.
+    - the frontier channel is a dense local mask sampled from the current belief-map frontier.
     """
 
     def __init__(self, config: Optional[LocalStateConfig] = None):
@@ -61,6 +63,7 @@ class LocalStateBuilder:
         )
 
         self._sampled_map_buf = np.empty((h, w), dtype=np.int8)
+        self._frontier_buf = np.empty((h, w), dtype=np.float32)
         self._trajectory_buf = np.empty((h, w), dtype=np.float32)
         self._local_tensor_buf = np.empty((LOCAL_STATE_CHANNEL_COUNT, h, w), dtype=np.float32)
 
@@ -97,6 +100,40 @@ class LocalStateBuilder:
             (ac >= 0) & (ac < cum_map.map.shape[1])
         )
         return ar, ac, inside
+
+    @staticmethod
+    def _shared_artifact_value(shared_artifacts, key: str):
+        if shared_artifacts is None:
+            return None
+        if isinstance(shared_artifacts, dict):
+            return shared_artifacts.get(key)
+        return getattr(shared_artifacts, key, None)
+
+    def _resolve_frontier_bool(
+        self,
+        cum_map,
+        *,
+        frontier_u8: Optional[np.ndarray] = None,
+        frontier_stats=None,
+        shared_artifacts=None,
+    ) -> np.ndarray:
+        frontier_stats_use = frontier_stats
+        if frontier_stats_use is None:
+            frontier_stats_use = self._shared_artifact_value(shared_artifacts, "frontier_stats")
+
+        frontier_u8_use = frontier_u8
+        if frontier_u8_use is None:
+            frontier_u8_use = self._shared_artifact_value(shared_artifacts, "frontier_u8")
+
+        if frontier_stats_use is None:
+            frontier_stats_use = cum_map.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_u8_use)
+
+        frontier_bool = np.asarray(frontier_stats_use.frontier_bool, dtype=bool)
+        if frontier_bool.shape != cum_map.map.shape:
+            raise ValueError(
+                f"frontier shape mismatch: expected {cum_map.map.shape}, got {frontier_bool.shape}"
+            )
+        return frontier_bool
 
     def _ensure_trajectory_decay_cache(self, max_delta: int) -> None:
         decay = float(max(1e-6, self.config.trajectory_decay_steps))
@@ -148,6 +185,17 @@ class LocalStateBuilder:
         if self._timing_enabled:
             self.sampling_time += time.perf_counter() - t_sampling
 
+        frontier_local = self._frontier_buf
+        frontier_local.fill(0.0)
+        if inside_any:
+            frontier_bool = self._resolve_frontier_bool(
+                cum_map,
+                frontier_u8=frontier_u8,
+                frontier_stats=frontier_stats,
+                shared_artifacts=shared_artifacts,
+            )
+            frontier_local[inside] = frontier_bool[ir, ic]
+
         t_trajectory = time.perf_counter() if self._timing_enabled else 0.0
         trajectory_recency = self._trajectory_buf
         trajectory_recency.fill(0.0)
@@ -175,9 +223,10 @@ class LocalStateBuilder:
         local_tensor[0] = (sampled_map == INVISIBLE)
         local_tensor[1] = (sampled_map == OBSTACLE)
         local_tensor[2] = (sampled_map == EMPTY)
-        local_tensor[3] = trajectory_recency
-        local_tensor[4].fill(np.float32(row_norm))
-        local_tensor[5].fill(np.float32(col_norm))
+        local_tensor[3] = frontier_local
+        local_tensor[4] = trajectory_recency
+        local_tensor[5].fill(np.float32(row_norm))
+        local_tensor[6].fill(np.float32(col_norm))
         if local_tensor.shape[0] != LOCAL_STATE_CHANNEL_COUNT:
             raise RuntimeError(
                 f"local channel count mismatch: expected {LOCAL_STATE_CHANNEL_COUNT}, got {local_tensor.shape[0]}"
@@ -207,6 +256,7 @@ def _smoke_test() -> None:
         "unknown",
         "obstacle",
         "free",
+        "frontier",
         "trajectory_recency",
         "global_row_norm",
         "global_col_norm",

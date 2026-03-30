@@ -13,8 +13,11 @@ MID_MAP_CHANNELS = (
     "unknown_density",
     "known_obstacle_density",
     "coarse_visit_density",
+    "frontier_density",
 )
 MID_MAP_CHANNEL_COUNT = len(MID_MAP_CHANNELS)
+FRONTIER_MIN_UNKNOWN_NEIGHBORS = 1
+FRONTIER_NEIGHBOR_CONNECTIVITY = 4
 
 
 @dataclass(frozen=True)
@@ -27,10 +30,71 @@ class MidMapConfig:
 
 @dataclass(frozen=True)
 class FrontierDerivedStats:
-    """Cached frontier-related belief-map statistics shared by mid map and frontier-region tokens."""
+    """Shared frontier snapshot derived from the incrementally maintained frontier cache."""
 
     frontier_u8: np.ndarray
     frontier_bool: np.ndarray
+    frontier_source_uid: int
+    frontier_revision: int
+
+
+@dataclass(frozen=True)
+class FrontierConsistencyStats:
+    """Debug-only comparison summary for incremental frontier cache validation."""
+
+    consistent: bool
+    mismatch_count: int
+    frontier_source_uid: int
+    frontier_revision: int
+    map_shape: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class DirtyRect:
+    """Half-open array-space dirty rectangle [r0:r1, c0:c1)."""
+
+    r0: int
+    r1: int
+    c0: int
+    c1: int
+
+
+@dataclass(frozen=True)
+class WorldBoundsExpansion:
+    """Map growth metadata needed by frontier seam maintenance."""
+
+    pad_top: int
+    pad_left: int
+    pad_bottom: int
+    pad_right: int
+    seam_dirty_rects: tuple[DirtyRect, ...]
+
+
+@dataclass(frozen=True)
+class AnalysisBox:
+    """
+    Array-space analysis window used by the shared semantic layer.
+
+    The box tracks the currently known region plus a margin tied to the
+    advantage local decision canvas half-span. This intentionally limits
+    semantic parsing to unknown structure that is immediately relevant to
+    exploration, instead of treating the unbounded outside-of-map ocean as a
+    real decision object.
+    """
+
+    r0: int
+    r1: int
+    c0: int
+    c1: int
+    margin: int
+    known_r0: int
+    known_r1: int
+    known_c0: int
+    known_c1: int
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return int(self.r1 - self.r0), int(self.c1 - self.c0)
 
 
 class CumulativeBeliefMap:
@@ -44,6 +108,7 @@ class CumulativeBeliefMap:
     """
 
     _aggregate_edge_cache: dict[tuple[int, int, int, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    _instance_uid_counter: int = 0
 
     def __init__(
         self,
@@ -56,11 +121,17 @@ class CumulativeBeliefMap:
         if self.true_grid.ndim != 2:
             raise ValueError("true_grid must be a 2D array")
         self.enable_timing = bool(enable_timing)
+        type(self)._instance_uid_counter += 1
+        self.frontier_source_uid = int(type(self)._instance_uid_counter)
 
         # Observation-side local_snap geometry for belief update projection only.
         # This is not the policy-network local window size.
         self.local_shape = tuple(first_local_snap.shape)
         self.local_center = (self.local_shape[0] // 2, self.local_shape[1] // 2)
+        # Bind semantic analysis extent to the radar-driven local decision
+        # canvas scale; this avoids introducing a separate hand-tuned margin.
+        self.analysis_margin = int(max(self.local_center))
+        self.revisit_recency_decay_steps = float(max(1, max(self.local_shape)))
 
         # Light-weight growth buffer to avoid frequent near-edge reallocations.
         self._growth_margin = int(max(4, max(self.local_shape) // 2))
@@ -79,11 +150,14 @@ class CumulativeBeliefMap:
         self.step_count = 0
         self.origin_world_rc = (int(start_state[0]), int(start_state[1]))
 
-        self._latest_frontier_u8: Optional[np.ndarray] = None
+        self.frontier_bool = np.zeros((1, 1), dtype=bool)
+        self.frontier_u8 = np.zeros((1, 1), dtype=np.uint8)
+        self.frontier_revision = 0
         self._latest_frontier_stats: Optional[FrontierDerivedStats] = None
         self._cached_visit_log_map: Optional[np.ndarray] = None
         self._cached_visit_log_max: float = 0.0
         self._cached_obstacle_integral: Optional[np.ndarray] = None
+        self._cached_revisit_recency_map: Optional[np.ndarray] = None
         self._visit_cache_step: int = -1
         self._domain_buffer_cache: dict[tuple[int, int, bool, str], tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]] = {}
         self._mid_input_channels_cache: dict[tuple[int, int], np.ndarray] = {}
@@ -96,6 +170,17 @@ class CumulativeBeliefMap:
         self.mid_map_time = 0.0
         self.domain_extract_time = 0.0
         self.aggregate_time = 0.0
+        self.analysis_box = AnalysisBox(
+            r0=0,
+            r1=1,
+            c0=0,
+            c1=1,
+            margin=int(self.analysis_margin),
+            known_r0=0,
+            known_r1=1,
+            known_c0=0,
+            known_c1=1,
+        )
 
         self._init_from_first_snap(start_state, first_local_snap)
 
@@ -127,8 +212,11 @@ class CumulativeBeliefMap:
             self.visit_count = np.zeros((1, 1), dtype=np.int32)
             self.last_visit_step = np.full((1, 1), -1, dtype=np.int32)
             self.origin_world_rc = (ar, ac)
-            self._record_visit(agent_state)
+            self.frontier_bool = np.zeros_like(self.map, dtype=bool)
+            self.frontier_u8 = np.zeros_like(self.map, dtype=np.uint8)
+            self._record_visit_in_bounds(agent_state)
             self._refresh_coverage()
+            self._update_analysis_box()
             return
 
         wr = gr[visible]
@@ -142,6 +230,8 @@ class CumulativeBeliefMap:
         self.visit_count = np.zeros((h, w), dtype=np.int32)
         self.last_visit_step = np.full((h, w), -1, dtype=np.int32)
         self.origin_world_rc = (min_r, min_c)
+        self.frontier_bool = np.zeros_like(self.map, dtype=bool)
+        self.frontier_u8 = np.zeros_like(self.map, dtype=np.uint8)
 
         self.update(agent_state, snap)
 
@@ -167,17 +257,50 @@ class CumulativeBeliefMap:
         self._mid_map_cache_key = None
         self._mid_map_cache_value = None
 
-    def _invalidate_frontier_cache(self) -> None:
-        self._latest_frontier_u8 = None
+    def _invalidate_frontier_stats_cache(self) -> None:
         self._latest_frontier_stats = None
+
+    def _invalidate_obstacle_cache(self) -> None:
         self._cached_obstacle_integral = None
+
+    def _invalidate_map_state_caches(self) -> None:
+        self._invalidate_frontier_stats_cache()
+        self._invalidate_obstacle_cache()
         self._invalidate_map_build_caches()
 
     def _invalidate_visit_cache(self) -> None:
         self._cached_visit_log_map = None
         self._cached_visit_log_max = 0.0
+        self._cached_revisit_recency_map = None
         self._visit_cache_step = -1
         self._invalidate_map_build_caches()
+
+    def _update_analysis_box(self) -> None:
+        known = (self.map != INVISIBLE)
+        if np.any(known):
+            rows, cols = np.nonzero(known)
+            known_r0 = int(rows.min())
+            known_r1 = int(rows.max()) + 1
+            known_c0 = int(cols.min())
+            known_c1 = int(cols.max()) + 1
+        else:
+            known_r0 = 0
+            known_r1 = int(self.map.shape[0])
+            known_c0 = 0
+            known_c1 = int(self.map.shape[1])
+
+        margin = int(self.analysis_margin)
+        self.analysis_box = AnalysisBox(
+            r0=max(0, known_r0 - margin),
+            r1=min(int(self.map.shape[0]), known_r1 + margin),
+            c0=max(0, known_c0 - margin),
+            c1=min(int(self.map.shape[1]), known_c1 + margin),
+            margin=margin,
+            known_r0=known_r0,
+            known_r1=known_r1,
+            known_c0=known_c0,
+            known_c1=known_c1,
+        )
 
     def _get_domain_buffers(
         self,
@@ -321,7 +444,151 @@ class CumulativeBeliefMap:
         sums = corners[:, 1:, 1:] - corners[:, :-1, 1:] - corners[:, 1:, :-1] + corners[:, :-1, :-1]
         return (sums / denom[None, :, :]).astype(np.float32, copy=False)
 
-    def _ensure_world_bounds(self, min_r: int, max_r: int, min_c: int, max_c: int) -> None:
+    @staticmethod
+    def _clip_dirty_rect(rect: DirtyRect, shape: tuple[int, int]) -> Optional[DirtyRect]:
+        h, w = int(shape[0]), int(shape[1])
+        r0 = max(0, min(h, int(rect.r0)))
+        r1 = max(0, min(h, int(rect.r1)))
+        c0 = max(0, min(w, int(rect.c0)))
+        c1 = max(0, min(w, int(rect.c1)))
+        if r0 >= r1 or c0 >= c1:
+            return None
+        return DirtyRect(r0=r0, r1=r1, c0=c0, c1=c1)
+
+    @staticmethod
+    def _dirty_rect_from_points(rows: np.ndarray, cols: np.ndarray) -> Optional[DirtyRect]:
+        if rows.size <= 0 or cols.size <= 0:
+            return None
+        return DirtyRect(
+            r0=int(rows.min()),
+            r1=int(rows.max()) + 1,
+            c0=int(cols.min()),
+            c1=int(cols.max()) + 1,
+        )
+
+    @staticmethod
+    def _normalize_dirty_rects(rects, shape: tuple[int, int]) -> list[DirtyRect]:
+        out: list[DirtyRect] = []
+        seen: set[tuple[int, int, int, int]] = set()
+        for rect in rects:
+            if rect is None:
+                continue
+            clipped = CumulativeBeliefMap._clip_dirty_rect(rect, shape)
+            if clipped is None:
+                continue
+            key = (clipped.r0, clipped.r1, clipped.c0, clipped.c1)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(clipped)
+        return out
+
+    @staticmethod
+    def _expand_dirty_rect(rect: Optional[DirtyRect], radius: int) -> Optional[DirtyRect]:
+        if rect is None:
+            return None
+        pad = int(max(0, radius))
+        return DirtyRect(
+            r0=int(rect.r0) - pad,
+            r1=int(rect.r1) + pad,
+            c0=int(rect.c0) - pad,
+            c1=int(rect.c1) + pad,
+        )
+
+    def _recompute_frontier_full_bool(self) -> np.ndarray:
+        return GridTopology.frontier_mask(
+            self.map,
+            min_unknown_neighbors=FRONTIER_MIN_UNKNOWN_NEIGHBORS,
+            connectivity=FRONTIER_NEIGHBOR_CONNECTIVITY,
+        )
+
+    def _recompute_frontier_full_u8(self) -> np.ndarray:
+        return self._recompute_frontier_full_bool().astype(np.uint8) * 255
+
+    def debug_frontier_consistency_stats(self) -> FrontierConsistencyStats:
+        full_bool = self._recompute_frontier_full_bool()
+        mismatch = int(np.count_nonzero(self.frontier_bool != full_bool))
+        return FrontierConsistencyStats(
+            consistent=bool(mismatch == 0),
+            mismatch_count=mismatch,
+            frontier_source_uid=int(self.frontier_source_uid),
+            frontier_revision=int(self.frontier_revision),
+            map_shape=(int(self.map.shape[0]), int(self.map.shape[1])),
+        )
+
+    def debug_compare_frontier_with_full_recompute(self, *, assert_on_mismatch: bool = True) -> bool:
+        stats = self.debug_frontier_consistency_stats()
+        if (not stats.consistent) and assert_on_mismatch:
+            raise AssertionError(
+                "incremental frontier cache mismatch against full recompute: "
+                f"{stats.mismatch_count} cells differ"
+            )
+        return bool(stats.consistent)
+
+    def _update_frontier_dirty_rects(self, dirty_rects) -> None:
+        rects = self._normalize_dirty_rects(dirty_rects, tuple(self.map.shape))
+        if len(rects) <= 0:
+            return
+
+        for rect in rects:
+            patch_r0 = max(0, int(rect.r0) - 1)
+            patch_r1 = min(int(self.map.shape[0]), int(rect.r1) + 1)
+            patch_c0 = max(0, int(rect.c0) - 1)
+            patch_c1 = min(int(self.map.shape[1]), int(rect.c1) + 1)
+
+            patch_frontier = GridTopology.frontier_mask(
+                self.map[patch_r0:patch_r1, patch_c0:patch_c1],
+                min_unknown_neighbors=FRONTIER_MIN_UNKNOWN_NEIGHBORS,
+                connectivity=FRONTIER_NEIGHBOR_CONNECTIVITY,
+            )
+            inner = patch_frontier[
+                int(rect.r0) - patch_r0:int(rect.r1) - patch_r0,
+                int(rect.c0) - patch_c0:int(rect.c1) - patch_c0,
+            ]
+            self.frontier_bool[int(rect.r0):int(rect.r1), int(rect.c0):int(rect.c1)] = inner
+            self.frontier_u8[int(rect.r0):int(rect.r1), int(rect.c0):int(rect.c1)] = inner.astype(np.uint8) * 255
+
+        self.frontier_revision += 1
+        self._invalidate_frontier_stats_cache()
+
+    def _full_frontier_rebuild(self, *, bump_revision: bool = False) -> None:
+        full_bool = self._recompute_frontier_full_bool()
+        if self.frontier_bool.shape != full_bool.shape:
+            self.frontier_bool = np.zeros_like(full_bool, dtype=bool)
+            self.frontier_u8 = np.zeros_like(full_bool, dtype=np.uint8)
+        self.frontier_bool[:, :] = full_bool
+        self.frontier_u8[:, :] = full_bool.astype(np.uint8) * 255
+        if bump_revision:
+            self.frontier_revision += 1
+        self._invalidate_frontier_stats_cache()
+
+    def _build_seam_dirty_rects(
+        self,
+        *,
+        pad_top: int,
+        pad_left: int,
+        pad_bottom: int,
+        pad_right: int,
+        old_h: int,
+        old_w: int,
+    ) -> tuple[DirtyRect, ...]:
+        if old_h <= 0 or old_w <= 0:
+            return tuple()
+
+        rects: list[DirtyRect] = []
+        if pad_top > 0:
+            rects.append(DirtyRect(r0=pad_top, r1=pad_top + 1, c0=pad_left, c1=pad_left + old_w))
+        if pad_bottom > 0:
+            rects.append(DirtyRect(r0=pad_top + old_h - 1, r1=pad_top + old_h, c0=pad_left, c1=pad_left + old_w))
+        if pad_left > 0:
+            rects.append(DirtyRect(r0=pad_top, r1=pad_top + old_h, c0=pad_left, c1=pad_left + 1))
+        if pad_right > 0:
+            rects.append(
+                DirtyRect(r0=pad_top, r1=pad_top + old_h, c0=pad_left + old_w - 1, c1=pad_left + old_w)
+            )
+        return tuple(rects)
+
+    def _ensure_world_bounds(self, min_r: int, max_r: int, min_c: int, max_c: int) -> Optional[WorldBoundsExpansion]:
         cur_min_r, cur_min_c = self.origin_world_rc
         cur_max_r = cur_min_r + self.map.shape[0] - 1
         cur_max_c = cur_min_c + self.map.shape[1] - 1
@@ -338,11 +605,15 @@ class CumulativeBeliefMap:
         pad_right = need_right + (margin if need_right > 0 else 0)
 
         if pad_top == 0 and pad_left == 0 and pad_bottom == 0 and pad_right == 0:
-            return
+            return None
 
         old_map = self.map
         old_visit = self.visit_count
         old_last_step = self.last_visit_step
+        old_frontier_bool = self.frontier_bool
+        old_frontier_u8 = self.frontier_u8
+        old_h = int(old_map.shape[0])
+        old_w = int(old_map.shape[1])
 
         new_h = old_map.shape[0] + pad_top + pad_bottom
         new_w = old_map.shape[1] + pad_left + pad_right
@@ -350,23 +621,42 @@ class CumulativeBeliefMap:
         new_map = np.full((new_h, new_w), INVISIBLE, dtype=np.int8)
         new_visit = np.zeros((new_h, new_w), dtype=np.int32)
         new_last_step = np.full((new_h, new_w), -1, dtype=np.int32)
+        new_frontier_bool = np.zeros((new_h, new_w), dtype=bool)
+        new_frontier_u8 = np.zeros((new_h, new_w), dtype=np.uint8)
 
         r0, c0 = pad_top, pad_left
         new_map[r0:r0 + old_map.shape[0], c0:c0 + old_map.shape[1]] = old_map
         new_visit[r0:r0 + old_visit.shape[0], c0:c0 + old_visit.shape[1]] = old_visit
         new_last_step[r0:r0 + old_last_step.shape[0], c0:c0 + old_last_step.shape[1]] = old_last_step
+        new_frontier_bool[r0:r0 + old_frontier_bool.shape[0], c0:c0 + old_frontier_bool.shape[1]] = old_frontier_bool
+        new_frontier_u8[r0:r0 + old_frontier_u8.shape[0], c0:c0 + old_frontier_u8.shape[1]] = old_frontier_u8
 
         self.map = new_map
         self.visit_count = new_visit
         self.last_visit_step = new_last_step
+        self.frontier_bool = new_frontier_bool
+        self.frontier_u8 = new_frontier_u8
         self.origin_world_rc = (cur_min_r - pad_top, cur_min_c - pad_left)
 
-        self._invalidate_frontier_cache()
         self._invalidate_visit_cache()
+        self._invalidate_map_state_caches()
+        return WorldBoundsExpansion(
+            pad_top=pad_top,
+            pad_left=pad_left,
+            pad_bottom=pad_bottom,
+            pad_right=pad_right,
+            seam_dirty_rects=self._build_seam_dirty_rects(
+                pad_top=pad_top,
+                pad_left=pad_left,
+                pad_bottom=pad_bottom,
+                pad_right=pad_right,
+                old_h=old_h,
+                old_w=old_w,
+            ),
+        )
 
-    def _record_visit(self, agent_state: Tuple[int, int]) -> None:
+    def _record_visit_in_bounds(self, agent_state: Tuple[int, int]) -> None:
         ar, ac = int(agent_state[0]), int(agent_state[1])
-        self._ensure_world_bounds(ar, ar, ac, ac)
         ir, ic = self.world_to_array((ar, ac))
         self.visit_count[ir, ic] += 1
         self.last_visit_step[ir, ic] = int(self.step_count)
@@ -404,58 +694,86 @@ class CumulativeBeliefMap:
             raise ValueError(f"local_snap shape mismatch: expected {self.local_shape}, got {snap.shape}")
 
         self.step_count += 1
-        self._record_visit(agent_state)
 
         gr, gc = self._project_local_world(agent_state)
         visible = (snap != INVISIBLE)
+        dirty_rects: list[DirtyRect] = []
+
+        ar, ac = int(agent_state[0]), int(agent_state[1])
+        if np.any(visible):
+            wr = gr[visible]
+            wc = gc[visible]
+            min_r = min(ar, int(wr.min()))
+            max_r = max(ar, int(wr.max()))
+            min_c = min(ac, int(wc.min()))
+            max_c = max(ac, int(wc.max()))
+        else:
+            wr = np.empty((0,), dtype=np.int32)
+            wc = np.empty((0,), dtype=np.int32)
+            min_r = ar
+            max_r = ar
+            min_c = ac
+            max_c = ac
+
+        expansion = self._ensure_world_bounds(min_r, max_r, min_c, max_c)
+        if expansion is not None:
+            dirty_rects.extend(expansion.seam_dirty_rects)
+
+        self._record_visit_in_bounds(agent_state)
+
         if not np.any(visible):
+            self._update_frontier_dirty_rects(dirty_rects)
             self._refresh_coverage()
+            self._update_analysis_box()
             return 0, 0, 0
 
-        wr = gr[visible]
-        wc = gc[visible]
         vv = snap[visible]
-
-        self._ensure_world_bounds(int(wr.min()), int(wr.max()), int(wc.min()), int(wc.max()))
 
         ir = wr - int(self.origin_world_rc[0])
         ic = wc - int(self.origin_world_rc[1])
 
         unseen = (self.map[ir, ic] == INVISIBLE)
         if not np.any(unseen):
+            self._update_frontier_dirty_rects(dirty_rects)
             self._refresh_coverage()
+            self._update_analysis_box()
             return 0, 0, 0
 
         wir = ir[unseen]
         wic = ic[unseen]
         wvv = vv[unseen]
         self.map[wir, wic] = wvv
-
-        self._invalidate_frontier_cache()
+        self._invalidate_map_state_caches()
+        reveal_dirty = self._expand_dirty_rect(self._dirty_rect_from_points(wir, wic), radius=1)
+        if reveal_dirty is not None:
+            dirty_rects.append(reveal_dirty)
+        self._update_frontier_dirty_rects(dirty_rects)
 
         updated = int(wvv.size)
         delta_empty = int((wvv == EMPTY).sum())
         delta_obstacle = updated - delta_empty
 
         self._refresh_coverage()
+        self._update_analysis_box()
         return updated, delta_empty, delta_obstacle
 
     def get_frontier_u8(self, refresh: bool = False) -> np.ndarray:
         """
-        Canonical frontier cache getter.
+        Canonical frontier getter.
 
-        frontier := known_free cells adjacent to unknown cells in current belief map.
-        Frontier semantics are rule-based and independent of truth-side reachability.
-        Frontier value/cost assessment is intentionally handled downstream in token
-        cluster statistics, not in this geometric definition.
+        frontier := known_free cells adjacent to orthogonally connected unknown
+        cells in current belief map.
+        Frontier semantics are rule-based and independent of truth-side
+        reachability. Higher-level value assessment is handled downstream by the
+        frontier token builder.
+
+        Normal path returns the incrementally maintained frontier cache.
+        refresh=True is a debug/full-recompute path and is not used by the
+        standard training or inference pipeline.
         """
-        if (not refresh) and (self._latest_frontier_u8 is not None):
-            return self._latest_frontier_u8
-
-        frontier_bool = GridTopology.frontier_mask(self.map, min_unknown_neighbors=1)
-        self._latest_frontier_u8 = frontier_bool.astype(np.uint8) * 255
-        self._latest_frontier_stats = None
-        return self._latest_frontier_u8
+        if refresh:
+            return self._recompute_frontier_full_u8()
+        return self.frontier_u8
 
     def get_frontier_derived_stats(
         self,
@@ -468,7 +786,12 @@ class CumulativeBeliefMap:
         These are summary auxiliaries for map/token channels and do not alter
         canonical frontier membership.
         """
-        if frontier_u8 is None and (not refresh) and (self._latest_frontier_stats is not None):
+        if (
+            frontier_u8 is None
+            and (not refresh)
+            and (self._latest_frontier_stats is not None)
+            and (self._latest_frontier_stats.frontier_revision == int(self.frontier_revision))
+        ):
             return self._latest_frontier_stats
 
         t0 = time.perf_counter() if self.enable_timing else 0.0
@@ -487,10 +810,12 @@ class CumulativeBeliefMap:
         out = FrontierDerivedStats(
             frontier_u8=(frontier_bool.astype(np.uint8) * 255),
             frontier_bool=frontier_bool,
+            frontier_source_uid=int(self.frontier_source_uid),
+            frontier_revision=int(self.frontier_revision),
         )
 
-        self._latest_frontier_u8 = out.frontier_u8
-        self._latest_frontier_stats = out
+        if not refresh:
+            self._latest_frontier_stats = out
         if self.enable_timing:
             self.frontier_stats_time += time.perf_counter() - t0
 
@@ -512,6 +837,39 @@ class CumulativeBeliefMap:
         self._cached_visit_log_max = visit_log_max
         self._visit_cache_step = int(self.step_count)
         return visit_log, visit_log_max
+
+    def get_revisit_recency_map(self, refresh: bool = False) -> np.ndarray:
+        """
+        Canonical revisit/recency map reused by semantic parsing and local state.
+
+        The map is derived from the existing visit counters and last-visit step,
+        so the project keeps one coherent notion of revisit pressure instead of
+        maintaining multiple overlapping tracker grids.
+        """
+        if (
+            (not refresh)
+            and (self._cached_revisit_recency_map is not None)
+            and (self._visit_cache_step == int(self.step_count))
+        ):
+            return self._cached_revisit_recency_map
+
+        visit_over = np.maximum(self.visit_count.astype(np.float32) - 1.0, 0.0)
+        visit_over_max = float(np.max(visit_over)) if visit_over.size > 0 else 0.0
+        if visit_over_max > 0.0:
+            revisit = np.log1p(visit_over) / np.log1p(visit_over_max + 1.0)
+        else:
+            revisit = np.zeros_like(visit_over, dtype=np.float32)
+
+        recency = np.zeros_like(revisit, dtype=np.float32)
+        visited = (self.last_visit_step >= 0)
+        if np.any(visited):
+            delta = np.maximum(0, int(self.step_count) - self.last_visit_step[visited]).astype(np.float32)
+            recency[visited] = np.exp(-delta / float(self.revisit_recency_decay_steps))
+
+        revisit_recency = np.clip((0.6 * recency) + (0.4 * revisit), 0.0, 1.0).astype(np.float32, copy=False)
+        self._cached_revisit_recency_map = revisit_recency
+        self._visit_cache_step = int(self.step_count)
+        return revisit_recency
 
     def get_obstacle_integral(self, refresh: bool = False) -> np.ndarray:
         """Cached obstacle integral image used by frontier-region obstacle-density queries."""
@@ -629,22 +987,24 @@ class CumulativeBeliefMap:
     ) -> np.ndarray:
         """
         Build fixed-size agent-centered mid map with channel-first layout:
-            shape = [3, H_m, W_m]
+            shape = [4, H_m, W_m]
 
         Fixed channel order is MID_MAP_CHANNELS:
             unknown_density
             known_obstacle_density
             coarse_visit_density
+            frontier_density
 
         This remains a fixed-range mid map:
             cumulative belief -> fixed world window -> coarse aggregation -> fixed mid map
-        It is not a dense frontier or far-map representation.
+        It is not a token replacement: frontier_density provides a coarse
+        regional entrance-distribution background, while the token branch keeps
+        the sparse frontier-candidate summary.
         """
         t0 = time.perf_counter() if self.enable_timing else 0.0
         cfg = config if config is not None else MidMapConfig()
         hm, wm = int(cfg.mid_map_shape[0]), int(cfg.mid_map_shape[1])
         wh, ww = int(cfg.world_window_shape[0]), int(cfg.world_window_shape[1])
-        _ = frontier_u8, frontier_stats, shared_artifacts
 
         if hm <= 0 or wm <= 0 or wh <= 0 or ww <= 0:
             raise ValueError("mid_map_shape and world_window_shape must be positive")
@@ -660,33 +1020,44 @@ class CumulativeBeliefMap:
             return self._mid_map_cache_value
 
         visit_log_map, visit_log_max = self.get_visit_log_map(refresh=False)
-        sampled_map_buf, sampled_bool_buf, sampled_visit_log_buf = self._get_domain_buffers(
+        frontier_stats_use = frontier_stats
+        if frontier_stats_use is None:
+            frontier_stats_use = self._shared_artifact_value(shared_artifacts, "frontier_stats")
+
+        frontier_u8_use = frontier_u8
+        if frontier_u8_use is None:
+            frontier_u8_use = self._shared_artifact_value(shared_artifacts, "frontier_u8")
+
+        if frontier_stats_use is None:
+            frontier_stats_use = self.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_u8_use)
+
+        sampled_map_buf, sampled_frontier_buf, sampled_visit_log_buf = self._get_domain_buffers(
             wh,
             ww,
             include_visit=True,
             visit_dtype=np.float32,
         )
-        sampled_map, _, sampled_visit_log = self._extract_domain_arrays(
+        sampled_map, sampled_frontier, sampled_visit_log = self._extract_domain_arrays(
             r_min,
             r_max,
             c_min,
             c_max,
-            frontier_map=None,
+            frontier_map=frontier_stats_use.frontier_bool,
             include_visit=True,
             visit_source=visit_log_map,
             sampled_map_out=sampled_map_buf,
+            sampled_frontier_out=sampled_frontier_buf,
             sampled_visit_out=sampled_visit_log_buf,
         )
 
         input_channels = self._get_mid_input_channels_buffer(wh, ww)
-        np.equal(sampled_map, INVISIBLE, out=sampled_bool_buf)
-        input_channels[0, :, :] = sampled_bool_buf
-        np.equal(sampled_map, OBSTACLE, out=sampled_bool_buf)
-        input_channels[1, :, :] = sampled_bool_buf
+        input_channels[0, :, :] = (sampled_map == INVISIBLE)
+        input_channels[1, :, :] = (sampled_map == OBSTACLE)
         if visit_log_max > 0.0:
             np.divide(sampled_visit_log, np.float32(visit_log_max), out=input_channels[2, :, :], casting="unsafe")
         else:
             input_channels[2, :, :].fill(0.0)
+        input_channels[3, :, :] = np.asarray(sampled_frontier, dtype=np.float32)
 
         agg_t0 = time.perf_counter() if self.enable_timing else 0.0
         aggregated_scratch = self._get_mid_output_buffer(hm, wm)
@@ -701,6 +1072,7 @@ class CumulativeBeliefMap:
         # Method split:
         # near = local geometry + short-term recency + global normalized position context
         # mid = regional unknown/obstacle structure + coarse visitation memory
+        #     + coarse frontier-density background
         # token = sparse frontier candidate representation
         mid_map = aggregated.copy()
 

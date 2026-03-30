@@ -14,11 +14,11 @@ import numpy as np
 import torch
 
 from agents.q_value_agent import ExplorationQConfig, ExplorationQNetwork, StateAdapterConfig, StateTensorAdapter
-from env.core_cummap import MidMapConfig
-from env.frontier_token_builder import FrontierRegionTokenConfig
-from env.local_state_builder import LocalStateConfig
+from env.advantage_state_builder import AdvantageStateConfig
+from env.shared_semantic_layer import SharedSemanticConfig
+from env.value_state_builder import ValueStateConfig
 from training.checkpointing import CheckpointManager
-from training.collector import CollectorConfig, TransitionCollector
+from training.collector import CollectorConfig, SEMANTIC_EPISODE_FIELDS, TransitionCollector
 from training.evaluator import GreedyEvaluator
 from training.learner import DDQNLearner, DDQNLearnerConfig
 from training.logger import CSVMetricLogger
@@ -26,6 +26,8 @@ from training.plotting import generate_all_plots
 from training.replay_buffer import ReplayBuffer, ReplayBufferConfig
 from training.rewarding import REWARD_BREAKDOWN_FIELDS
 from training.trajectory_plotting import save_episode_trajectory_plots
+
+EVAL_SEMANTIC_METRIC_NAMES = SEMANTIC_EPISODE_FIELDS
 
 
 @dataclass(frozen=True)
@@ -41,19 +43,22 @@ class TrainConfig:
     enable_cudnn_benchmark: bool = True  # cuDNN autotune affects kernel selection only; it does not change metrics.
     enable_tf32: bool = True  # TF32 backend toggle is a runtime perf setting only; it is not an algorithm switch.
     enable_channels_last: bool = False  # Tensor-layout toggle only; model math and metrics stay unchanged.
-    episode_print_interval: int = 0  # Stdout throttling only; 0 disables per-episode prints without affecting logging/metrics.
-    train_print_interval: int = 500  # Stdout throttling only; separated from CSV logging and algorithm behavior.
+    episode_print_interval: int = 1  # Stdout throttling only; 1 prints every episode without affecting logging/metrics.
+    train_print_interval: int = 2_000  # Stdout throttling only; separated from CSV logging and algorithm behavior.
     save_eval_trajectories: bool = False  # Plot-saving side overhead only; evaluation logic and metrics are unchanged.
-    save_final_probe_trajectories: bool = True  # Final probe plot-saving only; probe metrics/logic are unchanged.
-    generate_plots_on_finish: bool = True  # End-of-run plot generation only; training/eval/checkpoints stay unchanged.
+    save_train_representative_trajectories: bool = False  # Train-failure trajectory dumping is optional wall-clock overhead.
+    save_final_probe_trajectories: bool = False  # Final probe plotting is optional wall-clock overhead only.
+    generate_plots_on_finish: bool = False  # End-of-run plotting is optional wall-clock overhead only.
     enable_collector_timing: bool = False  # Profiling only; collector timing does not change rollout/reward semantics.
     enable_learner_timing: bool = False  # Profiling only; learner timing does not change DDQN updates or metrics.
     enable_replay_timing: bool = False  # Profiling only; replay timing does not change storage or sampling semantics.
     enable_state_adapter_timing: bool = False  # Profiling only; adapter timing does not change state tensor definitions.
     enable_cummap_timing: bool = False  # Profiling only; cumulative-map timing does not change map/frontier math.
-    enable_frontier_token_timing: bool = False  # Profiling only; token-builder timing does not change token semantics.
-    enable_local_state_timing: bool = False  # Profiling only; local-state timing does not change channel semantics.
+    enable_shared_semantic_timing: bool = False  # Profiling only; semantic parsing timing does not change state semantics.
+    enable_advantage_state_timing: bool = False  # Profiling only; local decision canvas timing does not change channels.
+    enable_value_state_timing: bool = False  # Profiling only; block-tree tensor timing does not change value semantics.
     timing_log_interval: int = 2000  # Stdout profiling cadence only; it does not affect training behavior.
+    debug_check_incremental_frontier: bool = False  # Debug-only full-recompute compare; default stays off in normal rollout.
     prefer_batch_replay_add: bool = True  # Replay write-path optimization only; transition semantics stay unchanged.
     learner_debug_stats_every: int = 1  # Metric-sync throttling only; learner updates stay unchanged.
     rows: int = 40
@@ -62,23 +67,23 @@ class TrainConfig:
     scan_radius: int = 10  # radar sensor radius only
     obstacle_ratio: float = 0.20
 
-    mid_map_shape: tuple[int, int] = (24, 24)
-    world_window_shape: tuple[int, int] = (128, 128)  # agent-centered mid-map world window
-    local_window_shape: tuple[int, int] = (21, 21)  # fixed policy local belief window (H, W)
-    token_top_k: int = 8
-    token_min_cluster_size: int = 3
+    max_accessible_blocks: int = 16
+    max_entries_per_block: int = 6
 
-    total_env_steps: int = 120_000
+    total_env_steps: int = 500_000
     warmup_steps: int = 4_000
     collect_steps_per_iter: int = 16
     learner_updates_per_iter: int = 2
     train_every_env_steps: int = 16
     log_interval: int = 500
 
-    eval_interval_env_steps: int = 6_000
-    eval_episodes: int = 8
-    recent_episode_window: int = 20
-    final_greedy_episodes: int = 10
+    eval_interval_env_steps: int = 24_000
+    eval_episodes: int = 12
+    recent_episode_window: int = 100
+    final_greedy_episodes: int = 16
+    use_fixed_eval_seeds: bool = True
+    fixed_eval_seed_base: int = 20260323
+    fixed_final_probe_seed_base: int = 20261323
 
     replay_capacity: int = 100_000
     batch_size: int = 128
@@ -94,21 +99,21 @@ class TrainConfig:
 
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 90_000
+    epsilon_decay_steps: int = 240_000
 
     max_episode_steps: int = 600  # tune with map scale as needed
     coverage_stop_threshold: float = 0.95
 
-    reward_info_scale: float = 4.0
+    reward_info_scale: float = 3.0
     reward_obstacle_weight: float = 0.25
     reward_info_norm: float | str | None = "half_perimeter"
     reward_recent_revisit_window: int = 15
-    reward_stall_window: int = 4
+    reward_stall_window: int = 8
     reward_step_penalty: float = 0.02
-    reward_terminal_bonus: float = 8.0
-    reward_revisit_penalty: float = 0.10
-    reward_stall_penalty: float = 0.08
-    reward_timeout_penalty: float = 4.0
+    reward_terminal_bonus: float = 20.0
+    reward_revisit_penalty: float = 0.12
+    reward_stall_penalty: float = 0.12
+    reward_timeout_penalty: float = 8.0
 
     output_root: str = "outputs"
     run_name: str = "ddqn_explore_vscode_stage5"
@@ -149,25 +154,66 @@ def configure_torch_runtime(cfg: TrainConfig) -> None:
         torch.backends.cudnn.allow_tf32 = bool(cfg.enable_tf32)
 
 
+class _CompileFallbackWrapper(torch.nn.Module):
+    def __init__(self, raw_module: torch.nn.Module, compiled_module: torch.nn.Module):
+        super().__init__()
+        self.raw_module = raw_module
+        self._compiled_module: torch.nn.Module | None = compiled_module
+        self._reported_fallback = False
+
+    def forward(self, *args, **kwargs):
+        compiled_module = self._compiled_module
+        if compiled_module is not None:
+            try:
+                return compiled_module(*args, **kwargs)
+            except Exception as exc:
+                self._compiled_module = None
+                if not self._reported_fallback:
+                    print(
+                        "[startup] "
+                        f"torch.compile forward failed ({type(exc).__name__}: {exc}); "
+                        "falling back to eager."
+                    )
+                    self._reported_fallback = True
+        return self.raw_module(*args, **kwargs)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        compiled_module = self._compiled_module
+        if compiled_module is not None and compiled_module is not self.raw_module:
+            compiled_module.train(mode)
+        return self
+
+    def state_dict(self, *args, **kwargs):
+        return self.raw_module.state_dict(*args, **kwargs)
+
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        return self.raw_module.load_state_dict(state_dict, *args, **kwargs)
+
+
 def _compile_online_net(raw_online_net: torch.nn.Module, cfg: TrainConfig) -> torch.nn.Module:
     """Compile the online net while keeping raw-module state IO for sync/checkpoint compatibility."""
     if not bool(cfg.enable_torch_compile):
         return raw_online_net
     if not hasattr(torch, "compile"):
+        print("[startup] torch.compile is unavailable in this torch build; using eager.")
         return raw_online_net
 
     compile_kwargs = {}
     compile_mode = str(cfg.compile_mode).strip()
     if compile_mode != "":
         compile_kwargs["mode"] = compile_mode
-    compiled_net = torch.compile(raw_online_net, **compile_kwargs)
+    try:
+        compiled_net = torch.compile(raw_online_net, **compile_kwargs)
+    except Exception as exc:
+        print(
+            "[startup] "
+            f"torch.compile setup failed ({type(exc).__name__}: {exc}); using eager."
+        )
+        return raw_online_net
 
     # Keep target sync/checkpoint state_dict handling on the raw module; compile is a perf wrapper only.
-    compiled_net.state_dict = lambda *args, **kwargs: raw_online_net.state_dict(*args, **kwargs)
-    compiled_net.load_state_dict = (
-        lambda state_dict, *args, **kwargs: raw_online_net.load_state_dict(state_dict, *args, **kwargs)
-    )
-    return compiled_net
+    return _CompileFallbackWrapper(raw_online_net, compiled_net)
 
 
 def _maybe_to_channels_last(module: torch.nn.Module, cfg: TrainConfig) -> torch.nn.Module:
@@ -198,13 +244,16 @@ def create_run_dir(cfg: TrainConfig) -> Path:
 
 def summarize_recent_episodes(recent: deque[dict]) -> dict:
     if len(recent) <= 0:
-        return {
+        out = {
             "mean_reward": float("nan"),
             "mean_coverage": float("nan"),
             "success_rate": float("nan"),
             "mean_length": float("nan"),
             "mean_repeat_visit_ratio": float("nan"),
         }
+        for field in SEMANTIC_EPISODE_FIELDS:
+            out[field] = float("nan")
+        return out
 
     rewards = np.asarray([float(ep["episode_reward"]) for ep in recent], dtype=np.float32)
     coverages = np.asarray([float(ep["final_coverage"]) for ep in recent], dtype=np.float32)
@@ -212,13 +261,17 @@ def summarize_recent_episodes(recent: deque[dict]) -> dict:
     lengths = np.asarray([float(ep["episode_length"]) for ep in recent], dtype=np.float32)
     repeats = np.asarray([float(ep["repeat_visit_ratio"]) for ep in recent], dtype=np.float32)
 
-    return {
+    out = {
         "mean_reward": float(np.mean(rewards)),
         "mean_coverage": float(np.mean(coverages)),
         "success_rate": float(np.mean(successes)),
         "mean_length": float(np.mean(lengths)),
         "mean_repeat_visit_ratio": float(np.mean(repeats)),
     }
+    for field in SEMANTIC_EPISODE_FIELDS:
+        values = np.asarray([float(ep.get(field, float("nan"))) for ep in recent], dtype=np.float32)
+        out[field] = float(np.nanmean(values)) if np.any(np.isfinite(values)) else float("nan")
+    return out
 
 
 def _timing_summary_enabled(cfg: TrainConfig) -> bool:
@@ -229,8 +282,9 @@ def _timing_summary_enabled(cfg: TrainConfig) -> bool:
             bool(cfg.enable_replay_timing),
             bool(cfg.enable_state_adapter_timing),
             bool(cfg.enable_cummap_timing),
-            bool(cfg.enable_frontier_token_timing),
-            bool(cfg.enable_local_state_timing),
+            bool(cfg.enable_shared_semantic_timing),
+            bool(cfg.enable_advantage_state_timing),
+            bool(cfg.enable_value_state_timing),
         )
     )
 
@@ -242,8 +296,9 @@ def _timing_flag_dict(cfg: TrainConfig) -> dict[str, bool]:
         "enable_replay_timing": bool(cfg.enable_replay_timing),
         "enable_state_adapter_timing": bool(cfg.enable_state_adapter_timing),
         "enable_cummap_timing": bool(cfg.enable_cummap_timing),
-        "enable_frontier_token_timing": bool(cfg.enable_frontier_token_timing),
-        "enable_local_state_timing": bool(cfg.enable_local_state_timing),
+        "enable_shared_semantic_timing": bool(cfg.enable_shared_semantic_timing),
+        "enable_advantage_state_timing": bool(cfg.enable_advantage_state_timing),
+        "enable_value_state_timing": bool(cfg.enable_value_state_timing),
     }
 
 
@@ -265,6 +320,16 @@ def _describe_profiling_mode(cfg: TrainConfig, run_mode: str) -> str:
             "profiling+compile run, timing enabled by preset"
             if profiling_enabled else "profiling+compile run selected, but timing flags are disabled"
         )
+    if mode == "fast_cuda":
+        return (
+            "fast cuda run with amp/compile enabled"
+            if not profiling_enabled else "fast cuda run with amp/compile and timing enabled"
+        )
+    if mode == "fast_cuda_profile":
+        return (
+            "fast cuda profiling run with amp/compile enabled"
+            if profiling_enabled else "fast cuda profiling preset selected, but timing flags are disabled"
+        )
     if mode == "cli":
         return (
             "cli run, timing enabled via flags"
@@ -285,9 +350,11 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"run_mode={run_mode} "
         f"device={cfg.device} "
         f"profiling_enabled={profiling_enabled} "
+        f"train_amp={bool(cfg.enable_amp)} "
         f"torch_compile={bool(cfg.enable_torch_compile)} "
         f"inference_amp={bool(cfg.enable_inference_amp)} "
         f"amp_dtype={cfg.amp_dtype} "
+        f"channels_last={bool(cfg.enable_channels_last)} "
         f"timing_log_interval={int(cfg.timing_log_interval)} "
         f"train_print_interval={int(cfg.train_print_interval)} "
         f"log_interval={int(cfg.log_interval)} "
@@ -381,42 +448,40 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
         state_adapter.get_timing_stats() if hasattr(state_adapter, "get_timing_stats") else None,
         aliases={
             "shared_artifact_time": "shared",
-            "near_build_time": "near",
-            "mid_build_time": "mid",
-            "frontier_token_build_time": "token",
+            "advantage_build_time": "adv",
+            "value_build_time": "value",
             "tensor_transfer_time": "xfer",
         },
     )
     if adapter_line is not None:
         lines.append(adapter_line)
 
-    near_builder = getattr(state_adapter, "near_builder", None)
-    local_line = _format_timing_line(
-        "local",
-        near_builder.get_timing_stats()
-        if near_builder is not None and hasattr(near_builder, "get_timing_stats") else None,
-        aliases={
-            "sampling_time": "sample",
-            "context_channel_time": "context",
-            "trajectory_time": "traj",
-        },
-        total_key="build_total_time",
+    semantic_builder = getattr(state_adapter, "shared_semantic_layer", None)
+    semantic_line = _format_timing_line(
+        "semantic",
+        semantic_builder.get_timing_stats()
+        if semantic_builder is not None and hasattr(semantic_builder, "get_timing_stats") else None,
     )
-    if local_line is not None:
-        lines.append(local_line)
+    if semantic_line is not None:
+        lines.append(semantic_line)
 
-    frontier_builder = getattr(state_adapter, "frontier_token_builder", None)
-    frontier_line = _format_timing_line(
-        "frontier_token",
-        frontier_builder.get_timing_stats()
-        if frontier_builder is not None and hasattr(frontier_builder, "get_timing_stats") else None,
-        aliases={
-            "cluster_extract_time": "cluster",
-        },
-        total_key="build_total_time",
+    advantage_builder = getattr(state_adapter, "advantage_builder", None)
+    advantage_line = _format_timing_line(
+        "advantage",
+        advantage_builder.get_timing_stats()
+        if advantage_builder is not None and hasattr(advantage_builder, "get_timing_stats") else None,
     )
-    if frontier_line is not None:
-        lines.append(frontier_line)
+    if advantage_line is not None:
+        lines.append(advantage_line)
+
+    value_builder = getattr(state_adapter, "value_builder", None)
+    value_line = _format_timing_line(
+        "value",
+        value_builder.get_timing_stats()
+        if value_builder is not None and hasattr(value_builder, "get_timing_stats") else None,
+    )
+    if value_line is not None:
+        lines.append(value_line)
 
     cum_map = getattr(collector, "cum_map", None)
     cummap_line = _format_timing_line(
@@ -425,7 +490,6 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
         if cum_map is not None and hasattr(cum_map, "get_timing_stats") else None,
         aliases={
             "frontier_stats_time": "frontier",
-            "mid_map_time": "mid",
             "domain_extract_time": "domain",
             "aggregate_time": "agg",
         },
@@ -450,18 +514,16 @@ def build_system(cfg: TrainConfig):
     online_net = _compile_online_net(raw_online_net, cfg)
 
     state_cfg = StateAdapterConfig(
-        mid_map=MidMapConfig(
-            mid_map_shape=tuple(cfg.mid_map_shape),
-            world_window_shape=tuple(cfg.world_window_shape),
+        shared_semantics=SharedSemanticConfig(
+            enable_timing=bool(cfg.enable_shared_semantic_timing),
         ),
-        near_map=LocalStateConfig(
-            local_window_shape=tuple(cfg.local_window_shape),
-            enable_timing=bool(cfg.enable_local_state_timing),
+        advantage_state=AdvantageStateConfig(
+            enable_timing=bool(cfg.enable_advantage_state_timing),
         ),
-        frontier_tokens=FrontierRegionTokenConfig(
-            top_k=int(cfg.token_top_k),
-            min_cluster_size=int(cfg.token_min_cluster_size),
-            enable_timing=bool(cfg.enable_frontier_token_timing),
+        value_state=ValueStateConfig(
+            max_accessible_blocks=int(cfg.max_accessible_blocks),
+            max_entries_per_block=int(cfg.max_entries_per_block),
+            enable_timing=bool(cfg.enable_value_state_timing),
         ),
         pin_memory=True,
         non_blocking_transfer=True,
@@ -509,7 +571,9 @@ def build_system(cfg: TrainConfig):
         enable_cummap_timing=bool(cfg.enable_cummap_timing),
         enable_inference_amp=bool(cfg.enable_inference_amp),
         inference_amp_dtype=amp_dtype,
+        debug_check_incremental_frontier=bool(cfg.debug_check_incremental_frontier),
         prefer_batch_replay_add=bool(cfg.prefer_batch_replay_add),
+        record_episode_artifacts=bool(cfg.save_train_representative_trajectories),
     )
     collector = TransitionCollector(collector_cfg, online_net, state_adapter, replay)
 
@@ -557,6 +621,7 @@ def run_training(cfg: TrainConfig) -> None:
         "grad_norm": float("nan"),
     }
     trajectory_plot_paths: list[Path] = []
+    train_trace_episodes: list[dict] = []
     episode_print_interval = int(max(0, cfg.episode_print_interval))
 
     def handle_episodes(episodes: list[dict], phase: str, epsilon: float) -> None:
@@ -574,11 +639,26 @@ def run_training(cfg: TrainConfig) -> None:
                 "done_reason": str(ep["done_reason"]),
                 **{
                     field: float(ep[field])
+                    for field in SEMANTIC_EPISODE_FIELDS
+                    if field in ep
+                },
+                **{
+                    field: float(ep[field])
                     for field in REWARD_BREAKDOWN_FIELDS
                 },
             }
             logger.log_train_episode(row)
             recent_eps.append(row)
+            if (
+                phase == "train"
+                and bool(cfg.save_train_representative_trajectories)
+                and (ep.get("trajectory_positions") is not None)
+                and (ep.get("true_grid") is not None)
+            ):
+                trace_ep = dict(ep)
+                trace_ep["phase"] = phase
+                trace_ep["epsilon"] = float(epsilon)
+                train_trace_episodes.append(trace_ep)
             if episode_print_interval > 0 and int(row["episode_idx"]) % episode_print_interval == 0:
                 print(
                     "[episode] "
@@ -591,7 +671,12 @@ def run_training(cfg: TrainConfig) -> None:
     def run_eval(env_steps: int, tag: str = "periodic") -> tuple[dict, bool]:
         nonlocal last_eval, best_eval
 
-        em = evaluator.evaluate(online_net, num_episodes=int(cfg.eval_episodes))
+        eval_seed_base = int(cfg.fixed_eval_seed_base) if bool(cfg.use_fixed_eval_seeds) else None
+        em = evaluator.evaluate(
+            online_net,
+            num_episodes=int(cfg.eval_episodes),
+            seed_base=eval_seed_base,
+        )
         row = {
             "tag": tag,
             "env_steps": int(env_steps),
@@ -602,6 +687,10 @@ def run_training(cfg: TrainConfig) -> None:
             "eval_success_rate": float(em["eval_success_rate"]),
             "eval_mean_episode_length": float(em["eval_mean_episode_length"]),
             "eval_mean_repeat_visit_ratio": float(em["eval_mean_repeat_visit_ratio"]),
+            **{
+                f"eval_mean_{metric_name}": float(em[f"eval_mean_{metric_name}"])
+                for metric_name in EVAL_SEMANTIC_METRIC_NAMES
+            },
             **{
                 f"eval_mean_{field}": float(em[f"eval_mean_{field}"])
                 for field in REWARD_BREAKDOWN_FIELDS
@@ -617,6 +706,9 @@ def run_training(cfg: TrainConfig) -> None:
                     em.get("episodes", []),
                     prefix=traj_prefix,
                     max_episodes=1,
+                    selection_mode="lowest_coverage",
+                    gate_window=int(cfg.recent_episode_window),
+                    coverage_target=float(cfg.coverage_stop_threshold),
                 )
             )
 
@@ -637,6 +729,8 @@ def run_training(cfg: TrainConfig) -> None:
             f"tag={tag} env_steps={row['env_steps']} episodes={row['eval_episodes']} "
             f"mean_reward={row['eval_mean_reward']:.4f} mean_cov={row['eval_mean_coverage']:.4f} "
             f"success_rate={row['eval_success_rate']:.4f} mean_len={row['eval_mean_episode_length']:.2f} "
+            f"blocks={row['eval_mean_accessible_block_count']:.2f} "
+            f"main_block_area={row['eval_mean_main_block_area']:.2f} "
             f"best_saved={int(is_best)}"
         )
         return row, is_best
@@ -736,6 +830,10 @@ def run_training(cfg: TrainConfig) -> None:
                 "recent_success_rate": float(rec["success_rate"]),
                 "recent_mean_episode_length": float(rec["mean_length"]),
                 "recent_mean_repeat_visit_ratio": float(rec["mean_repeat_visit_ratio"]),
+                **{
+                    f"recent_{field}": float(rec[field])
+                    for field in SEMANTIC_EPISODE_FIELDS
+                },
             }
             if should_log:
                 logger.log_train_step(step_row)
@@ -749,7 +847,8 @@ def run_training(cfg: TrainConfig) -> None:
                     f"learner_steps={step_row['learner_steps']} "
                     f"recent_reward={step_row['recent_mean_reward']:.4f} "
                     f"recent_cov={step_row['recent_mean_coverage']:.4f} "
-                    f"recent_succ={step_row['recent_success_rate']:.4f}"
+                    f"recent_succ={step_row['recent_success_rate']:.4f} "
+                    f"recent_blocks={step_row['recent_accessible_block_count']:.2f}"
                 )
 
     if last_eval is None or int(last_eval["env_steps"]) != int(env_steps):
@@ -769,7 +868,12 @@ def run_training(cfg: TrainConfig) -> None:
         online_net.load_state_dict(payload["online_state_dict"])
         probe_source = "best_checkpoint"
 
-    probe = evaluator.evaluate(online_net, num_episodes=int(max(1, cfg.final_greedy_episodes)))
+    final_probe_seed_base = int(cfg.fixed_final_probe_seed_base) if bool(cfg.use_fixed_eval_seeds) else None
+    probe = evaluator.evaluate(
+        online_net,
+        num_episodes=int(max(1, cfg.final_greedy_episodes)),
+        seed_base=final_probe_seed_base,
+    )
     probe_row = {
         "tag": "final_probe",
         "env_steps": int(env_steps),
@@ -781,11 +885,34 @@ def run_training(cfg: TrainConfig) -> None:
         "eval_mean_episode_length": float(probe["eval_mean_episode_length"]),
         "eval_mean_repeat_visit_ratio": float(probe["eval_mean_repeat_visit_ratio"]),
         **{
+            f"eval_mean_{metric_name}": float(probe[f"eval_mean_{metric_name}"])
+            for metric_name in EVAL_SEMANTIC_METRIC_NAMES
+        },
+        **{
             f"eval_mean_{field}": float(probe[f"eval_mean_{field}"])
             for field in REWARD_BREAKDOWN_FIELDS
         },
     }
     logger.log_final_probe(probe_row)
+    print(
+        "[final_probe] "
+        f"source={probe_source} env_steps={probe_row['env_steps']} episodes={probe_row['eval_episodes']} "
+        f"mean_reward={probe_row['eval_mean_reward']:.4f} mean_cov={probe_row['eval_mean_coverage']:.4f} "
+        f"success_rate={probe_row['eval_success_rate']:.4f} mean_len={probe_row['eval_mean_episode_length']:.2f} "
+        f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
+    )
+    if bool(cfg.save_train_representative_trajectories):
+        trajectory_plot_paths.extend(
+            save_episode_trajectory_plots(
+                run_dir,
+                train_trace_episodes,
+                prefix="train_postgate_fail",
+                max_episodes=max(1, len(train_trace_episodes)),
+                selection_mode="train_postgate_failures",
+                gate_window=int(cfg.recent_episode_window),
+                coverage_target=float(cfg.coverage_stop_threshold),
+            )
+        )
     if bool(cfg.save_final_probe_trajectories):
         trajectory_plot_paths.extend(
             save_episode_trajectory_plots(
@@ -793,6 +920,9 @@ def run_training(cfg: TrainConfig) -> None:
                 probe.get("episodes", []),
                 prefix="final_probe",
                 max_episodes=1,
+                selection_mode="lowest_coverage",
+                gate_window=int(cfg.recent_episode_window),
+                coverage_target=float(cfg.coverage_stop_threshold),
             )
         )
     if bool(cfg.generate_plots_on_finish):
@@ -828,7 +958,8 @@ def run_training(cfg: TrainConfig) -> None:
             f"reward={last_eval['eval_mean_reward']:.4f}, "
             f"coverage={last_eval['eval_mean_coverage']:.4f}, "
             f"success={last_eval['eval_success_rate']:.4f}, "
-            f"length={last_eval['eval_mean_episode_length']:.2f}"
+            f"length={last_eval['eval_mean_episode_length']:.2f}, "
+            f"blocks={last_eval['eval_mean_accessible_block_count']:.2f}"
         )
 
     if best_eval is None and ckpt.best_path.exists():
@@ -841,7 +972,8 @@ def run_training(cfg: TrainConfig) -> None:
             f"reward={float(best_eval['eval_mean_reward']):.4f}, "
             f"coverage={float(best_eval['eval_mean_coverage']):.4f}, "
             f"success={float(best_eval['eval_success_rate']):.4f}, "
-            f"length={float(best_eval['eval_mean_episode_length']):.2f}"
+            f"length={float(best_eval['eval_mean_episode_length']):.2f}, "
+            f"blocks={float(best_eval.get('eval_mean_accessible_block_count', float('nan'))):.2f}"
         )
 
     print(
@@ -849,7 +981,8 @@ def run_training(cfg: TrainConfig) -> None:
         f"source={probe_source}, reward={probe_row['eval_mean_reward']:.4f}, "
         f"coverage={probe_row['eval_mean_coverage']:.4f}, "
         f"success={probe_row['eval_success_rate']:.4f}, "
-        f"length={probe_row['eval_mean_episode_length']:.2f}"
+        f"length={probe_row['eval_mean_episode_length']:.2f}, "
+        f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
     )
 
     print(f"checkpoint_last: {last_ckpt_path}")
@@ -932,13 +1065,13 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--episode-print-interval",
         type=int,
-        default=0,
-        help="Stdout throttling only; 0 disables per-episode prints and does not affect CSV metrics.",
+        default=1,
+        help="Stdout throttling only; 1 prints every episode and does not affect CSV metrics.",
     )
     p.add_argument(
         "--train-print-interval",
         type=int,
-        default=500,
+        default=2000,
         help="Stdout throttling only; separate from --log-interval and does not affect CSV metrics.",
     )
     p.add_argument(
@@ -948,9 +1081,15 @@ def parse_args() -> TrainConfig:
         help="Plot-saving toggle only; periodic/final eval logic and metrics are unchanged.",
     )
     p.add_argument(
+        "--save-train-representative-trajectories",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Save all post-gate failed train episodes with trajectory/belief overlays.",
+    )
+    p.add_argument(
         "--save-final-probe-trajectories",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Plot-saving toggle only; final probe metrics/logic are unchanged.",
     )
     p.add_argument(
@@ -990,22 +1129,37 @@ def parse_args() -> TrainConfig:
         help="Profiling only; cumulative-map timing does not change map/frontier definitions.",
     )
     p.add_argument(
-        "--enable-frontier-token-timing",
+        "--enable-shared-semantic-timing",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Profiling only; frontier-token timing does not change token definitions.",
+        help="Profiling only; shared-semantic timing does not change block/entry definitions.",
     )
     p.add_argument(
-        "--enable-local-state-timing",
+        "--enable-advantage-state-timing",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Profiling only; local-state timing does not change channel semantics.",
+        help="Profiling only; advantage-state timing does not change canvas semantics.",
+    )
+    p.add_argument(
+        "--enable-value-state-timing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Profiling only; value-state timing does not change block-tree semantics.",
     )
     p.add_argument(
         "--timing-log-interval",
         type=int,
         default=2000,
         help="Stdout profiling cadence only; 0 disables periodic timing summaries.",
+    )
+    p.add_argument(
+        "--debug-check-incremental-frontier",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Debug-only rollout check: compare incrementally maintained frontier against a full "
+            "recompute after reset/update and raise on mismatch."
+        ),
     )
     p.add_argument(
         "--learner-debug-stats-every",
@@ -1027,8 +1181,17 @@ def parse_args() -> TrainConfig:
         action="store_true",
         help="Enable all timing/profiling flags together without changing any training hyperparameters.",
     )
+    p.add_argument(
+        "--fast-cuda",
+        action="store_true",
+        help=(
+            "Enable the experimental fast CUDA runtime path: AMP, inference AMP, torch.compile with safe fallback, "
+            "channels-last, cuDNN benchmark, and TF32. This is kept for optional A/B testing and is not the "
+            "default recommended training path on the current machine/model."
+        ),
+    )
 
-    p.add_argument("--total-env-steps", type=int, default=120_000)
+    p.add_argument("--total-env-steps", type=int, default=500_000)
     p.add_argument("--warmup-steps", type=int, default=4_000)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--min-replay-size", type=int, default=4_000)
@@ -1043,23 +1206,40 @@ def parse_args() -> TrainConfig:
 
     p.add_argument("--epsilon-start", type=float, default=1.0)
     p.add_argument("--epsilon-end", type=float, default=0.05)
-    p.add_argument("--epsilon-decay-steps", type=int, default=90_000)
+    p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
 
-    p.add_argument("--eval-interval-env-steps", type=int, default=6_000)
-    p.add_argument("--eval-episodes", type=int, default=8)
-    p.add_argument("--recent-episode-window", type=int, default=20)
-    p.add_argument("--final-greedy-episodes", type=int, default=10)
+    p.add_argument("--eval-interval-env-steps", type=int, default=24_000)
+    p.add_argument("--eval-episodes", type=int, default=12)
+    p.add_argument("--recent-episode-window", type=int, default=100)
+    p.add_argument("--final-greedy-episodes", type=int, default=16)
+    p.add_argument(
+        "--use-fixed-eval-seeds",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use a fixed held-out map seed set for periodic eval/final probe to reduce metric noise.",
+    )
+    p.add_argument(
+        "--fixed-eval-seed-base",
+        type=int,
+        default=20260323,
+        help="Base seed for the periodic evaluation map set.",
+    )
+    p.add_argument(
+        "--fixed-final-probe-seed-base",
+        type=int,
+        default=20261323,
+        help="Base seed for the final-probe evaluation map set.",
+    )
 
     p.add_argument("--log-interval", type=int, default=500)
     p.add_argument("--rows", type=int, default=40)
     p.add_argument("--cols", type=int, default=60)
     p.add_argument("--obs-size", type=int, default=6)
     p.add_argument("--scan-radius", type=int, default=10)
-    p.add_argument("--local-window-h", type=int, default=21, help="policy local belief window height (odd)")
-    p.add_argument("--local-window-w", type=int, default=21, help="policy local belief window width (odd)")
-    p.add_argument("--token-min-cluster-size", type=int, default=3)
+    p.add_argument("--max-accessible-blocks", type=int, default=16)
+    p.add_argument("--max-entries-per-block", type=int, default=6)
     p.add_argument("--obstacle-ratio", type=float, default=0.20)
-    p.add_argument("--reward-info-scale", type=float, default=4.0, help="weighted information gain scale")
+    p.add_argument("--reward-info-scale", type=float, default=3.0, help="weighted information gain scale")
     p.add_argument(
         "--reward-obstacle-weight", type=float, default=0.25, help="obstacle reveal weight in info gain"
     )
@@ -1079,14 +1259,14 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--reward-stall-window",
         type=int,
-        default=4,
-        help="consecutive zero-info steps before stall penalty starts",
+        default=8,
+        help="consecutive zero-info steps before stall penalty starts; larger values allow short backtracks",
     )
     p.add_argument("--reward-step-penalty", type=float, default=0.02, help="step penalty")
-    p.add_argument("--reward-terminal-bonus", type=float, default=8.0, help="terminal success bonus")
-    p.add_argument("--reward-revisit-penalty", type=float, default=0.10, help="revisit penalty")
-    p.add_argument("--reward-stall-penalty", type=float, default=0.08, help="stall penalty")
-    p.add_argument("--reward-timeout-penalty", type=float, default=4.0, help="timeout penalty")
+    p.add_argument("--reward-terminal-bonus", type=float, default=20.0, help="terminal success bonus")
+    p.add_argument("--reward-revisit-penalty", type=float, default=0.12, help="revisit penalty")
+    p.add_argument("--reward-stall-penalty", type=float, default=0.12, help="stall penalty")
+    p.add_argument("--reward-timeout-penalty", type=float, default=8.0, help="timeout penalty")
 
     p.add_argument("--output-root", type=str, default="outputs")
     p.add_argument("--run-name", type=str, default="ddqn_explore_vscode_stage5")
@@ -1099,8 +1279,9 @@ def parse_args() -> TrainConfig:
     enable_replay_timing = bool(args.enable_replay_timing)
     enable_state_adapter_timing = bool(args.enable_state_adapter_timing)
     enable_cummap_timing = bool(args.enable_cummap_timing)
-    enable_frontier_token_timing = bool(args.enable_frontier_token_timing)
-    enable_local_state_timing = bool(args.enable_local_state_timing)
+    enable_shared_semantic_timing = bool(args.enable_shared_semantic_timing)
+    enable_advantage_state_timing = bool(args.enable_advantage_state_timing)
+    enable_value_state_timing = bool(args.enable_value_state_timing)
 
     if bool(args.profile):
         enable_collector_timing = True
@@ -1108,24 +1289,40 @@ def parse_args() -> TrainConfig:
         enable_replay_timing = True
         enable_state_adapter_timing = True
         enable_cummap_timing = True
-        enable_frontier_token_timing = True
-        enable_local_state_timing = True
+        enable_shared_semantic_timing = True
+        enable_advantage_state_timing = True
+        enable_value_state_timing = True
+
+    enable_amp = bool(args.enable_amp)
+    enable_inference_amp = bool(args.enable_inference_amp)
+    enable_torch_compile = bool(args.enable_torch_compile)
+    enable_cudnn_benchmark = bool(args.enable_cudnn_benchmark)
+    enable_tf32 = bool(args.enable_tf32)
+    enable_channels_last = bool(args.enable_channels_last)
+    if bool(args.fast_cuda):
+        enable_amp = True
+        enable_inference_amp = True
+        enable_torch_compile = True
+        enable_cudnn_benchmark = True
+        enable_tf32 = True
+        enable_channels_last = True
 
     if args.smoke:
         return TrainConfig(
             device=args.device,
             seed=args.seed,
-            enable_amp=args.enable_amp,
-            enable_inference_amp=args.enable_inference_amp,
+            enable_amp=enable_amp,
+            enable_inference_amp=enable_inference_amp,
             amp_dtype=args.amp_dtype,
-            enable_torch_compile=args.enable_torch_compile,
+            enable_torch_compile=enable_torch_compile,
             compile_mode=args.compile_mode,
-            enable_cudnn_benchmark=args.enable_cudnn_benchmark,
-            enable_tf32=args.enable_tf32,
-            enable_channels_last=args.enable_channels_last,
+            enable_cudnn_benchmark=enable_cudnn_benchmark,
+            enable_tf32=enable_tf32,
+            enable_channels_last=enable_channels_last,
             episode_print_interval=max(0, args.episode_print_interval),
             train_print_interval=max(0, args.train_print_interval),
             save_eval_trajectories=args.save_eval_trajectories,
+            save_train_representative_trajectories=args.save_train_representative_trajectories,
             save_final_probe_trajectories=args.save_final_probe_trajectories,
             generate_plots_on_finish=args.generate_plots_on_finish,
             enable_collector_timing=enable_collector_timing,
@@ -1133,16 +1330,18 @@ def parse_args() -> TrainConfig:
             enable_replay_timing=enable_replay_timing,
             enable_state_adapter_timing=enable_state_adapter_timing,
             enable_cummap_timing=enable_cummap_timing,
-            enable_frontier_token_timing=enable_frontier_token_timing,
-            enable_local_state_timing=enable_local_state_timing,
+            enable_shared_semantic_timing=enable_shared_semantic_timing,
+            enable_advantage_state_timing=enable_advantage_state_timing,
+            enable_value_state_timing=enable_value_state_timing,
             timing_log_interval=max(0, args.timing_log_interval),
+            debug_check_incremental_frontier=bool(args.debug_check_incremental_frontier),
             prefer_batch_replay_add=args.prefer_batch_replay_add,
             learner_debug_stats_every=max(1, args.learner_debug_stats_every),
             rows=30,
             cols=40,
             scan_radius=args.scan_radius,
-            local_window_shape=(args.local_window_h, args.local_window_w),
-            token_min_cluster_size=args.token_min_cluster_size,
+            max_accessible_blocks=max(1, args.max_accessible_blocks),
+            max_entries_per_block=max(1, args.max_entries_per_block),
             total_env_steps=180,
             warmup_steps=40,
             collect_steps_per_iter=max(1, args.collect_steps_per_iter),
@@ -1162,6 +1361,9 @@ def parse_args() -> TrainConfig:
             eval_episodes=3,
             recent_episode_window=10,
             final_greedy_episodes=1,
+            use_fixed_eval_seeds=True,
+            fixed_eval_seed_base=int(args.fixed_eval_seed_base),
+            fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
             log_interval=20,
             max_episode_steps=80,
             reward_info_scale=args.reward_info_scale,
@@ -1181,17 +1383,18 @@ def parse_args() -> TrainConfig:
     return TrainConfig(
         device=args.device,
         seed=args.seed,
-        enable_amp=args.enable_amp,
-        enable_inference_amp=args.enable_inference_amp,
+        enable_amp=enable_amp,
+        enable_inference_amp=enable_inference_amp,
         amp_dtype=args.amp_dtype,
-        enable_torch_compile=args.enable_torch_compile,
+        enable_torch_compile=enable_torch_compile,
         compile_mode=args.compile_mode,
-        enable_cudnn_benchmark=args.enable_cudnn_benchmark,
-        enable_tf32=args.enable_tf32,
-        enable_channels_last=args.enable_channels_last,
+        enable_cudnn_benchmark=enable_cudnn_benchmark,
+        enable_tf32=enable_tf32,
+        enable_channels_last=enable_channels_last,
         episode_print_interval=max(0, args.episode_print_interval),
         train_print_interval=max(0, args.train_print_interval),
         save_eval_trajectories=args.save_eval_trajectories,
+        save_train_representative_trajectories=args.save_train_representative_trajectories,
         save_final_probe_trajectories=args.save_final_probe_trajectories,
         generate_plots_on_finish=args.generate_plots_on_finish,
         enable_collector_timing=enable_collector_timing,
@@ -1199,9 +1402,11 @@ def parse_args() -> TrainConfig:
         enable_replay_timing=enable_replay_timing,
         enable_state_adapter_timing=enable_state_adapter_timing,
         enable_cummap_timing=enable_cummap_timing,
-        enable_frontier_token_timing=enable_frontier_token_timing,
-        enable_local_state_timing=enable_local_state_timing,
+        enable_shared_semantic_timing=enable_shared_semantic_timing,
+        enable_advantage_state_timing=enable_advantage_state_timing,
+        enable_value_state_timing=enable_value_state_timing,
         timing_log_interval=max(0, args.timing_log_interval),
+        debug_check_incremental_frontier=bool(args.debug_check_incremental_frontier),
         prefer_batch_replay_add=args.prefer_batch_replay_add,
         learner_debug_stats_every=max(1, args.learner_debug_stats_every),
         total_env_steps=args.total_env_steps,
@@ -1223,13 +1428,16 @@ def parse_args() -> TrainConfig:
         eval_episodes=max(1, args.eval_episodes),
         recent_episode_window=max(1, args.recent_episode_window),
         final_greedy_episodes=max(1, args.final_greedy_episodes),
+        use_fixed_eval_seeds=bool(args.use_fixed_eval_seeds),
+        fixed_eval_seed_base=int(args.fixed_eval_seed_base),
+        fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
         log_interval=args.log_interval,
         rows=args.rows,
         cols=args.cols,
         obs_size=args.obs_size,
         scan_radius=args.scan_radius,
-        local_window_shape=(args.local_window_h, args.local_window_w),
-        token_min_cluster_size=args.token_min_cluster_size,
+        max_accessible_blocks=max(1, args.max_accessible_blocks),
+        max_entries_per_block=max(1, args.max_entries_per_block),
         obstacle_ratio=args.obstacle_ratio,
         reward_info_scale=args.reward_info_scale,
         reward_obstacle_weight=args.reward_obstacle_weight,
@@ -1261,9 +1469,34 @@ def build_profile_config() -> TrainConfig:
     return _build_vscode_preset(enable_profiling=True)
 
 
+def _fast_cuda_overrides() -> dict[str, object]:
+    # Experimental acceleration path only. Keep it available for controlled A/B testing,
+    # but do not treat it as the default recommendation on this machine/model.
+    return {
+        "enable_amp": True,
+        "enable_inference_amp": True,
+        "amp_dtype": "fp16",
+        "enable_torch_compile": True,
+        "compile_mode": "default",
+        "enable_cudnn_benchmark": True,
+        "enable_tf32": True,
+        "enable_channels_last": True,
+    }
+
+
+def build_fast_cuda_config() -> TrainConfig:
+    """Experimental fast CUDA preset; kept for optional A/B testing, not the default recommended path."""
+    return replace(build_vscode_config(), **_fast_cuda_overrides())
+
+
+def build_fast_cuda_profile_config() -> TrainConfig:
+    """Experimental fast CUDA profiling preset; optional only, not the default recommended path."""
+    return replace(build_profile_config(), **_fast_cuda_overrides())
+
+
 def build_profile_compile_config() -> TrainConfig:
-    """VSCode direct-run profiling preset with torch.compile enabled for A/B testing."""
-    return replace(build_profile_config(), enable_torch_compile=True, enable_inference_amp=True)
+    """Experimental profiling preset with fast CUDA toggles enabled for A/B testing."""
+    return build_fast_cuda_profile_config()
 
 
 def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
@@ -1271,7 +1504,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         device="cuda",
         seed=0,
         # Performance-side overhead toggles only; they do not change the algorithm or metric definitions.
-        enable_amp=True,
+        enable_amp=False,
         enable_inference_amp=False,
         amp_dtype="fp16",
         enable_torch_compile=False,
@@ -1279,28 +1512,31 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         enable_cudnn_benchmark=True,
         enable_tf32=True,
         enable_channels_last=False,
-        episode_print_interval=0,
-        train_print_interval=1000,
+        episode_print_interval=1,
+        train_print_interval=2000,
         save_eval_trajectories=False,
-        save_final_probe_trajectories=True,
-        generate_plots_on_finish=True,
+        save_train_representative_trajectories=False,
+        save_final_probe_trajectories=False,
+        generate_plots_on_finish=False,
         enable_collector_timing=enable_profiling,
         enable_learner_timing=enable_profiling,
         enable_replay_timing=enable_profiling,
         enable_state_adapter_timing=enable_profiling,
         enable_cummap_timing=enable_profiling,
-        enable_frontier_token_timing=enable_profiling,
-        enable_local_state_timing=enable_profiling,
+        enable_shared_semantic_timing=enable_profiling,
+        enable_advantage_state_timing=enable_profiling,
+        enable_value_state_timing=enable_profiling,
         timing_log_interval=2000,
+        debug_check_incremental_frontier=False,
         prefer_batch_replay_add=True,
         learner_debug_stats_every=1,
         rows=40,
         cols=60,
         scan_radius=10,
         obstacle_ratio=0.20,
-        local_window_shape=(21, 21),
-        token_min_cluster_size=3,
-        total_env_steps=120_000,
+        max_accessible_blocks=16,
+        max_entries_per_block=6,
+        total_env_steps=500_000,
         warmup_steps=4_000,
         collect_steps_per_iter=16,
         learner_updates_per_iter=2,
@@ -1315,24 +1551,27 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         grad_clip_norm=10.0,
         epsilon_start=1.0,
         epsilon_end=0.05,
-        epsilon_decay_steps=90_000,
-        eval_interval_env_steps=6_000,
-        eval_episodes=8,
-        recent_episode_window=20,
-        final_greedy_episodes=10,
+        epsilon_decay_steps=240_000,
+        eval_interval_env_steps=24_000,
+        eval_episodes=12,
+        recent_episode_window=100,
+        final_greedy_episodes=16,
+        use_fixed_eval_seeds=True,
+        fixed_eval_seed_base=20260323,
+        fixed_final_probe_seed_base=20261323,
         log_interval=500,
         max_episode_steps=600,
         coverage_stop_threshold=0.95,
-        reward_info_scale=4.0,
+        reward_info_scale=3.0,
         reward_obstacle_weight=0.25,
         reward_info_norm="half_perimeter",
         reward_recent_revisit_window=15,
-        reward_stall_window=4,
+        reward_stall_window=8,
         reward_step_penalty=0.02,
-        reward_terminal_bonus=8.0,
-        reward_revisit_penalty=0.10,
-        reward_stall_penalty=0.08,
-        reward_timeout_penalty=4.0,
+        reward_terminal_bonus=20.0,
+        reward_revisit_penalty=0.12,
+        reward_stall_penalty=0.12,
+        reward_timeout_penalty=8.0,
     )
 
 
@@ -1362,12 +1601,14 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
     # Switch run mode here:
-    # - "vscode":          use build_vscode_config() for one-click regular runs in VSCode
-    # - "profile":         use build_profile_config() for one-click profiling runs in VSCode
-    # - "profile_compile": use build_profile_compile_config() for profiling + torch.compile A/B tests
-    # - "cli":             use parse_args() for command-line parameter control
-    # - "smoke":           run built-in smoke test quickly
-    RUN_MODE = "profile"
+    # - "vscode":            use build_vscode_config() for one-click regular runs in VSCode
+    # - "profile":           use build_profile_config() for one-click profiling runs in VSCode
+    # - "profile_compile":   experimental profiling preset with fast CUDA toggles; not default-recommended
+    # - "fast_cuda":         experimental fast CUDA run entry; not default-recommended on current machine/model
+    # - "fast_cuda_profile": experimental fast CUDA profiling entry; not default-recommended
+    # - "cli":               use parse_args() for command-line parameter control
+    # - "smoke":             run built-in smoke test quickly
+    RUN_MODE = "vscode"
 
     if RUN_MODE == "vscode":
         cfg = build_vscode_config()
@@ -1378,6 +1619,12 @@ if __name__ == "__main__":
     elif RUN_MODE == "profile_compile":
         cfg = build_profile_compile_config()
         _run_with_startup_summary(cfg, run_mode="profile_compile")
+    elif RUN_MODE == "fast_cuda":
+        cfg = build_fast_cuda_config()
+        _run_with_startup_summary(cfg, run_mode="fast_cuda")
+    elif RUN_MODE == "fast_cuda_profile":
+        cfg = build_fast_cuda_profile_config()
+        _run_with_startup_summary(cfg, run_mode="fast_cuda_profile")
     elif RUN_MODE == "cli":
         cfg = parse_args()
         _run_with_startup_summary(cfg, run_mode="cli")

@@ -43,15 +43,17 @@ class RadarSensor:
     effective geometric FOV is Euclidean disk: dr^2 + dc^2 <= R^2
 
     Note:
-    this sensor-local window only defines observation footprint/local_snap size.
-    Policy local-state window size is configured independently in LocalStateConfig.
+    this sensor-local window defines observation footprint/local_snap size and
+    also sets the scale of the advantage local decision canvas in the current
+    semantic-dueling architecture.
     """
 
-    def __init__(self, scan_radius: int = 10):
+    def __init__(self, scan_radius: int = 10, block_corner_peeking: bool = True):
         if scan_radius < 1:
             raise ValueError("scan_radius must be >= 1")
 
         self.scan_r = int(scan_radius)
+        self.block_corner_peeking = bool(block_corner_peeking)
         self.local_shape = (2 * self.scan_r + 1, 2 * self.scan_r + 1)
         self.center_state = (self.scan_r, self.scan_r)
 

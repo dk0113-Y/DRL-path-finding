@@ -2,27 +2,32 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Optional, Sequence
 
 import numpy as np
 import torch
 import torch.nn as nn
 
-from encoders.global_encoder import GlobalSideEncoder, GlobalSideEncoderConfig
-from encoders.local_encoder import NearMapEncoderConfig, RawNearSummaryEncoder
-from env.core_cummap import (
-    MID_MAP_CHANNEL_COUNT,
-    FrontierDerivedStats,
-    MidMapConfig,
-)
-from env.frontier_token_builder import (
-    FRONTIER_REGION_TOKEN_FIELD_COUNT,
-    FrontierRegionTokenBuilder,
-    FrontierRegionTokenConfig,
+from encoders.advantage_encoder import AdvantageCanvasEncoder, AdvantageEncoderConfig
+from encoders.value_encoder import ValueEncoderConfig, ValueTreeEncoder
+from env.advantage_state_builder import (
+    ADVANTAGE_CANVAS_CHANNEL_COUNT,
+    AdvantageStateBuilder,
+    AdvantageStateConfig,
 )
 from env.grid_topology import ACTIONS_8
-from env.local_state_builder import LOCAL_STATE_CHANNEL_COUNT, LocalStateBuilder, LocalStateConfig
-from heads.q_head import DecisionHeadConfig, SplitDuelingDecisionHead
+from env.shared_semantic_layer import (
+    SharedSemanticConfig,
+    SharedSemanticLayer,
+    SharedSemanticSnapshot,
+)
+from env.value_state_builder import (
+    VALUE_BLOCK_FEATURE_COUNT,
+    VALUE_ENTRY_FEATURE_COUNT,
+    ValueStateBuilder,
+    ValueStateConfig,
+)
+from heads.semantic_dueling_head import SemanticDuelingHead, SemanticDuelingHeadConfig
 
 
 ACTION_DIM = len(ACTIONS_8)
@@ -30,20 +35,16 @@ ACTION_DIM = len(ACTIONS_8)
 
 @dataclass(frozen=True)
 class ExplorationQConfig:
-    global_side_encoder: GlobalSideEncoderConfig = field(
-        default_factory=lambda: GlobalSideEncoderConfig(
-            frontier_token_input_dim=FRONTIER_REGION_TOKEN_FIELD_COUNT
-        )
-    )
-    near_encoder: NearMapEncoderConfig = field(default_factory=NearMapEncoderConfig)
-    decision_head: DecisionHeadConfig = field(default_factory=DecisionHeadConfig)
+    advantage_encoder: AdvantageEncoderConfig = field(default_factory=AdvantageEncoderConfig)
+    value_encoder: ValueEncoderConfig = field(default_factory=ValueEncoderConfig)
+    decision_head: SemanticDuelingHeadConfig = field(default_factory=SemanticDuelingHeadConfig)
 
 
 @dataclass(frozen=True)
 class StateAdapterConfig:
-    near_map: LocalStateConfig = field(default_factory=LocalStateConfig)
-    mid_map: MidMapConfig = field(default_factory=MidMapConfig)
-    frontier_tokens: FrontierRegionTokenConfig = field(default_factory=FrontierRegionTokenConfig)
+    shared_semantics: SharedSemanticConfig = field(default_factory=SharedSemanticConfig)
+    advantage_state: AdvantageStateConfig = field(default_factory=AdvantageStateConfig)
+    value_state: ValueStateConfig = field(default_factory=ValueStateConfig)
     pin_memory: bool = True
     non_blocking_transfer: bool = True
     channels_last_on_cuda: bool = False
@@ -52,90 +53,87 @@ class StateAdapterConfig:
 
 @dataclass(frozen=True)
 class SharedStepArtifacts:
-    frontier_u8: np.ndarray
-    frontier_stats: FrontierDerivedStats
+    semantic_snapshot: SharedSemanticSnapshot
 
 
 class ExplorationQNetwork(nn.Module):
     """
-    A+ exploration backbone.
+    Shared-semantic dueling exploration network.
 
     Data flow:
-      near_map -> near encoder -> raw_near_summary
-      mid_map -> mid encoder
-      frontier_tokens -> frontier-region token encoder
-      global fusion -> global_context
-      raw_near_summary + global_context -> split-input dueling decision head -> Q values
-
-    Forward inputs:
-      near_map             [B, C_near, H_near, W_near]
-      mid_map              [B, C_mid, H_mid, W_mid]
-      frontier_tokens      [B, K, D_token]
-      frontier_token_mask  [B, K] bool (optional, True means valid)
+      advantage_canvas -> advantage encoder -> per-action advantage states
+      value block-tree -> value encoder -> state value context
+      {value_state, advantage_state} -> dueling head -> Q(s, a)
     """
 
     def __init__(self, cfg: Optional[ExplorationQConfig] = None):
         super().__init__()
         self.cfg = cfg if cfg is not None else ExplorationQConfig()
+        if int(self.cfg.advantage_encoder.action_dim) != ACTION_DIM:
+            raise ValueError(
+                f"Advantage encoder action_dim must be {ACTION_DIM}, got {self.cfg.advantage_encoder.action_dim}"
+            )
+        if int(self.cfg.decision_head.action_dim) != ACTION_DIM:
+            raise ValueError(
+                f"Decision head action_dim must be {ACTION_DIM}, got {self.cfg.decision_head.action_dim}"
+            )
+        if int(self.cfg.advantage_encoder.canvas_in_channels) != int(ADVANTAGE_CANVAS_CHANNEL_COUNT):
+            raise ValueError(
+                "Advantage canvas channel mismatch: "
+                f"expected {ADVANTAGE_CANVAS_CHANNEL_COUNT}, got {self.cfg.advantage_encoder.canvas_in_channels}"
+            )
+        if int(self.cfg.value_encoder.block_input_dim) != int(VALUE_BLOCK_FEATURE_COUNT):
+            raise ValueError(
+                "Value block feature dim mismatch: "
+                f"expected {VALUE_BLOCK_FEATURE_COUNT}, got {self.cfg.value_encoder.block_input_dim}"
+            )
+        if int(self.cfg.value_encoder.entry_input_dim) != int(VALUE_ENTRY_FEATURE_COUNT):
+            raise ValueError(
+                "Value entry feature dim mismatch: "
+                f"expected {VALUE_ENTRY_FEATURE_COUNT}, got {self.cfg.value_encoder.entry_input_dim}"
+            )
+        if int(self.cfg.decision_head.value_state_dim) != int(self.cfg.value_encoder.value_state_dim):
+            raise ValueError("Value encoder output dim must match decision head value_state_dim")
+        if int(self.cfg.decision_head.advantage_state_dim) != int(self.cfg.advantage_encoder.action_state_dim):
+            raise ValueError("Advantage encoder output dim must match decision head advantage_state_dim")
 
-        if self.cfg.decision_head.action_dim != ACTION_DIM:
-            raise ValueError(
-                f"DecisionHead action_dim must be {ACTION_DIM}, got {self.cfg.decision_head.action_dim}"
-            )
-        if self.cfg.near_encoder.near_in_channels != LOCAL_STATE_CHANNEL_COUNT:
-            raise ValueError(
-                "near_in_channels mismatch with LocalStateBuilder channels: "
-                f"expected {LOCAL_STATE_CHANNEL_COUNT}, got {self.cfg.near_encoder.near_in_channels}"
-            )
-        if self.cfg.decision_head.global_context_dim != self.cfg.global_side_encoder.global_context_dim:
-            raise ValueError(
-                "global context dim mismatch between decision head and global side: "
-                f"{self.cfg.decision_head.global_context_dim} vs {self.cfg.global_side_encoder.global_context_dim}"
-            )
-        if self.cfg.decision_head.raw_near_summary_dim != self.cfg.near_encoder.raw_near_summary_dim:
-            raise ValueError(
-                "raw near summary dim mismatch between near encoder and decision head: "
-                f"{self.cfg.decision_head.raw_near_summary_dim} vs {self.cfg.near_encoder.raw_near_summary_dim}"
-            )
-
-        self.global_side_encoder = GlobalSideEncoder(self.cfg.global_side_encoder)
-        self.raw_near_summary_encoder = RawNearSummaryEncoder(self.cfg.near_encoder)
-        self.decision_head = SplitDuelingDecisionHead(self.cfg.decision_head)
+        self.advantage_encoder = AdvantageCanvasEncoder(self.cfg.advantage_encoder)
+        self.value_encoder = ValueTreeEncoder(self.cfg.value_encoder)
+        self.decision_head = SemanticDuelingHead(self.cfg.decision_head)
 
     def forward(
         self,
-        near_map: torch.Tensor,
-        mid_map: torch.Tensor,
-        frontier_tokens: torch.Tensor,
-        frontier_token_mask: Optional[torch.Tensor] = None,
+        advantage_canvas: torch.Tensor,
+        value_block_features: torch.Tensor,
+        value_entry_features: torch.Tensor,
+        value_block_mask: torch.Tensor,
+        value_entry_mask: torch.Tensor,
+        *,
         return_aux: bool = True,
     ):
         if not return_aux:
-            global_context = self.global_side_encoder(
-                mid_map,
-                frontier_tokens,
-                frontier_token_mask=frontier_token_mask,
+            advantage_state = self.advantage_encoder(advantage_canvas, return_aux=False)
+            value_state = self.value_encoder(
+                value_block_features,
+                value_entry_features,
+                value_block_mask,
+                value_entry_mask,
                 return_aux=False,
             )
-            raw_near_summary = self.raw_near_summary_encoder(near_map)
-            return self.decision_head(raw_near_summary, global_context)
+            return self.decision_head(value_state, advantage_state)
 
-        global_context, global_aux = self.global_side_encoder(
-            mid_map,
-            frontier_tokens,
-            frontier_token_mask=frontier_token_mask,
+        advantage_state, advantage_aux = self.advantage_encoder(advantage_canvas, return_aux=True)
+        value_state, value_aux = self.value_encoder(
+            value_block_features,
+            value_entry_features,
+            value_block_mask,
+            value_entry_mask,
             return_aux=True,
         )
-        raw_near_summary = self.raw_near_summary_encoder(near_map)
-        q_values = self.decision_head(raw_near_summary, global_context)
-
-        aux: Dict[str, torch.Tensor] = {
-            "global_context": global_context,
-            "mid_map_vector": global_aux["mid_map_vector"],
-            "frontier_token_context": global_aux["frontier_token_context"],
-            "global_source_gates": global_aux["global_source_gates"],
-            "raw_near_summary": raw_near_summary,
-        }
+        q_values = self.decision_head(value_state, advantage_state)
+        aux: Dict[str, torch.Tensor] = {}
+        aux.update(advantage_aux)
+        aux.update(value_aux)
         return q_values, aux
 
 
@@ -144,26 +142,30 @@ class StateTensorAdapter:
     Build the policy inputs from environment state objects.
 
     Outputs:
-      near_map, mid_map, frontier_tokens, frontier_token_mask
+      advantage_canvas, value_block_features, value_entry_features,
+      value_block_mask, value_entry_mask
     """
 
     _STATE_BATCH_KEYS = (
-        "near_map",
-        "mid_map",
-        "frontier_tokens",
-        "frontier_token_mask",
+        "advantage_canvas",
+        "value_block_features",
+        "value_entry_features",
+        "value_block_mask",
+        "value_entry_mask",
     )
     _STATE_BATCH_DTYPES = (
-        ("near_map", torch.float32),
-        ("mid_map", torch.float32),
-        ("frontier_tokens", torch.float32),
-        ("frontier_token_mask", torch.bool),
+        ("advantage_canvas", torch.float32),
+        ("value_block_features", torch.float32),
+        ("value_entry_features", torch.float32),
+        ("value_block_mask", torch.bool),
+        ("value_entry_mask", torch.bool),
     )
 
     def __init__(self, cfg: Optional[StateAdapterConfig] = None, device: str = "cpu"):
         self.cfg = cfg if cfg is not None else StateAdapterConfig()
-        self.near_builder = LocalStateBuilder(self.cfg.near_map)
-        self.frontier_token_builder = FrontierRegionTokenBuilder(self.cfg.frontier_tokens)
+        self.shared_semantic_layer = SharedSemanticLayer(self.cfg.shared_semantics)
+        self.advantage_builder = AdvantageStateBuilder(self.cfg.advantage_state)
+        self.value_builder = ValueStateBuilder(self.cfg.value_state)
         self.device = torch.device(device)
         self._cpu_device = torch.device("cpu")
         self._pin_cpu_state = bool(self.cfg.pin_memory) and torch.cuda.is_available()
@@ -172,9 +174,8 @@ class StateTensorAdapter:
         self._timing_enabled = bool(self.cfg.enable_timing)
 
         self.shared_artifact_time = 0.0
-        self.near_build_time = 0.0
-        self.mid_build_time = 0.0
-        self.frontier_token_build_time = 0.0
+        self.advantage_build_time = 0.0
+        self.value_build_time = 0.0
         self.tensor_transfer_time = 0.0
 
     @staticmethod
@@ -197,27 +198,6 @@ class StateTensorAdapter:
         if self._pin_cpu_state and not tensor.is_pinned():
             tensor = tensor.pin_memory()
         return tensor
-
-    def _move_tensor_to_target(
-        self,
-        tensor: torch.Tensor,
-        target_device: Optional[torch.device | str],
-        dtype: Optional[torch.dtype] = None,
-        non_blocking: Optional[bool] = None,
-    ) -> torch.Tensor:
-        target = self._resolve_device(target_device)
-        target_dtype = tensor.dtype if dtype is None else dtype
-        move_non_blocking = bool(self._non_blocking_transfer if non_blocking is None else non_blocking)
-        if target.type != "cuda":
-            move_non_blocking = False
-        elif non_blocking is None:
-            move_non_blocking = move_non_blocking and tensor.device.type == "cpu" and tensor.is_pinned()
-        return self._move_tensor_to_resolved_target(
-            tensor,
-            target,
-            target_dtype=target_dtype,
-            move_non_blocking=move_non_blocking,
-        )
 
     def _move_tensor_to_resolved_target(
         self,
@@ -252,54 +232,40 @@ class StateTensorAdapter:
         if not isinstance(np_array, np.ndarray):
             raise TypeError("map input must be a numpy array")
         np_array = self._ensure_contiguous_numpy(np_array)
-
-        t0 = time.perf_counter() if self._timing_enabled else 0.0
         map_t = torch.from_numpy(np_array)
         if map_t.dtype != dtype:
             map_t = map_t.to(dtype=dtype)
         map_t = map_t.unsqueeze(0)
-        map_t = self._finalize_cpu_tensor(map_t, dtype=dtype)
-        if self._timing_enabled:
-            self.tensor_transfer_time += time.perf_counter() - t0
-        return map_t
+        return self._finalize_cpu_tensor(map_t, dtype=dtype)
 
-    def _to_cpu_batch_frontier_tokens(self, frontier_tokens, frontier_token_mask=None):
-        if isinstance(frontier_tokens, np.ndarray):
-            frontier_tokens_t = torch.from_numpy(self._ensure_contiguous_numpy(frontier_tokens))
-        elif isinstance(frontier_tokens, torch.Tensor):
-            frontier_tokens_t = frontier_tokens.detach()
-        else:
-            raise TypeError("frontier_tokens must be np.ndarray or torch.Tensor")
-
-        if frontier_tokens_t.dim() == 2:
-            frontier_tokens_t = frontier_tokens_t.unsqueeze(0)
-        if frontier_tokens_t.dim() != 3:
-            raise ValueError(
-                "frontier_tokens must be [B,K,D] or [K,D], "
-                f"got {tuple(frontier_tokens_t.shape)}"
-            )
-
-        if frontier_token_mask is None:
-            mask_t = torch.ones(frontier_tokens_t.shape[:2], dtype=torch.bool)
-        else:
-            if isinstance(frontier_token_mask, np.ndarray):
-                mask_t = torch.from_numpy(self._ensure_contiguous_numpy(frontier_token_mask))
-            elif isinstance(frontier_token_mask, torch.Tensor):
-                mask_t = frontier_token_mask.detach()
-            else:
-                raise TypeError("frontier_token_mask must be np.ndarray or torch.Tensor")
-
-            if mask_t.dim() == 1:
-                mask_t = mask_t.unsqueeze(0)
-            if mask_t.shape != frontier_tokens_t.shape[:2]:
-                raise ValueError(
-                    "frontier_token_mask shape mismatch: "
-                    f"expected {tuple(frontier_tokens_t.shape[:2])}, got {tuple(mask_t.shape)}"
-                )
-
-        frontier_tokens_t = self._finalize_cpu_tensor(frontier_tokens_t, dtype=torch.float32)
-        mask_t = self._finalize_cpu_tensor(mask_t, dtype=torch.bool)
-        return frontier_tokens_t, mask_t
+    def _to_cpu_batch_tree(
+        self,
+        block_features,
+        entry_features,
+        block_mask,
+        entry_mask,
+    ):
+        if not isinstance(block_features, np.ndarray) or not isinstance(entry_features, np.ndarray):
+            raise TypeError("tree features must be numpy arrays")
+        if not isinstance(block_mask, np.ndarray) or not isinstance(entry_mask, np.ndarray):
+            raise TypeError("tree masks must be numpy arrays")
+        block_features_t = self._finalize_cpu_tensor(
+            torch.from_numpy(self._ensure_contiguous_numpy(block_features)).unsqueeze(0),
+            dtype=torch.float32,
+        )
+        entry_features_t = self._finalize_cpu_tensor(
+            torch.from_numpy(self._ensure_contiguous_numpy(entry_features)).unsqueeze(0),
+            dtype=torch.float32,
+        )
+        block_mask_t = self._finalize_cpu_tensor(
+            torch.from_numpy(self._ensure_contiguous_numpy(block_mask)).unsqueeze(0),
+            dtype=torch.bool,
+        )
+        entry_mask_t = self._finalize_cpu_tensor(
+            torch.from_numpy(self._ensure_contiguous_numpy(entry_mask)).unsqueeze(0),
+            dtype=torch.bool,
+        )
+        return block_features_t, entry_features_t, block_mask_t, entry_mask_t
 
     def _resolve_batch_move_non_blocking(
         self,
@@ -331,11 +297,7 @@ class StateTensorAdapter:
                 raise ValueError(f"move_state_batch expects CPU state input for key={key}")
             source_tensors.append(tensor)
 
-        move_non_blocking = self._resolve_batch_move_non_blocking(
-            source_tensors,
-            target,
-            non_blocking=non_blocking,
-        )
+        move_non_blocking = self._resolve_batch_move_non_blocking(source_tensors, target, non_blocking=non_blocking)
         return {
             key: self._move_tensor_to_resolved_target(
                 state_batch[key],
@@ -346,108 +308,78 @@ class StateTensorAdapter:
             for key, dtype in self._STATE_BATCH_DTYPES
         }
 
-    def _build_shared_step_artifacts(
+    def build_shared_step_artifacts(
         self,
         cum_map,
+        agent_state,
         frontier_u8=None,
     ) -> SharedStepArtifacts:
+        _ = frontier_u8
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        frontier_use = cum_map.get_frontier_u8(refresh=False) if frontier_u8 is None else frontier_u8
-        frontier_stats = cum_map.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_use)
         shared = SharedStepArtifacts(
-            frontier_u8=frontier_stats.frontier_u8,
-            frontier_stats=frontier_stats,
+            semantic_snapshot=self.shared_semantic_layer.analyze(cum_map, agent_state),
         )
         if self._timing_enabled:
             self.shared_artifact_time += time.perf_counter() - t0
         return shared
 
-    def build_shared_step_artifacts(
-        self,
-        cum_map,
-        frontier_u8=None,
-    ) -> SharedStepArtifacts:
-        """Public helper so callers can reuse same-step frontier artifacts across builders."""
-        return self._build_shared_step_artifacts(cum_map, frontier_u8=frontier_u8)
-
     def build_single_state_tensors(
         self,
         cum_map,
-        agent_state: Tuple[int, int],
-        frontier_tokens=None,
-        frontier_token_mask=None,
-        frontier_u8=None,
+        agent_state,
         shared_artifacts: Optional[SharedStepArtifacts] = None,
         target_device: Optional[torch.device | str] = None,
-    ) -> Dict[str, torch.Tensor]:
+        return_state_meta: bool = False,
+    ):
         if shared_artifacts is None:
-            shared_artifacts = self._build_shared_step_artifacts(
-                cum_map,
-                frontier_u8=frontier_u8,
-            )
+            shared_artifacts = self.build_shared_step_artifacts(cum_map, agent_state)
 
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        near_np = self.near_builder.build(
+        advantage_canvas_np, local_meta = self.advantage_builder.build(
             cum_map,
             agent_state,
-            shared_artifacts=shared_artifacts,
+            shared_artifacts.semantic_snapshot,
         )
         if self._timing_enabled:
-            self.near_build_time += time.perf_counter() - t0
+            self.advantage_build_time += time.perf_counter() - t0
 
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        mid_map_np = cum_map.build_mid_map(
-            agent_state,
-            config=self.cfg.mid_map,
-            shared_artifacts=shared_artifacts,
+        block_np, entry_np, block_mask_np, entry_mask_np = self.value_builder.build(
+            shared_artifacts.semantic_snapshot,
         )
         if self._timing_enabled:
-            self.mid_build_time += time.perf_counter() - t0
+            self.value_build_time += time.perf_counter() - t0
 
-        if frontier_tokens is None:
-            t0 = time.perf_counter() if self._timing_enabled else 0.0
-            token_np, token_mask_np = self.frontier_token_builder.build(
-                cum_map,
-                agent_state,
-                shared_artifacts=shared_artifacts,
-                world_window_shape=self.cfg.mid_map.world_window_shape,
-            )
-            frontier_tokens = token_np
-            frontier_token_mask = token_mask_np
-            if self._timing_enabled:
-                self.frontier_token_build_time += time.perf_counter() - t0
-
-        near_t = self._to_cpu_batch_map(near_np, dtype=torch.float32)
-        mid_map_t = self._to_cpu_batch_map(mid_map_np, dtype=torch.float32)
-        frontier_tokens_t, frontier_token_mask_t = self._to_cpu_batch_frontier_tokens(
-            frontier_tokens,
-            frontier_token_mask=frontier_token_mask,
+        advantage_canvas_t = self._to_cpu_batch_map(advantage_canvas_np, dtype=torch.float32)
+        block_t, entry_t, block_mask_t, entry_mask_t = self._to_cpu_batch_tree(
+            block_np,
+            entry_np,
+            block_mask_np,
+            entry_mask_np,
         )
 
-        if frontier_tokens_t.shape[0] != 1:
-            raise ValueError(
-                "build_single_state_tensors expects single frontier-token batch [K,D] or [1,K,D]"
-            )
-
         state_batch = {
-            "near_map": near_t,
-            "mid_map": mid_map_t,
-            "frontier_tokens": frontier_tokens_t,
-            "frontier_token_mask": frontier_token_mask_t,
+            "advantage_canvas": advantage_canvas_t,
+            "value_block_features": block_t,
+            "value_entry_features": entry_t,
+            "value_block_mask": block_mask_t,
+            "value_entry_mask": entry_mask_t,
         }
-        if target_device is None:
-            return state_batch
-        target = self._resolve_device(target_device)
-        if target.type == "cpu":
-            return state_batch
-        return self.move_state_batch(state_batch, target_device=target)
+
+        semantic_meta = dict(shared_artifacts.semantic_snapshot.metrics())
+        state_meta = {**semantic_meta, **local_meta}
+        if target_device is not None and self._resolve_device(target_device).type != "cpu":
+            state_batch = self.move_state_batch(state_batch, target_device=target_device)
+
+        if return_state_meta:
+            return state_batch, state_meta
+        return state_batch
 
     def get_timing_stats(self) -> Dict[str, float]:
         return {
             "shared_artifact_time": float(self.shared_artifact_time),
-            "near_build_time": float(self.near_build_time),
-            "mid_build_time": float(self.mid_build_time),
-            "frontier_token_build_time": float(self.frontier_token_build_time),
+            "advantage_build_time": float(self.advantage_build_time),
+            "value_build_time": float(self.value_build_time),
             "tensor_transfer_time": float(self.tensor_transfer_time),
         }
 
@@ -457,16 +389,6 @@ def action_mask_from_valid_indices(
     action_dim: int = ACTION_DIM,
     device: Optional[torch.device] = None,
 ) -> torch.Tensor:
-    """
-    Build bool action mask from valid action indices.
-
-    Input:
-      - single sample: Iterable[int]
-      - batch samples: Sequence[Iterable[int]]
-
-    Output:
-      mask [B, action_dim] bool
-    """
     if action_dim != ACTION_DIM:
         raise ValueError(f"action_dim must be {ACTION_DIM}")
 
@@ -512,7 +434,6 @@ def action_mask_from_valid_indices(
         seq = list(valid_action_indices)
         if len(seq) == 0:
             raise ValueError("valid_action_indices cannot be empty")
-
         if all(_is_int_like(v) for v in seq):
             rows = [[int(v) for v in seq]]
         else:
@@ -529,11 +450,6 @@ def masked_q_values(
     action_mask: torch.Tensor,
     invalid_fill: float = -1e9,
 ) -> torch.Tensor:
-    """
-    Apply legal-action mask to Q values.
-
-    action_mask: bool tensor, True means valid action.
-    """
     if q_values.dim() == 1:
         q_values = q_values.unsqueeze(0)
         squeeze_back = True
@@ -549,7 +465,10 @@ def masked_q_values(
             f"action_mask shape mismatch: expected {tuple(q_values.shape)}, got {tuple(action_mask.shape)}"
         )
 
-    masked = q_values.masked_fill(~action_mask.to(dtype=torch.bool), float(invalid_fill))
+    fill_value = float(invalid_fill)
+    if torch.is_floating_point(q_values):
+        fill_value = max(fill_value, float(torch.finfo(q_values.dtype).min))
+    masked = q_values.masked_fill(~action_mask.to(dtype=torch.bool), fill_value)
     return masked.squeeze(0) if squeeze_back else masked
 
 
@@ -558,17 +477,6 @@ def select_greedy_action(
     action_mask: Optional[torch.Tensor] = None,
     valid_action_indices: Optional[Sequence[Iterable[int]] | Iterable[int]] = None,
 ) -> torch.Tensor:
-    """
-    Greedy action selection with legal-action support.
-
-    Priority:
-      1) explicit action_mask
-      2) valid_action_indices -> converted mask
-      3) no mask -> plain argmax
-
-    Returns:
-      action_idx [B] (or scalar tensor for single sample after squeeze)
-    """
     if action_mask is not None and valid_action_indices is not None:
         raise ValueError("Provide either action_mask or valid_action_indices, not both")
 
@@ -611,104 +519,35 @@ def _smoke_test() -> None:
     from env.grid_topology import GridTopology
 
     torch.manual_seed(0)
-
-    cfg = ExplorationQConfig(
-        global_side_encoder=GlobalSideEncoderConfig(
-            frontier_token_input_dim=FRONTIER_REGION_TOKEN_FIELD_COUNT,
-            global_context_dim=256,
-        ),
-        near_encoder=NearMapEncoderConfig(
-            near_in_channels=LOCAL_STATE_CHANNEL_COUNT,
-            raw_near_summary_dim=128,
-        ),
-        decision_head=DecisionHeadConfig(
-            raw_near_summary_dim=128,
-            global_context_dim=256,
-            hidden_dim=192,
-            action_dim=ACTION_DIM,
-        ),
-    )
-
-    net = ExplorationQNetwork(cfg)
-
-    adapter_cfg = StateAdapterConfig(
-        near_map=LocalStateConfig(local_window_shape=(21, 21)),
-        mid_map=MidMapConfig(mid_map_shape=(24, 24), world_window_shape=(128, 128)),
-        frontier_tokens=FrontierRegionTokenConfig(top_k=8),
-    )
-
-    bsz = 3
-    near_h, near_w = adapter_cfg.near_map.local_window_shape
-    mid_h, mid_w = adapter_cfg.mid_map.mid_map_shape
-
-    near_map = torch.rand(bsz, LOCAL_STATE_CHANNEL_COUNT, near_h, near_w)
-    mid_map = torch.rand(bsz, MID_MAP_CHANNEL_COUNT, mid_h, mid_w)
-    frontier_tokens = torch.rand(bsz, 8, FRONTIER_REGION_TOKEN_FIELD_COUNT)
-    frontier_token_mask = torch.ones(bsz, 8, dtype=torch.bool)
-    frontier_token_mask[0, :] = False
-    frontier_token_mask[1, 6:] = False
-
-    q_values, aux = net(
-        near_map,
-        mid_map,
-        frontier_tokens,
-        frontier_token_mask=frontier_token_mask,
-        return_aux=True,
-    )
-    assert q_values.shape == (bsz, ACTION_DIM)
-    assert aux["raw_near_summary"].shape == (bsz, cfg.near_encoder.raw_near_summary_dim)
-    assert torch.isfinite(aux["global_context"]).all()
-    assert torch.isfinite(q_values).all()
-
-    mask = action_mask_from_valid_indices([[0, 2, 3], [1, 4, 7], [0, 6]])
-    act = select_greedy_action(q_values, action_mask=mask)
-    assert act.shape == (bsz,)
-
     grid, start = RandomMapGenerator(30, 40, 5, 0.2).generate_map()
     obs = LocalObservationModel(grid, start)
-    snap, _ = obs.observe(start)
-    valid_idxs = GridTopology.valid_action_indices(GridTopology.free_mask(grid), start)
-    cum_map = CumulativeBeliefMap(grid, start, snap)
-    frontier_u8 = cum_map.get_frontier_u8(refresh=True)
+    cum_map = CumulativeBeliefMap(grid, start, obs.local_snap)
 
-    adapter = StateTensorAdapter(cfg=adapter_cfg, device="cpu")
-    tensors = adapter.build_single_state_tensors(
+    adapter = StateTensorAdapter(device="cpu")
+    state_batch, state_meta = adapter.build_single_state_tensors(
         cum_map,
         start,
-        frontier_tokens=None,
-        frontier_token_mask=None,
-        frontier_u8=frontier_u8,
+        return_state_meta=True,
     )
 
-    q_single = net(
-        tensors["near_map"],
-        tensors["mid_map"],
-        tensors["frontier_tokens"],
-        frontier_token_mask=tensors["frontier_token_mask"],
-        return_aux=False,
+    net = ExplorationQNetwork()
+    q_values, aux = net(
+        state_batch["advantage_canvas"],
+        state_batch["value_block_features"],
+        state_batch["value_entry_features"],
+        state_batch["value_block_mask"],
+        state_batch["value_entry_mask"],
+        return_aux=True,
     )
-    legal_mask = action_mask_from_valid_indices(valid_idxs, device=q_single.device)
-    a_single = select_greedy_action(q_single, action_mask=legal_mask)
+    valid = GridTopology.valid_action_indices_fast(GridTopology.free_mask(grid), start)
+    action = select_greedy_action(q_values, valid_action_indices=valid)
 
-    assert q_single.shape == (1, ACTION_DIM)
-    assert tensors["near_map"].shape == (1, LOCAL_STATE_CHANNEL_COUNT, near_h, near_w)
-    assert tensors["mid_map"].shape == (1, MID_MAP_CHANNEL_COUNT, mid_h, mid_w)
-    assert tensors["frontier_tokens"].shape[2] == FRONTIER_REGION_TOKEN_FIELD_COUNT
-    assert int(a_single.item()) in set(valid_idxs)
-
-    print("ExplorationQNetwork smoke test passed")
-    print(
-        "near_map:",
-        tuple(tensors["near_map"].shape),
-        "mid_map:",
-        tuple(tensors["mid_map"].shape),
-        "frontier_tokens:",
-        tuple(tensors["frontier_tokens"].shape),
-        "q_values:",
-        tuple(q_values.shape),
-        "single_action:",
-        int(a_single.item()),
-    )
+    assert q_values.shape == (1, ACTION_DIM)
+    assert torch.isfinite(q_values).all()
+    assert isinstance(state_meta, dict) and "accessible_block_count" in state_meta
+    assert isinstance(aux, dict) and "value_accessible_block_count" in aux
+    assert int(action.item()) in valid
+    print("ExplorationQNetwork semantic smoke test passed", tuple(q_values.shape))
 
 
 if __name__ == "__main__":

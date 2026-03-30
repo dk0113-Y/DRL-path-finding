@@ -27,6 +27,13 @@ TRAIN_PLOT_COLUMNS: dict[str, str] = {
     "recent_success_rate": "train_recent_success_rate.png",
     "recent_mean_episode_length": "train_recent_mean_episode_length.png",
     "recent_mean_repeat_visit_ratio": "train_recent_mean_repeat_visit_ratio.png",
+    "recent_accessible_block_count": "train_recent_accessible_block_count.png",
+    "recent_total_accessible_unknown_area": "train_recent_total_accessible_unknown_area.png",
+    "recent_top1_block_area_ratio": "train_recent_top1_block_area_ratio.png",
+    "recent_scene_orderliness": "train_recent_scene_orderliness.png",
+    "recent_main_block_entry_count": "train_recent_main_block_entry_count.png",
+    "recent_nearest_main_entry_dist": "train_recent_nearest_main_entry_dist.png",
+    "recent_local_revisit_pressure": "train_recent_local_revisit_pressure.png",
 }
 
 TRAIN_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
@@ -39,6 +46,12 @@ TRAIN_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
 )
 TRAIN_REWARD_BREAKDOWN_FILENAME = "train_reward_breakdown.png"
 TRAIN_EPISODE_LENGTH_FILENAME = "train_episode_length_vs_episode_idx.png"
+TRAIN_LOCAL_ENTRY_COMPETITION_COLUMNS: tuple[str, str] = (
+    "recent_local_main_entry_coverage",
+    "recent_local_nonmain_entry_coverage",
+)
+TRAIN_LOCAL_ENTRY_COMPETITION_FILENAME = "train_local_entry_competition.png"
+TRAIN_LOCAL_ENTRY_COMPETITION_TITLE = "train local main/nonmain entry competition"
 
 EVAL_PLOT_COLUMNS: dict[str, str] = {
     "eval_mean_reward": "eval_mean_reward.png",
@@ -46,6 +59,13 @@ EVAL_PLOT_COLUMNS: dict[str, str] = {
     "eval_success_rate": "eval_success_rate.png",
     "eval_mean_repeat_visit_ratio": "eval_mean_repeat_visit_ratio.png",
     "eval_mean_episode_length": "eval_mean_episode_length.png",
+    "eval_mean_accessible_block_count": "eval_mean_accessible_block_count.png",
+    "eval_mean_total_accessible_unknown_area": "eval_mean_total_accessible_unknown_area.png",
+    "eval_mean_top1_block_area_ratio": "eval_mean_top1_block_area_ratio.png",
+    "eval_mean_scene_orderliness": "eval_mean_scene_orderliness.png",
+    "eval_mean_main_block_entry_count": "eval_mean_main_block_entry_count.png",
+    "eval_mean_nearest_main_entry_dist": "eval_mean_nearest_main_entry_dist.png",
+    "eval_mean_local_revisit_pressure": "eval_mean_local_revisit_pressure.png",
 }
 
 EVAL_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
@@ -57,6 +77,12 @@ EVAL_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
     "eval_mean_terminal_bonus_sum",
 )
 EVAL_REWARD_BREAKDOWN_FILENAME = "eval_reward_breakdown.png"
+EVAL_LOCAL_ENTRY_COMPETITION_COLUMNS: tuple[str, str] = (
+    "eval_mean_local_main_entry_coverage",
+    "eval_mean_local_nonmain_entry_coverage",
+)
+EVAL_LOCAL_ENTRY_COMPETITION_FILENAME = "eval_local_entry_competition.png"
+EVAL_LOCAL_ENTRY_COMPETITION_TITLE = "eval local main/nonmain entry competition"
 
 
 def _warn(message: str) -> None:
@@ -156,6 +182,109 @@ def _rolling_mean(values: list[float], window: int) -> list[float]:
     return smoothed
 
 
+def _normalize_window(window: int, length: int) -> int:
+    if length <= 1:
+        return 1
+    window_use = max(1, int(window))
+    max_window = int(length) if (int(length) % 2 == 1) else int(length) - 1
+    if max_window <= 1:
+        return 1
+    window_use = min(window_use, max_window)
+    if (window_use % 2) == 0:
+        window_use += 1 if window_use < max_window else -1
+    return max(1, window_use)
+
+
+def _centered_rolling_mean(values: list[float], window: int) -> list[float]:
+    if len(values) <= 0:
+        return []
+    window_use = _normalize_window(window, len(values))
+    if window_use <= 1:
+        return list(values)
+
+    half = window_use // 2
+    prefix = [0.0]
+    for value in values:
+        prefix.append(prefix[-1] + float(value))
+
+    smoothed: list[float] = []
+    for idx in range(len(values)):
+        start = max(0, idx - half)
+        end = min(len(values), idx + half + 1)
+        count = max(1, end - start)
+        smoothed.append((prefix[end] - prefix[start]) / float(count))
+    return smoothed
+
+
+def _adaptive_smoothing_window(
+    series_len: int,
+    *,
+    fraction: float,
+    min_window: int,
+    max_window: int,
+) -> int:
+    if series_len <= 1:
+        return 1
+    estimated = int(round(float(series_len) * float(fraction)))
+    return _normalize_window(max(min_window, min(max_window, estimated)), series_len)
+
+
+def _metric_smoothing_window(csv_path: Path, y_column: str, series_len: int) -> int:
+    name = csv_path.name
+    if name == "train_steps.csv":
+        if y_column == "loss":
+            return _adaptive_smoothing_window(series_len, fraction=0.12, min_window=21, max_window=61)
+        return _adaptive_smoothing_window(series_len, fraction=0.08, min_window=15, max_window=41)
+    if name == "eval_metrics.csv":
+        return _adaptive_smoothing_window(series_len, fraction=0.25, min_window=3, max_window=9)
+    if name == "train_episodes.csv":
+        return _adaptive_smoothing_window(series_len, fraction=0.08, min_window=15, max_window=51)
+    return _adaptive_smoothing_window(series_len, fraction=0.10, min_window=5, max_window=31)
+
+
+def _plot_raw_and_smooth(
+    ax,
+    xs: list[float],
+    ys: list[float],
+    *,
+    smooth_window: int,
+    raw_marker_size: float = 10.0,
+    raw_alpha: float = 0.24,
+    color=None,
+    label: str | None = None,
+) -> None:
+    smooth = _centered_rolling_mean(ys, window=smooth_window)
+    smooth_line = ax.plot(
+        xs,
+        smooth,
+        linewidth=2.3,
+        alpha=0.95,
+        color=color,
+        label=label,
+        zorder=3,
+    )[0]
+    ax.scatter(
+        xs,
+        ys,
+        s=float(raw_marker_size),
+        alpha=float(raw_alpha),
+        color=smooth_line.get_color(),
+        edgecolors="none",
+        zorder=2,
+    )
+
+
+def _raw_marker_style(csv_path: Path) -> tuple[float, float]:
+    name = csv_path.name
+    if name == "eval_metrics.csv":
+        return 24.0, 0.34
+    if name == "train_steps.csv":
+        return 12.0, 0.24
+    if name == "train_episodes.csv":
+        return 10.0, 0.18
+    return 12.0, 0.22
+
+
 def _plot_metric_csv(
     *,
     csv_path: Path,
@@ -182,12 +311,16 @@ def _plot_metric_csv(
         fig = None
         try:
             fig, ax = plt.subplots(figsize=(7.0, 4.0))
-            if y_column == "loss":
-                ax.plot(xs, ys, linewidth=1.2, alpha=0.65, label="loss_raw")
-                ax.plot(xs, _rolling_mean(ys, window=9), linewidth=2.0, label="loss_smooth")
-                ax.legend()
-            else:
-                ax.plot(xs, ys, linewidth=1.8)
+            smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
+            raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
+            _plot_raw_and_smooth(
+                ax,
+                xs,
+                ys,
+                smooth_window=smooth_window,
+                raw_marker_size=raw_marker_size,
+                raw_alpha=raw_alpha,
+            )
             ax.set_xlabel(x_label)
             ax.set_ylabel(y_column)
             ax.set_title(y_column)
@@ -225,37 +358,131 @@ def _plot_multi_series_csv(
     fig = None
     generated: list[Path] = []
     try:
-        fig, ax = plt.subplots(figsize=(8.0, 4.8))
-        plotted = 0
-        x_label = "env_steps"
-
+        valid_series: list[tuple[str, list[float], list[float], str]] = []
         for y_column in columns:
             xy = _extract_xy(rows, y_column)
             if xy is None:
                 if y_column not in rows[0]:
                     _warn(f"missing column '{y_column}' in {csv_path.name}, skip")
                 continue
-
             xs, ys, x_label = xy
-            ax.plot(xs, ys, linewidth=1.8, label=y_column)
-            plotted += 1
+            valid_series.append((y_column, xs, ys, x_label))
 
+        plotted = len(valid_series)
         if plotted <= 0:
             _warn(f"no plottable series in {csv_path.name} for {title}")
             return []
 
-        ax.set_xlabel(x_label)
-        ax.set_ylabel("value")
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        ax.legend()
+        ncols = 2
+        nrows = int(math.ceil(plotted / float(ncols)))
+        fig, axes = plt.subplots(
+            nrows=nrows,
+            ncols=ncols,
+            figsize=(11.0, 3.2 * nrows),
+            squeeze=False,
+            sharex=False,
+        )
+
+        for idx, (y_column, xs, ys, x_label) in enumerate(valid_series):
+            ax = axes[idx // ncols][idx % ncols]
+            smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
+            raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
+            _plot_raw_and_smooth(
+                ax,
+                xs,
+                ys,
+                smooth_window=smooth_window,
+                raw_marker_size=raw_marker_size,
+                raw_alpha=raw_alpha,
+            )
+            ax.set_title(y_column)
+            ax.set_xlabel(x_label)
+            ax.set_ylabel("value")
+            ax.grid(True, alpha=0.3)
+
+        for idx in range(plotted, nrows * ncols):
+            axes[idx // ncols][idx % ncols].axis("off")
+
+        fig.suptitle(title)
         fig.tight_layout()
+        fig.subplots_adjust(top=0.92)
 
         out_path = plots_dir / filename
         fig.savefig(out_path, dpi=150)
         generated.append(out_path)
     except Exception as exc:
         _warn(f"failed to plot multi-series chart from {csv_path.name}: {exc}")
+    finally:
+        if fig is not None:
+            plt.close(fig)
+
+    return generated
+
+
+def _plot_competing_series_csv(
+    *,
+    csv_path: Path,
+    plots_dir: Path,
+    columns: tuple[str, str],
+    labels: tuple[str, str],
+    filename: str,
+    title: str,
+) -> list[Path]:
+    rows = _load_csv_rows(csv_path)
+    if len(rows) <= 0:
+        return []
+
+    plt = _load_matplotlib_pyplot()
+    if plt is None:
+        return []
+
+    valid_series: list[tuple[str, str, list[float], list[float], str]] = []
+    for y_column, label in zip(columns, labels):
+        xy = _extract_xy(rows, y_column)
+        if xy is None:
+            if y_column not in rows[0]:
+                _warn(f"missing column '{y_column}' in {csv_path.name}, skip")
+            continue
+        xs, ys, x_label = xy
+        valid_series.append((y_column, label, xs, ys, x_label))
+
+    if len(valid_series) <= 0:
+        _warn(f"no plottable series in {csv_path.name} for {title}")
+        return []
+
+    fig = None
+    generated: list[Path] = []
+    try:
+        fig, ax = plt.subplots(figsize=(7.4, 4.2))
+        raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
+        palette = ("tab:red", "tab:blue")
+        x_label = valid_series[0][4]
+
+        for idx, (y_column, label, xs, ys, _) in enumerate(valid_series):
+            smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
+            _plot_raw_and_smooth(
+                ax,
+                xs,
+                ys,
+                smooth_window=smooth_window,
+                raw_marker_size=raw_marker_size,
+                raw_alpha=raw_alpha,
+                color=palette[idx % len(palette)],
+                label=label,
+            )
+
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("coverage")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best")
+        fig.tight_layout()
+
+        out_path = plots_dir / filename
+        fig.savefig(out_path, dpi=150)
+        generated.append(out_path)
+    except Exception as exc:
+        _warn(f"failed to plot competing-series chart from {csv_path.name}: {exc}")
     finally:
         if fig is not None:
             plt.close(fig)
@@ -302,7 +529,16 @@ def _plot_xy_csv(
     generated: list[Path] = []
     try:
         fig, ax = plt.subplots(figsize=(7.0, 4.0))
-        ax.plot(xs, ys, linewidth=1.8)
+        smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
+        raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
+        _plot_raw_and_smooth(
+            ax,
+            xs,
+            ys,
+            smooth_window=smooth_window,
+            raw_marker_size=raw_marker_size,
+            raw_alpha=raw_alpha,
+        )
         ax.set_xlabel(x_column)
         ax.set_ylabel(y_column)
         ax.set_title(title)
@@ -367,12 +603,32 @@ def generate_all_plots(run_dir: Path) -> list[Path]:
         )
     )
     generated.extend(
+        _plot_competing_series_csv(
+            csv_path=log_dir / "train_steps.csv",
+            plots_dir=plots_dir,
+            columns=TRAIN_LOCAL_ENTRY_COMPETITION_COLUMNS,
+            labels=("main entry coverage", "nonmain entry coverage"),
+            filename=TRAIN_LOCAL_ENTRY_COMPETITION_FILENAME,
+            title=TRAIN_LOCAL_ENTRY_COMPETITION_TITLE,
+        )
+    )
+    generated.extend(
         _plot_multi_series_csv(
             csv_path=log_dir / "eval_metrics.csv",
             plots_dir=plots_dir,
             columns=EVAL_REWARD_BREAKDOWN_COLUMNS,
             filename=EVAL_REWARD_BREAKDOWN_FILENAME,
             title="eval reward breakdown",
+        )
+    )
+    generated.extend(
+        _plot_competing_series_csv(
+            csv_path=log_dir / "eval_metrics.csv",
+            plots_dir=plots_dir,
+            columns=EVAL_LOCAL_ENTRY_COMPETITION_COLUMNS,
+            labels=("main entry coverage", "nonmain entry coverage"),
+            filename=EVAL_LOCAL_ENTRY_COMPETITION_FILENAME,
+            title=EVAL_LOCAL_ENTRY_COMPETITION_TITLE,
         )
     )
     return generated

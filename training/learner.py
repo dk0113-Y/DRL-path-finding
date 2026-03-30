@@ -112,20 +112,22 @@ class DDQNLearner:
     def _compute_target_q(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         with self._autocast_context():
             q_next_online = self.online_net(
-                batch["next_near_map"],
-                batch["next_mid_map"],
-                batch["next_frontier_tokens"],
-                frontier_token_mask=batch["next_frontier_token_mask"],
+                batch["next_advantage_canvas"],
+                batch["next_value_block_features"],
+                batch["next_value_entry_features"],
+                batch["next_value_block_mask"],
+                batch["next_value_entry_mask"],
                 return_aux=False,
             )
             q_next_online = masked_q_values(q_next_online.float(), batch["next_action_mask"])
             next_action = torch.argmax(q_next_online, dim=1)
 
             q_next_target = self.target_net(
-                batch["next_near_map"],
-                batch["next_mid_map"],
-                batch["next_frontier_tokens"],
-                frontier_token_mask=batch["next_frontier_token_mask"],
+                batch["next_advantage_canvas"],
+                batch["next_value_block_features"],
+                batch["next_value_entry_features"],
+                batch["next_value_block_mask"],
+                batch["next_value_entry_mask"],
                 return_aux=False,
             ).float()
             next_q = q_next_target.gather(1, next_action.unsqueeze(1)).squeeze(1)
@@ -157,10 +159,11 @@ class DDQNLearner:
         t0 = time.perf_counter() if timing_enabled else 0.0
         with self._autocast_context():
             q_all = self.online_net(
-                batch["near_map"],
-                batch["mid_map"],
-                batch["frontier_tokens"],
-                frontier_token_mask=batch["frontier_token_mask"],
+                batch["advantage_canvas"],
+                batch["value_block_features"],
+                batch["value_entry_features"],
+                batch["value_block_mask"],
+                batch["value_entry_mask"],
                 return_aux=False,
             )
             q_sa = q_all.gather(1, batch["action"].long().unsqueeze(1)).squeeze(1)

@@ -16,6 +16,7 @@ from env.block_random_g import RandomMapGenerator
 from env.core_cummap import CumulativeBeliefMap
 from env.core_radar import RadarSensor
 from env.grid_topology import ACTIONS_8, GridTopology
+from env.shared_semantic_layer import build_semantic_visualization_payload
 from training.rewarding import (
     add_reward_breakdown,
     resolve_reward_info_norm,
@@ -28,6 +29,37 @@ from training.replay_buffer import NStepTransitionBuilder, ReplayBuffer
 
 
 ACTION_DIM = len(ACTIONS_8)
+SEMANTIC_EPISODE_FIELDS = (
+    "accessible_block_count",
+    "total_accessible_unknown_area",
+    "top1_block_area_ratio",
+    "scene_orderliness",
+    "main_block_area",
+    "main_block_entry_count",
+    "nearest_main_entry_dist",
+    "local_main_entry_coverage",
+    "local_nonmain_entry_coverage",
+    "local_revisit_pressure",
+)
+
+
+def _nanmean_or_nan(values: list[float]) -> float:
+    if len(values) <= 0:
+        return float("nan")
+    arr = np.asarray(values, dtype=np.float32)
+    if not np.any(np.isfinite(arr)):
+        return float("nan")
+    return float(np.nanmean(arr))
+
+
+def summarize_semantic_records(records: list[dict[str, float]]) -> dict[str, float]:
+    if len(records) <= 0:
+        return {field: float("nan") for field in SEMANTIC_EPISODE_FIELDS}
+
+    return {
+        field: _nanmean_or_nan([float(item.get(field, float("nan"))) for item in records])
+        for field in SEMANTIC_EPISODE_FIELDS
+    }
 
 
 @dataclass(frozen=True)
@@ -59,6 +91,8 @@ class CollectorConfig:
     enable_inference_amp: bool = False
     inference_amp_dtype: str = "fp16"
     prefer_batch_replay_add: bool = True
+    record_episode_artifacts: bool = False
+    debug_check_incremental_frontier: bool = False
 
 
 class TransitionCollector:
@@ -78,6 +112,7 @@ class TransitionCollector:
         self.online_net.eval()
         self._timing_enabled = bool(cfg.enable_timing)
         self._prefer_batch_replay_add = bool(cfg.prefer_batch_replay_add) and hasattr(replay, "add_many")
+        self._record_episode_artifacts = bool(cfg.record_episode_artifacts)
         self._cpu_device = torch.device("cpu")
         self._policy_device = self._resolve_module_device(self.online_net)
         self._pin_cpu_action_mask = bool(torch.cuda.is_available()) and self._policy_device.type == "cuda"
@@ -115,6 +150,7 @@ class TransitionCollector:
         self._current_action_mask_policy: Optional[torch.Tensor] = None
         self.frontier_u8 = None
         self._current_shared_artifacts = None
+        self._current_state_meta = None
 
         self.episode_steps = 0
         self.total_env_steps = 0
@@ -124,6 +160,7 @@ class TransitionCollector:
         self._recent_positions: deque[tuple[int, int]] = deque(maxlen=self._recent_revisit_window)
         self._stall_streak = 0
         self._current_state_tensors = None
+        self._trajectory_positions: list[tuple[int, int]] = []
         self.state_build_time = 0.0
         self.policy_forward_time = 0.0
         self.env_step_time = 0.0
@@ -169,9 +206,11 @@ class TransitionCollector:
             self.local_snap,
             enable_timing=bool(self.cfg.enable_cummap_timing),
         )
-        self.frontier_u8 = self.cum_map.get_frontier_u8(refresh=True)
+        self.frontier_u8 = self.cum_map.get_frontier_u8(refresh=False)
+        self._check_incremental_frontier_consistency(context="collector_reset")
         self._current_shared_artifacts = self.state_adapter.build_shared_step_artifacts(
             self.cum_map,
+            self.agent,
             frontier_u8=self.frontier_u8,
         )
 
@@ -183,8 +222,12 @@ class TransitionCollector:
             maxlen=self._recent_revisit_window,
         )
         self._stall_streak = 0
+        self._trajectory_positions = (
+            [(int(self.agent[0]), int(self.agent[1]))] if self._record_episode_artifacts else []
+        )
+        self._episode_semantic_records: list[dict[str, float]] = []
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        self._current_state_tensors = self._build_state_tensors()
+        self._current_state_tensors, self._current_state_meta = self._build_state_tensors()
         if self._timing_enabled:
             self.state_build_time += time.perf_counter() - t0
         self.total_episodes += 1
@@ -206,15 +249,42 @@ class TransitionCollector:
         if self._current_shared_artifacts is None:
             self._current_shared_artifacts = self.state_adapter.build_shared_step_artifacts(
                 self.cum_map,
+                self.agent,
                 frontier_u8=self.frontier_u8,
             )
         return self.state_adapter.build_single_state_tensors(
             self.cum_map,
             self.agent,
-            frontier_tokens=None,
-            frontier_token_mask=None,
             shared_artifacts=self._current_shared_artifacts,
             target_device=None,
+            return_state_meta=True,
+        )
+
+    def _check_incremental_frontier_consistency(self, *, context: str) -> None:
+        if not bool(self.cfg.debug_check_incremental_frontier):
+            return
+        stats = self.cum_map.debug_frontier_consistency_stats()
+        if stats.consistent:
+            return
+        episode_step = int(self.episode_steps) + (0 if context == "collector_reset" else 1)
+        raise RuntimeError(
+            "Incremental frontier cache mismatch in collector: "
+            f"context={context} "
+            f"episode_idx={int(self.total_episodes)} "
+            f"episode_step={episode_step} "
+            f"total_env_steps={int(self.total_env_steps)} "
+            f"mismatch_count={int(stats.mismatch_count)} "
+            f"frontier_revision={int(stats.frontier_revision)} "
+            f"frontier_source_uid={int(stats.frontier_source_uid)} "
+            f"map_shape={tuple(stats.map_shape)}"
+        )
+
+    def _record_current_state_meta(self) -> None:
+        meta = self._current_state_meta
+        if not isinstance(meta, dict):
+            return
+        self._episode_semantic_records.append(
+            {field: float(meta.get(field, float("nan"))) for field in SEMANTIC_EPISODE_FIELDS}
         )
 
     @staticmethod
@@ -261,7 +331,13 @@ class TransitionCollector:
 
     @staticmethod
     def _assert_cpu_state_batch(state_tensors: Dict[str, torch.Tensor], name: str) -> None:
-        for key in ("near_map", "mid_map", "frontier_tokens", "frontier_token_mask"):
+        for key in (
+            "advantage_canvas",
+            "value_block_features",
+            "value_entry_features",
+            "value_block_mask",
+            "value_entry_mask",
+        ):
             if state_tensors[key].device.type != "cpu":
                 raise RuntimeError(f"{name}.{key} must stay on CPU before replay insertion")
 
@@ -294,10 +370,11 @@ class TransitionCollector:
         with torch.inference_mode():
             with self._inference_autocast_context():
                 q_values = self.online_net(
-                    policy_state["near_map"],
-                    policy_state["mid_map"],
-                    policy_state["frontier_tokens"],
-                    frontier_token_mask=policy_state["frontier_token_mask"],
+                    policy_state["advantage_canvas"],
+                    policy_state["value_block_features"],
+                    policy_state["value_entry_features"],
+                    policy_state["value_block_mask"],
+                    policy_state["value_entry_mask"],
                     return_aux=False,
                 )
             action = select_greedy_action(q_values, action_mask=action_mask)
@@ -327,15 +404,19 @@ class TransitionCollector:
         else:
             dr, dc = ACTIONS_8[int(action_idx)]
             self.agent = (int(self.agent[0] + dr), int(self.agent[1] + dc))
+            if self._record_episode_artifacts:
+                self._trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
 
             self.local_snap = self.obs_model.observe_fast(self.agent)
             self._refresh_valid_action_cache(GridTopology.valid_action_indices_fast(self.free_mask, self.agent))
             updated, delta_empty, delta_obstacle = self.cum_map.update(self.agent, self.local_snap)
             if int(updated) != int(delta_empty + delta_obstacle):
                 raise RuntimeError("belief-map update returned inconsistent information-gain counts")
-            self.frontier_u8 = self.cum_map.get_frontier_u8(refresh=True)
+            self.frontier_u8 = self.cum_map.get_frontier_u8(refresh=False)
+            self._check_incremental_frontier_consistency(context="collector_step_post_update")
             self._current_shared_artifacts = self.state_adapter.build_shared_step_artifacts(
                 self.cum_map,
+                self.agent,
                 frontier_u8=self.frontier_u8,
             )
 
@@ -391,6 +472,22 @@ class TransitionCollector:
         repeat = max(0, total_visits - unique_visited)
         return float(repeat) / float(total_visits)
 
+    def _episode_visual_artifacts(self) -> dict[str, object]:
+        semantic_payload = (
+            build_semantic_visualization_payload(self._current_shared_artifacts.semantic_snapshot)
+            if self._current_shared_artifacts is not None else None
+        )
+        return {
+            "true_grid": np.asarray(self.grid, dtype=np.int8).copy(),
+            "trajectory_positions": list(self._trajectory_positions),
+            "belief_map": np.asarray(self.cum_map.map, dtype=np.int8).copy(),
+            "belief_origin_world_rc": (
+                int(self.cum_map.origin_world_rc[0]),
+                int(self.cum_map.origin_world_rc[1]),
+            ),
+            "semantic_viz": semantic_payload,
+        }
+
     def _push_ready_transitions(self, ready: list[dict]) -> int:
         if len(ready) <= 0:
             return 0
@@ -427,6 +524,7 @@ class TransitionCollector:
             if current_state is None:
                 raise RuntimeError("current state tensors cache is not initialized")
             self._assert_cpu_state_batch(current_state, "current_state")
+            self._record_current_state_meta()
             valid_before = self._valid_action_list
             current_action_mask = self._get_current_action_mask()
 
@@ -439,7 +537,7 @@ class TransitionCollector:
             reward_sum += reward
 
             t0 = time.perf_counter() if timing_enabled else 0.0
-            next_state = self._build_state_tensors()
+            next_state, next_state_meta = self._build_state_tensors()
             if timing_enabled:
                 self.state_build_time += time.perf_counter() - t0
             self._assert_cpu_state_batch(next_state, "next_state")
@@ -454,17 +552,19 @@ class TransitionCollector:
             # The cached action masks are also replaced by re-assignment on each refresh rather than
             # mutated in place, so keeping direct references here is safe for replay storage.
             one_step = {
-                "near_map": current_state["near_map"],
-                "mid_map": current_state["mid_map"],
-                "frontier_tokens": current_state["frontier_tokens"],
-                "frontier_token_mask": current_state["frontier_token_mask"],
+                "advantage_canvas": current_state["advantage_canvas"],
+                "value_block_features": current_state["value_block_features"],
+                "value_entry_features": current_state["value_entry_features"],
+                "value_block_mask": current_state["value_block_mask"],
+                "value_entry_mask": current_state["value_entry_mask"],
                 "action_mask": current_action_mask,
                 "action": int(action),
                 "reward": float(reward),
-                "next_near_map": next_state["near_map"],
-                "next_mid_map": next_state["mid_map"],
-                "next_frontier_tokens": next_state["frontier_tokens"],
-                "next_frontier_token_mask": next_state["frontier_token_mask"],
+                "next_advantage_canvas": next_state["advantage_canvas"],
+                "next_value_block_features": next_state["value_block_features"],
+                "next_value_entry_features": next_state["value_entry_features"],
+                "next_value_block_mask": next_state["value_block_mask"],
+                "next_value_entry_mask": next_state["value_entry_mask"],
                 "next_action_mask": next_action_mask,
                 "done": bool(done),
             }
@@ -488,12 +588,15 @@ class TransitionCollector:
                         "success": int(success),
                         "repeat_visit_ratio": float(self._repeat_visit_ratio(self.cum_map)),
                         "done_reason": str(done_reason),
+                        **summarize_semantic_records(self._episode_semantic_records),
                         **{k: float(self._episode_reward_breakdown[k]) for k in self._episode_reward_breakdown},
+                        **(self._episode_visual_artifacts() if self._record_episode_artifacts else {}),
                     }
                 )
                 self.reset_episode()
             else:
                 self._current_state_tensors = next_state
+                self._current_state_meta = next_state_meta
 
         out = {
             "env_steps": float(num_steps),
@@ -509,4 +612,3 @@ class TransitionCollector:
             out["policy_forward_time"] = float(self.policy_forward_time)
             out["env_step_time"] = float(self.env_step_time)
         return out
-

@@ -26,9 +26,11 @@ class NStepTransitionBuilder:
     Build n-step transitions from 1-step transitions.
 
     Required step-transition keys:
-      near_map, mid_map, frontier_tokens, frontier_token_mask, action_mask
+      advantage_canvas, value_block_features, value_entry_features,
+      value_block_mask, value_entry_mask, action_mask
       action, reward
-      next_near_map, next_mid_map, next_frontier_tokens, next_frontier_token_mask, next_action_mask
+      next_advantage_canvas, next_value_block_features, next_value_entry_features,
+      next_value_block_mask, next_value_entry_mask, next_action_mask
       done
 
     Produced transition adds:
@@ -65,17 +67,19 @@ class NStepTransitionBuilder:
         bootstrap_discount = 0.0 if terminal else float(self.gamma ** steps_used)
 
         out: TransitionDict = {
-            "near_map": first["near_map"],
-            "mid_map": first["mid_map"],
-            "frontier_tokens": first["frontier_tokens"],
-            "frontier_token_mask": first["frontier_token_mask"],
+            "advantage_canvas": first["advantage_canvas"],
+            "value_block_features": first["value_block_features"],
+            "value_entry_features": first["value_entry_features"],
+            "value_block_mask": first["value_block_mask"],
+            "value_entry_mask": first["value_entry_mask"],
             "action_mask": first["action_mask"],
             "action": int(first["action"]),
             "reward": float(reward_sum),
-            "next_near_map": last["next_near_map"],
-            "next_mid_map": last["next_mid_map"],
-            "next_frontier_tokens": last["next_frontier_tokens"],
-            "next_frontier_token_mask": last["next_frontier_token_mask"],
+            "next_advantage_canvas": last["next_advantage_canvas"],
+            "next_value_block_features": last["next_value_block_features"],
+            "next_value_entry_features": last["next_value_entry_features"],
+            "next_value_block_mask": last["next_value_block_mask"],
+            "next_value_entry_mask": last["next_value_entry_mask"],
             "next_action_mask": last["next_action_mask"],
             "done": bool(terminal),
             "bootstrap_discount": float(bootstrap_discount),
@@ -111,22 +115,26 @@ class ReplayBuffer:
     Uniform replay buffer for current tensor state structure.
 
     Stored keys:
-      near_map, mid_map, frontier_tokens, frontier_token_mask, action_mask
+      advantage_canvas, value_block_features, value_entry_features,
+      value_block_mask, value_entry_mask, action_mask
       action, reward
-      next_near_map, next_mid_map, next_frontier_tokens, next_frontier_token_mask, next_action_mask
+      next_advantage_canvas, next_value_block_features, next_value_entry_features,
+      next_value_block_mask, next_value_entry_mask, next_action_mask
       done, bootstrap_discount
     """
 
     _TENSOR_FIELDS = (
-        ("near_map", torch.float32, 3),
-        ("mid_map", torch.float32, 3),
-        ("frontier_tokens", torch.float32, 2),
-        ("frontier_token_mask", torch.bool, 1),
+        ("advantage_canvas", torch.float32, 3),
+        ("value_block_features", torch.float32, 2),
+        ("value_entry_features", torch.float32, 3),
+        ("value_block_mask", torch.bool, 1),
+        ("value_entry_mask", torch.bool, 2),
         ("action_mask", torch.bool, 1),
-        ("next_near_map", torch.float32, 3),
-        ("next_mid_map", torch.float32, 3),
-        ("next_frontier_tokens", torch.float32, 2),
-        ("next_frontier_token_mask", torch.bool, 1),
+        ("next_advantage_canvas", torch.float32, 3),
+        ("next_value_block_features", torch.float32, 2),
+        ("next_value_entry_features", torch.float32, 3),
+        ("next_value_block_mask", torch.bool, 1),
+        ("next_value_entry_mask", torch.bool, 2),
         ("next_action_mask", torch.bool, 1),
     )
     _SCALAR_FIELDS = (
@@ -140,10 +148,8 @@ class ReplayBuffer:
     )
     _STORAGE_ORDER = _REQUIRED_KEYS
     _CHANNELS_LAST_FIELDS = (
-        "near_map",
-        "mid_map",
-        "next_near_map",
-        "next_mid_map",
+        "advantage_canvas",
+        "next_advantage_canvas",
     )
 
     def __init__(self, config: Optional[ReplayBufferConfig] = None):
@@ -225,28 +231,38 @@ class ReplayBuffer:
 
     def _init_storage(self, sample: Dict[str, torch.Tensor]) -> None:
         self._storage = {
-            "near_map": self._alloc_storage_tensor((self.capacity, *sample["near_map"].shape), torch.float32),
-            "mid_map": self._alloc_storage_tensor((self.capacity, *sample["mid_map"].shape), torch.float32),
-            "frontier_tokens": self._alloc_storage_tensor(
-                (self.capacity, *sample["frontier_tokens"].shape), torch.float32
+            "advantage_canvas": self._alloc_storage_tensor(
+                (self.capacity, *sample["advantage_canvas"].shape), torch.float32
             ),
-            "frontier_token_mask": self._alloc_storage_tensor(
-                (self.capacity, *sample["frontier_token_mask"].shape), torch.bool
+            "value_block_features": self._alloc_storage_tensor(
+                (self.capacity, *sample["value_block_features"].shape), torch.float32
+            ),
+            "value_entry_features": self._alloc_storage_tensor(
+                (self.capacity, *sample["value_entry_features"].shape), torch.float32
+            ),
+            "value_block_mask": self._alloc_storage_tensor(
+                (self.capacity, *sample["value_block_mask"].shape), torch.bool
+            ),
+            "value_entry_mask": self._alloc_storage_tensor(
+                (self.capacity, *sample["value_entry_mask"].shape), torch.bool
             ),
             "action_mask": self._alloc_storage_tensor((self.capacity, *sample["action_mask"].shape), torch.bool),
             "action": self._alloc_storage_tensor((self.capacity,), torch.long),
             "reward": self._alloc_storage_tensor((self.capacity,), torch.float32),
-            "next_near_map": self._alloc_storage_tensor(
-                (self.capacity, *sample["next_near_map"].shape), torch.float32
+            "next_advantage_canvas": self._alloc_storage_tensor(
+                (self.capacity, *sample["next_advantage_canvas"].shape), torch.float32
             ),
-            "next_mid_map": self._alloc_storage_tensor(
-                (self.capacity, *sample["next_mid_map"].shape), torch.float32
+            "next_value_block_features": self._alloc_storage_tensor(
+                (self.capacity, *sample["next_value_block_features"].shape), torch.float32
             ),
-            "next_frontier_tokens": self._alloc_storage_tensor(
-                (self.capacity, *sample["next_frontier_tokens"].shape), torch.float32
+            "next_value_entry_features": self._alloc_storage_tensor(
+                (self.capacity, *sample["next_value_entry_features"].shape), torch.float32
             ),
-            "next_frontier_token_mask": self._alloc_storage_tensor(
-                (self.capacity, *sample["next_frontier_token_mask"].shape), torch.bool
+            "next_value_block_mask": self._alloc_storage_tensor(
+                (self.capacity, *sample["next_value_block_mask"].shape), torch.bool
+            ),
+            "next_value_entry_mask": self._alloc_storage_tensor(
+                (self.capacity, *sample["next_value_entry_mask"].shape), torch.bool
             ),
             "next_action_mask": self._alloc_storage_tensor(
                 (self.capacity, *sample["next_action_mask"].shape), torch.bool

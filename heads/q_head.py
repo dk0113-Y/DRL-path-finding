@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Legacy split-input dueling head kept only as historical reference."""
+
 from dataclasses import dataclass
 
 import torch
@@ -23,31 +25,33 @@ class SplitDuelingDecisionHead(nn.Module):
 
     Inputs:
       raw_near_summary [B, D_near]
-      global_context   [B, D_global]
+      mid_context      [B, D_context]
+      token_context    [B, D_context]
 
     Output:
       q_values         [B, A]
+
+    Semantics:
+      - value stream estimates a joint-state value from the explicit
+        concatenation of local execution summary, regional dense context,
+        and sparse candidate-region context.
+      - advantage stream remains local-dominant, and only the regional dense
+        context is allowed to condition the raw local summary.
     """
 
     def __init__(self, cfg: DecisionHeadConfig | None = None):
         super().__init__()
         self.cfg = cfg if cfg is not None else DecisionHeadConfig()
         hidden_dim = self.cfg.hidden_dim
-        value_near_dim = max(32, hidden_dim // 4)
-        advantage_global_dim = max(32, hidden_dim // 4)
+        joint_value_dim = self.cfg.raw_near_summary_dim + (2 * self.cfg.global_context_dim)
 
-        self.global_value_trunk = nn.Sequential(
-            nn.LayerNorm(self.cfg.global_context_dim),
-            nn.Linear(self.cfg.global_context_dim, hidden_dim),
-            nn.GELU(),
-        )
-        self.value_near_aux = nn.Sequential(
-            nn.LayerNorm(self.cfg.raw_near_summary_dim),
-            nn.Linear(self.cfg.raw_near_summary_dim, value_near_dim),
+        self.value_joint_trunk = nn.Sequential(
+            nn.LayerNorm(joint_value_dim),
+            nn.Linear(joint_value_dim, hidden_dim),
             nn.GELU(),
         )
         self.value_head = nn.Sequential(
-            nn.Linear(hidden_dim + value_near_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(self.cfg.dropout),
             nn.Linear(hidden_dim, 1),
@@ -63,13 +67,8 @@ class SplitDuelingDecisionHead(nn.Module):
             nn.Linear(self.cfg.raw_near_summary_dim, hidden_dim),
             nn.GELU(),
         )
-        self.advantage_global_aux = nn.Sequential(
-            nn.LayerNorm(self.cfg.global_context_dim),
-            nn.Linear(self.cfg.global_context_dim, advantage_global_dim),
-            nn.GELU(),
-        )
         self.advantage_head = nn.Sequential(
-            nn.Linear(hidden_dim + advantage_global_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(self.cfg.dropout),
             nn.Linear(hidden_dim, self.cfg.action_dim),
@@ -78,40 +77,55 @@ class SplitDuelingDecisionHead(nn.Module):
     def forward(
         self,
         raw_near_summary: torch.Tensor,
-        global_context: torch.Tensor,
+        mid_context: torch.Tensor,
+        token_context: torch.Tensor,
     ) -> torch.Tensor:
         if raw_near_summary.dim() != 2:
             raise ValueError(
                 f"raw_near_summary must be 2D [B,D], got shape={tuple(raw_near_summary.shape)}"
             )
-        if global_context.dim() != 2:
+        if mid_context.dim() != 2:
             raise ValueError(
-                f"global_context must be 2D [B,D], got shape={tuple(global_context.shape)}"
+                f"mid_context must be 2D [B,D], got shape={tuple(mid_context.shape)}"
             )
-        if raw_near_summary.shape[0] != global_context.shape[0]:
+        if token_context.dim() != 2:
             raise ValueError(
-                "batch mismatch between raw_near_summary and global_context: "
-                f"{raw_near_summary.shape[0]} vs {global_context.shape[0]}"
+                f"token_context must be 2D [B,D], got shape={tuple(token_context.shape)}"
+            )
+        if raw_near_summary.shape[0] != mid_context.shape[0]:
+            raise ValueError(
+                "batch mismatch between raw_near_summary and mid_context: "
+                f"{raw_near_summary.shape[0]} vs {mid_context.shape[0]}"
+            )
+        if raw_near_summary.shape[0] != token_context.shape[0]:
+            raise ValueError(
+                "batch mismatch between raw_near_summary and token_context: "
+                f"{raw_near_summary.shape[0]} vs {token_context.shape[0]}"
             )
         if raw_near_summary.shape[1] != self.cfg.raw_near_summary_dim:
             raise ValueError(
                 "raw_near_summary dim mismatch: "
                 f"expected {self.cfg.raw_near_summary_dim}, got {raw_near_summary.shape[1]}"
             )
-        if global_context.shape[1] != self.cfg.global_context_dim:
+        if mid_context.shape[1] != self.cfg.global_context_dim:
             raise ValueError(
-                f"global_context dim mismatch: expected {self.cfg.global_context_dim}, got {global_context.shape[1]}"
+                "mid_context dim mismatch: "
+                f"expected {self.cfg.global_context_dim}, got {mid_context.shape[1]}"
+            )
+        if token_context.shape[1] != self.cfg.global_context_dim:
+            raise ValueError(
+                "token_context dim mismatch: "
+                f"expected {self.cfg.global_context_dim}, got {token_context.shape[1]}"
             )
 
-        value_global = self.global_value_trunk(global_context)
-        value_near = self.value_near_aux(raw_near_summary)
-        value = self.value_head(torch.cat([value_global, value_near], dim=-1))
+        joint_value_input = torch.cat([raw_near_summary, mid_context, token_context], dim=-1)
+        value_joint = self.value_joint_trunk(joint_value_input)
+        value = self.value_head(value_joint)
 
-        near_gate = self.advantage_gate(global_context)
+        near_gate = self.advantage_gate(mid_context)
         conditioned_near = raw_near_summary * (1.0 + near_gate)
         advantage_near = self.advantage_near_trunk(conditioned_near)
-        advantage_global = self.advantage_global_aux(global_context)
-        advantage = self.advantage_head(torch.cat([advantage_near, advantage_global], dim=-1))
+        advantage = self.advantage_head(advantage_near)
 
         q_values = value + advantage - advantage.mean(dim=1, keepdim=True)
         return q_values
@@ -127,8 +141,9 @@ def _smoke_test() -> None:
     head = SplitDuelingDecisionHead(cfg)
 
     raw_near_summary = torch.rand(4, cfg.raw_near_summary_dim)
-    global_context = torch.rand(4, cfg.global_context_dim)
-    q_values = head(raw_near_summary, global_context)
+    mid_context = torch.rand(4, cfg.global_context_dim)
+    token_context = torch.rand(4, cfg.global_context_dim)
+    q_values = head(raw_near_summary, mid_context, token_context)
 
     assert q_values.shape == (4, 8)
     assert torch.isfinite(q_values).all()

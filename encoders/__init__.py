@@ -1,10 +1,9 @@
-from encoders.global_encoder import GlobalSideEncoder, GlobalSideEncoderConfig
-from encoders.local_encoder import NearMapEncoder, NearMapEncoderConfig, RawNearSummaryEncoder
+from encoders.advantage_encoder import AdvantageCanvasEncoder, AdvantageEncoderConfig
+from encoders.value_encoder import ValueEncoderConfig, ValueTreeEncoder
 
 __all__ = [
-    "GlobalSideEncoder",
-    "GlobalSideEncoderConfig",
-    "NearMapEncoder",
-    "NearMapEncoderConfig",
-    "RawNearSummaryEncoder",
+    "AdvantageCanvasEncoder",
+    "AdvantageEncoderConfig",
+    "ValueTreeEncoder",
+    "ValueEncoderConfig",
 ]
