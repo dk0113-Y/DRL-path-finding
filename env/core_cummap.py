@@ -130,15 +130,15 @@ class CumulativeBeliefMap:
         self.local_center = (self.local_shape[0] // 2, self.local_shape[1] // 2)
         # Bind semantic analysis extent to the radar-driven local decision
         # canvas scale; this avoids introducing a separate hand-tuned margin.
-        self.analysis_margin = int(max(self.local_center))
-        self.revisit_recency_decay_steps = float(max(1, max(self.local_shape)))
+        self.analysis_margin = int(max(1, max(self.local_center) // 2))
 
         # Light-weight growth buffer to avoid frequent near-edge reallocations.
         self._growth_margin = int(max(4, max(self.local_shape) // 2))
 
-        # Effective coverage denominator from simulator-known truth map.
-        self._reachable_free_mask = self._compute_effective_reachable_free_mask(start_state)
-        self.tpm_count = int(self._reachable_free_mask.sum())
+        # Effective coverage denominator from simulator-known truth map:
+        # 4-neighborhood reachable free cells plus their orthogonally adjacent obstacle boundary.
+        self._coverage_domain_mask = self._compute_coverage_domain_mask(start_state)
+        self.tpm_count = int(self._coverage_domain_mask.sum())
 
         self.kpm_count = 0
         self.coverage_rate = 0.0
@@ -146,7 +146,6 @@ class CumulativeBeliefMap:
         # Dynamic belief map storage and world origin mapping.
         self.map = np.full((1, 1), INVISIBLE, dtype=np.int8)
         self.visit_count = np.zeros((1, 1), dtype=np.int32)
-        self.last_visit_step = np.full((1, 1), -1, dtype=np.int32)
         self.step_count = 0
         self.origin_world_rc = (int(start_state[0]), int(start_state[1]))
 
@@ -157,7 +156,6 @@ class CumulativeBeliefMap:
         self._cached_visit_log_map: Optional[np.ndarray] = None
         self._cached_visit_log_max: float = 0.0
         self._cached_obstacle_integral: Optional[np.ndarray] = None
-        self._cached_revisit_recency_map: Optional[np.ndarray] = None
         self._visit_cache_step: int = -1
         self._domain_buffer_cache: dict[tuple[int, int, bool, str], tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]] = {}
         self._mid_input_channels_cache: dict[tuple[int, int], np.ndarray] = {}
@@ -184,16 +182,35 @@ class CumulativeBeliefMap:
 
         self._init_from_first_snap(start_state, first_local_snap)
 
-    def _compute_effective_reachable_free_mask(self, start_state: Tuple[int, int]) -> np.ndarray:
-        """
-        Simulator-side effective coverage domain.
-
-        Denominator semantics:
-        reachable free cells from episode start under current movement kinematics.
-        """
+    def _compute_coverage_domain_mask(self, start_state: Tuple[int, int]) -> np.ndarray:
+        """Truth-side coverage domain used by episode completion statistics."""
         free = GridTopology.free_mask(self.true_grid)
-        reachable = GridTopology.bfs_reachable(free, start_state)
-        return reachable & free
+        reachable_free = GridTopology.bfs_reachable_4(free, start_state) & free
+        if not np.any(reachable_free):
+            return reachable_free
+
+        padded = np.pad(reachable_free.astype(np.uint8), 1, mode="constant", constant_values=0)
+        adjacent_reachable = (
+            (padded[:-2, 1:-1] > 0)
+            | (padded[2:, 1:-1] > 0)
+            | (padded[1:-1, :-2] > 0)
+            | (padded[1:-1, 2:] > 0)
+        )
+        obstacle_boundary = (self.true_grid == OBSTACLE) & adjacent_reachable
+        return reachable_free | obstacle_boundary
+
+    def _count_coverage_hits(self, world_rows: np.ndarray, world_cols: np.ndarray) -> int:
+        if world_rows.size <= 0 or world_cols.size <= 0:
+            return 0
+        inside = (
+            (world_rows >= 0)
+            & (world_rows < int(self.true_grid.shape[0]))
+            & (world_cols >= 0)
+            & (world_cols < int(self.true_grid.shape[1]))
+        )
+        if not np.any(inside):
+            return 0
+        return int(self._coverage_domain_mask[world_rows[inside], world_cols[inside]].sum())
 
     def _project_local_world(self, agent_state: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
         return GridTopology.local_to_global_grid(agent_state, self.local_shape, self.local_center)
@@ -210,7 +227,6 @@ class CumulativeBeliefMap:
             ar, ac = int(agent_state[0]), int(agent_state[1])
             self.map = np.full((1, 1), INVISIBLE, dtype=np.int8)
             self.visit_count = np.zeros((1, 1), dtype=np.int32)
-            self.last_visit_step = np.full((1, 1), -1, dtype=np.int32)
             self.origin_world_rc = (ar, ac)
             self.frontier_bool = np.zeros_like(self.map, dtype=bool)
             self.frontier_u8 = np.zeros_like(self.map, dtype=np.uint8)
@@ -228,7 +244,6 @@ class CumulativeBeliefMap:
         w = max_c - min_c + 1
         self.map = np.full((h, w), INVISIBLE, dtype=np.int8)
         self.visit_count = np.zeros((h, w), dtype=np.int32)
-        self.last_visit_step = np.full((h, w), -1, dtype=np.int32)
         self.origin_world_rc = (min_r, min_c)
         self.frontier_bool = np.zeros_like(self.map, dtype=bool)
         self.frontier_u8 = np.zeros_like(self.map, dtype=np.uint8)
@@ -271,7 +286,6 @@ class CumulativeBeliefMap:
     def _invalidate_visit_cache(self) -> None:
         self._cached_visit_log_map = None
         self._cached_visit_log_max = 0.0
-        self._cached_revisit_recency_map = None
         self._visit_cache_step = -1
         self._invalidate_map_build_caches()
 
@@ -609,7 +623,6 @@ class CumulativeBeliefMap:
 
         old_map = self.map
         old_visit = self.visit_count
-        old_last_step = self.last_visit_step
         old_frontier_bool = self.frontier_bool
         old_frontier_u8 = self.frontier_u8
         old_h = int(old_map.shape[0])
@@ -620,20 +633,17 @@ class CumulativeBeliefMap:
 
         new_map = np.full((new_h, new_w), INVISIBLE, dtype=np.int8)
         new_visit = np.zeros((new_h, new_w), dtype=np.int32)
-        new_last_step = np.full((new_h, new_w), -1, dtype=np.int32)
         new_frontier_bool = np.zeros((new_h, new_w), dtype=bool)
         new_frontier_u8 = np.zeros((new_h, new_w), dtype=np.uint8)
 
         r0, c0 = pad_top, pad_left
         new_map[r0:r0 + old_map.shape[0], c0:c0 + old_map.shape[1]] = old_map
         new_visit[r0:r0 + old_visit.shape[0], c0:c0 + old_visit.shape[1]] = old_visit
-        new_last_step[r0:r0 + old_last_step.shape[0], c0:c0 + old_last_step.shape[1]] = old_last_step
         new_frontier_bool[r0:r0 + old_frontier_bool.shape[0], c0:c0 + old_frontier_bool.shape[1]] = old_frontier_bool
         new_frontier_u8[r0:r0 + old_frontier_u8.shape[0], c0:c0 + old_frontier_u8.shape[1]] = old_frontier_u8
 
         self.map = new_map
         self.visit_count = new_visit
-        self.last_visit_step = new_last_step
         self.frontier_bool = new_frontier_bool
         self.frontier_u8 = new_frontier_u8
         self.origin_world_rc = (cur_min_r - pad_top, cur_min_c - pad_left)
@@ -659,30 +669,9 @@ class CumulativeBeliefMap:
         ar, ac = int(agent_state[0]), int(agent_state[1])
         ir, ic = self.world_to_array((ar, ac))
         self.visit_count[ir, ic] += 1
-        self.last_visit_step[ir, ic] = int(self.step_count)
         self._invalidate_visit_cache()
 
-    def _count_reachable_known_free(self) -> int:
-        free_known = (self.map == EMPTY)
-        if not np.any(free_known):
-            return 0
-
-        rr, cc = np.where(free_known)
-        wr = rr + int(self.origin_world_rc[0])
-        wc = cc + int(self.origin_world_rc[1])
-
-        inside = (
-            (wr >= 0) & (wr < self.true_grid.shape[0]) &
-            (wc >= 0) & (wc < self.true_grid.shape[1])
-        )
-        if not np.any(inside):
-            return 0
-
-        return int(self._reachable_free_mask[wr[inside], wc[inside]].sum())
-
     def _refresh_coverage(self) -> None:
-        # Effective coverage numerator is reachable-known-free count in current belief.
-        self.kpm_count = self._count_reachable_known_free()
         if self.tpm_count <= 0:
             self.coverage_rate = 0.0
         else:
@@ -743,6 +732,7 @@ class CumulativeBeliefMap:
         wic = ic[unseen]
         wvv = vv[unseen]
         self.map[wir, wic] = wvv
+        self.kpm_count += self._count_coverage_hits(wr[unseen], wc[unseen])
         self._invalidate_map_state_caches()
         reveal_dirty = self._expand_dirty_rect(self._dirty_rect_from_points(wir, wic), radius=1)
         if reveal_dirty is not None:
@@ -837,39 +827,6 @@ class CumulativeBeliefMap:
         self._cached_visit_log_max = visit_log_max
         self._visit_cache_step = int(self.step_count)
         return visit_log, visit_log_max
-
-    def get_revisit_recency_map(self, refresh: bool = False) -> np.ndarray:
-        """
-        Canonical revisit/recency map reused by semantic parsing and local state.
-
-        The map is derived from the existing visit counters and last-visit step,
-        so the project keeps one coherent notion of revisit pressure instead of
-        maintaining multiple overlapping tracker grids.
-        """
-        if (
-            (not refresh)
-            and (self._cached_revisit_recency_map is not None)
-            and (self._visit_cache_step == int(self.step_count))
-        ):
-            return self._cached_revisit_recency_map
-
-        visit_over = np.maximum(self.visit_count.astype(np.float32) - 1.0, 0.0)
-        visit_over_max = float(np.max(visit_over)) if visit_over.size > 0 else 0.0
-        if visit_over_max > 0.0:
-            revisit = np.log1p(visit_over) / np.log1p(visit_over_max + 1.0)
-        else:
-            revisit = np.zeros_like(visit_over, dtype=np.float32)
-
-        recency = np.zeros_like(revisit, dtype=np.float32)
-        visited = (self.last_visit_step >= 0)
-        if np.any(visited):
-            delta = np.maximum(0, int(self.step_count) - self.last_visit_step[visited]).astype(np.float32)
-            recency[visited] = np.exp(-delta / float(self.revisit_recency_decay_steps))
-
-        revisit_recency = np.clip((0.6 * recency) + (0.4 * revisit), 0.0, 1.0).astype(np.float32, copy=False)
-        self._cached_revisit_recency_map = revisit_recency
-        self._visit_cache_step = int(self.step_count)
-        return revisit_recency
 
     def get_obstacle_integral(self, refresh: bool = False) -> np.ndarray:
         """Cached obstacle integral image used by frontier-region obstacle-density queries."""

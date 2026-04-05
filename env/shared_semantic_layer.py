@@ -129,7 +129,6 @@ class FrontierEntryCluster:
     entry_dist: float
     entry_width: float
     entry_clearance: float
-    entry_local_revisit_pressure: float
     support_area: int
 
     @property
@@ -455,14 +454,12 @@ class SharedSemanticLayer:
         self.analysis_time = 0.0
 
     @staticmethod
-    def _analysis_arrays(cum_map) -> tuple[AnalysisBox, np.ndarray, np.ndarray, np.ndarray]:
+    def _analysis_arrays(cum_map) -> tuple[AnalysisBox, np.ndarray, np.ndarray]:
         box = cum_map.analysis_box
         map_view = np.asarray(cum_map.map, dtype=np.int8)
-        revisit_map = np.asarray(cum_map.get_revisit_recency_map(refresh=False), dtype=np.float32)
         box_map = map_view[box.r0:box.r1, box.c0:box.c1]
-        revisit_box = revisit_map[box.r0:box.r1, box.c0:box.c1]
         free_box = (box_map == EMPTY)
-        return box, box_map, revisit_box, free_box
+        return box, box_map, free_box
 
     @staticmethod
     def _neighbor_label_stack(unknown_labels: np.ndarray) -> np.ndarray:
@@ -547,14 +544,12 @@ class SharedSemanticLayer:
         block_area: int,
         nearest_entry_dist: float,
         best_entry_clearance: float,
-        lowest_entry_revisit_pressure: float,
         analysis_diagonal: float,
     ) -> float:
         dist_norm = float(np.clip(nearest_entry_dist / max(1.0, analysis_diagonal), 0.0, 1.0))
         return float(
             math.log1p(float(block_area))
             + (0.25 * float(best_entry_clearance))
-            - (0.20 * float(lowest_entry_revisit_pressure))
             - (0.35 * dist_norm)
         )
 
@@ -607,7 +602,7 @@ class SharedSemanticLayer:
         agent_state: tuple[int, int],
     ) -> SharedSemanticSnapshot:
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        analysis_box, box_map, revisit_box, free_box = self._analysis_arrays(cum_map)
+        analysis_box, box_map, free_box = self._analysis_arrays(cum_map)
         unknown_labels, block_count = _label_components_2d(box_map == INVISIBLE)
         if block_count <= 0:
             snapshot = self._empty_snapshot(analysis_box)
@@ -687,17 +682,6 @@ class SharedSemanticLayer:
                 entry_labels[local_seed_mask],
                 minlength=int(entry_count) + 1,
             )[1:].astype(np.int32, copy=False)
-            if _scipy_ndimage is not None:
-                revisit_means = np.asarray(
-                    _scipy_ndimage.mean(
-                        revisit_box[local_r0:local_r1, local_c0:local_c1],
-                        labels=entry_labels,
-                        index=np.arange(1, int(entry_count) + 1, dtype=np.int32),
-                    ),
-                    dtype=np.float32,
-                )
-            else:
-                revisit_means = np.zeros((int(entry_count),), dtype=np.float32)
             entries: list[FrontierEntryCluster] = []
             for entry_label in range(1, int(entry_count) + 1):
                 entry_obj = entry_objects[entry_label - 1]
@@ -759,7 +743,6 @@ class SharedSemanticLayer:
                             pad_row0=support_r0,
                             pad_col0=support_c0,
                         ),
-                        entry_local_revisit_pressure=float(revisit_means[entry_label - 1]),
                         support_area=int(entry_areas[entry_label - 1]),
                     )
                 )
@@ -780,7 +763,6 @@ class SharedSemanticLayer:
             )
             nearest_entry_dist = min(float(entry.entry_dist) for entry in entries)
             best_entry_clearance = max(float(entry.entry_clearance) for entry in entries)
-            lowest_entry_revisit_pressure = min(float(entry.entry_local_revisit_pressure) for entry in entries)
             accessible_blocks.append(
                 AccessibleUnknownBlock(
                     block_index=int(block_id),
@@ -794,7 +776,6 @@ class SharedSemanticLayer:
                             key=lambda entry: (
                                 float(entry.entry_dist),
                                 -float(entry.entry_clearance),
-                                float(entry.entry_local_revisit_pressure),
                                 int(entry.entry_index),
                             ),
                         )
@@ -804,7 +785,6 @@ class SharedSemanticLayer:
                         block_area=int(block_areas[int(block_id)]),
                         nearest_entry_dist=float(nearest_entry_dist),
                         best_entry_clearance=float(best_entry_clearance),
-                        lowest_entry_revisit_pressure=float(lowest_entry_revisit_pressure),
                         analysis_diagonal=float(analysis_diagonal),
                     ),
                 )
@@ -888,7 +868,6 @@ def build_semantic_visualization_payload(snapshot: SharedSemanticSnapshot) -> di
                         "entry_dist": float(entry.entry_dist),
                         "entry_width": float(entry.entry_width),
                         "entry_clearance": float(entry.entry_clearance),
-                        "entry_local_revisit_pressure": float(entry.entry_local_revisit_pressure),
                     }
                     for entry in block.entries
                 ],

@@ -39,7 +39,6 @@ SEMANTIC_EPISODE_FIELDS = (
     "nearest_main_entry_dist",
     "local_main_entry_coverage",
     "local_nonmain_entry_coverage",
-    "local_revisit_pressure",
 )
 
 

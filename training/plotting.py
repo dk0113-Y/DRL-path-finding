@@ -33,7 +33,6 @@ TRAIN_PLOT_COLUMNS: dict[str, str] = {
     "recent_scene_orderliness": "train_recent_scene_orderliness.png",
     "recent_main_block_entry_count": "train_recent_main_block_entry_count.png",
     "recent_nearest_main_entry_dist": "train_recent_nearest_main_entry_dist.png",
-    "recent_local_revisit_pressure": "train_recent_local_revisit_pressure.png",
 }
 
 TRAIN_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
@@ -65,7 +64,6 @@ EVAL_PLOT_COLUMNS: dict[str, str] = {
     "eval_mean_scene_orderliness": "eval_mean_scene_orderliness.png",
     "eval_mean_main_block_entry_count": "eval_mean_main_block_entry_count.png",
     "eval_mean_nearest_main_entry_dist": "eval_mean_nearest_main_entry_dist.png",
-    "eval_mean_local_revisit_pressure": "eval_mean_local_revisit_pressure.png",
 }
 
 EVAL_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (

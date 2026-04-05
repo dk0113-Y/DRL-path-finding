@@ -14,7 +14,6 @@ ADVANTAGE_CANVAS_CHANNELS = (
     "unknown",
     "free",
     "obstacle",
-    "revisit_recency",
     "main_entry_mask",
     "nonmain_entry_mask",
     "main_block_fragment_mask",
@@ -83,29 +82,24 @@ class AdvantageStateBuilder:
         if np.any(inside):
             sampled_map = np.full(local_shape, INVISIBLE, dtype=np.int8)
             sampled_map[inside] = cum_map.map[arr_rows[inside], arr_cols[inside]]
-            revisit_map = np.zeros(local_shape, dtype=np.float32)
-            full_revisit = cum_map.get_revisit_recency_map(refresh=False)
-            revisit_map[inside] = full_revisit[arr_rows[inside], arr_cols[inside]]
         else:
             sampled_map = np.full(local_shape, INVISIBLE, dtype=np.int8)
-            revisit_map = np.zeros(local_shape, dtype=np.float32)
 
         canvas[0] = (sampled_map == INVISIBLE)
         canvas[1] = (sampled_map == EMPTY)
         canvas[2] = (sampled_map == OBSTACLE)
-        canvas[3] = revisit_map
 
         main_block = semantic_snapshot.main_block()
         agent_arr = cum_map.world_to_array(agent_state)
         if main_block is not None:
             main_block.paint_to_local_canvas(
-                canvas[6],
+                canvas[5],
                 agent_arr=agent_arr,
                 local_shape=local_shape,
             )
 
         for block in semantic_snapshot.accessible_blocks:
-            target_channel = 4 if (main_block is not None and block.block_index == main_block.block_index) else 5
+            target_channel = 3 if (main_block is not None and block.block_index == main_block.block_index) else 4
             for entry in block.entries:
                 entry.paint_to_local_canvas(
                     canvas[target_channel],
@@ -115,9 +109,8 @@ class AdvantageStateBuilder:
 
         window_area = float(max(1, local_shape[0] * local_shape[1]))
         meta = {
-            "local_main_entry_coverage": float(np.count_nonzero(canvas[4])) / window_area,
-            "local_nonmain_entry_coverage": float(np.count_nonzero(canvas[5])) / window_area,
-            "local_revisit_pressure": float(np.mean(canvas[3])),
+            "local_main_entry_coverage": float(np.count_nonzero(canvas[3])) / window_area,
+            "local_nonmain_entry_coverage": float(np.count_nonzero(canvas[4])) / window_area,
         }
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0

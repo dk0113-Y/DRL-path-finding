@@ -146,6 +146,39 @@ class GridTopology:
         return vis
 
     @staticmethod
+    def bfs_reachable_4(
+        free: np.ndarray,
+        start: Tuple[int, int],
+        allowed: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Orthogonal 4-neighborhood reachability on a free grid."""
+        H, W = free.shape
+        vis = np.zeros((H, W), dtype=bool)
+
+        sr, sc = int(start[0]), int(start[1])
+        if not GridTopology.can_occupy(free, sr, sc):
+            return vis
+        if allowed is not None and not bool(allowed[sr, sc]):
+            return vis
+
+        dq = deque([(sr, sc)])
+        vis[sr, sc] = True
+
+        while dq:
+            r, c = dq.popleft()
+            for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                if not GridTopology.can_occupy(free, nr, nc):
+                    continue
+                if vis[nr, nc]:
+                    continue
+                if allowed is not None and not bool(allowed[nr, nc]):
+                    continue
+                vis[nr, nc] = True
+                dq.append((nr, nc))
+
+        return vis
+
+    @staticmethod
     def bfs_distance_map(
         free: np.ndarray,
         start: Tuple[int, int],

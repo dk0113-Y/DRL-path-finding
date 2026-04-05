@@ -25,7 +25,6 @@ VALUE_ENTRY_FEATURES = (
     "entry_dist_ratio",
     "entry_width_ratio",
     "entry_clearance",
-    "entry_local_revisit_pressure",
     "entry_support_area_ratio",
 )
 VALUE_BLOCK_FEATURE_COUNT = len(VALUE_BLOCK_FEATURES)
@@ -93,8 +92,7 @@ class ValueStateBuilder:
                 entry_features[block_slot, entry_slot, 2] = np.float32(float(entry.entry_dist) / box_diag)
                 entry_features[block_slot, entry_slot, 3] = np.float32(float(entry.entry_width) / entry_width_scale)
                 entry_features[block_slot, entry_slot, 4] = np.float32(float(entry.entry_clearance))
-                entry_features[block_slot, entry_slot, 5] = np.float32(float(entry.entry_local_revisit_pressure))
-                entry_features[block_slot, entry_slot, 6] = np.float32(float(entry.support_area) / box_hw_scale)
+                entry_features[block_slot, entry_slot, 5] = np.float32(float(entry.support_area) / box_hw_scale)
 
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0

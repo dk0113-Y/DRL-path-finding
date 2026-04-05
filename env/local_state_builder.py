@@ -199,14 +199,6 @@ class LocalStateBuilder:
         t_trajectory = time.perf_counter() if self._timing_enabled else 0.0
         trajectory_recency = self._trajectory_buf
         trajectory_recency.fill(0.0)
-        if inside_any:
-            last_step = cum_map.last_visit_step[ir, ic]
-            valid = (last_step >= 0)
-            if np.any(valid):
-                delta = np.asarray(np.maximum(0, int(cum_map.step_count) - last_step[valid]), dtype=np.int32)
-                self._ensure_trajectory_decay_cache(int(delta.max()))
-                inside_flat = np.flatnonzero(inside)
-                trajectory_recency.reshape(-1)[inside_flat[valid]] = self._trajectory_decay_cache[delta]
         if self._timing_enabled:
             self.trajectory_time += time.perf_counter() - t_trajectory
 
