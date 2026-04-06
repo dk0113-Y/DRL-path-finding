@@ -75,11 +75,12 @@ class AnalysisBox:
     """
     Array-space analysis window used by the shared semantic layer.
 
-    The box tracks the currently known region plus a margin tied to the
-    advantage local decision canvas half-span. This intentionally limits
-    semantic parsing to unknown structure that is immediately relevant to
-    exploration, instead of treating the unbounded outside-of-map ocean as a
-    real decision object.
+    The box is a strict known-region bounding box.
+    It should not extend into extra unknown area.
+    This avoids merging otherwise separable frontier-adjacent unknown
+    structures through heuristic margin extension.
+    In the current project, unknown topology beyond the known boundary should
+    not be guessed at the representation layer.
     """
 
     r0: int
@@ -128,9 +129,11 @@ class CumulativeBeliefMap:
         # This is not the policy-network local window size.
         self.local_shape = tuple(first_local_snap.shape)
         self.local_center = (self.local_shape[0] // 2, self.local_shape[1] // 2)
-        # Bind semantic analysis extent to the radar-driven local decision
-        # canvas scale; this avoids introducing a separate hand-tuned margin.
-        self.analysis_margin = int(max(1, max(self.local_center) // 2))
+        # Keep semantic analysis strictly inside the currently known-region
+        # bounding box. Do not extend into extra unknown area via heuristic
+        # margin, because unknown topology beyond the known boundary should not
+        # be guessed at the representation layer.
+        self.analysis_margin = 0
 
         # Light-weight growth buffer to avoid frequent near-edge reallocations.
         self._growth_margin = int(max(4, max(self.local_shape) // 2))
@@ -303,12 +306,14 @@ class CumulativeBeliefMap:
             known_c0 = 0
             known_c1 = int(self.map.shape[1])
 
-        margin = int(self.analysis_margin)
+        # analysis_box is the strict known-region bounding box. It should not
+        # extend into extra unknown area, so the box equals the known bbox.
+        margin = 0
         self.analysis_box = AnalysisBox(
-            r0=max(0, known_r0 - margin),
-            r1=min(int(self.map.shape[0]), known_r1 + margin),
-            c0=max(0, known_c0 - margin),
-            c1=min(int(self.map.shape[1]), known_c1 + margin),
+            r0=known_r0,
+            r1=known_r1,
+            c0=known_c0,
+            c1=known_c1,
             margin=margin,
             known_r0=known_r0,
             known_r1=known_r1,
