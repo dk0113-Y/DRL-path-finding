@@ -10,11 +10,12 @@ from env.core_cummap import AnalysisBox, CumulativeBeliefMap
 from env.core_radar import RadarSensor
 from env.grid_topology import ACTIONS_8, EMPTY, INVISIBLE, OBSTACLE, GridTopology
 from env.shared_semantic_layer import (
-    AccessibleUnknownBlock,
-    FrontierEntryCluster,
+    FrontierCluster,
+    SupportGeometry,
     SharedSemanticConfig,
     SharedSemanticLayer,
     SharedSemanticSnapshot,
+    UnknownBlock,
     build_semantic_visualization_payload,
 )
 from env.value_state_builder import (
@@ -42,8 +43,9 @@ __all__ = [
     "SharedSemanticConfig",
     "SharedSemanticLayer",
     "SharedSemanticSnapshot",
-    "AccessibleUnknownBlock",
-    "FrontierEntryCluster",
+    "UnknownBlock",
+    "FrontierCluster",
+    "SupportGeometry",
     "ValueStateBuilder",
     "ValueStateConfig",
     "VALUE_BLOCK_FEATURE_COUNT",

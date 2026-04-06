@@ -100,8 +100,8 @@ class AdvantageStateBuilder:
 
         for block in semantic_snapshot.accessible_blocks:
             target_channel = 3 if (main_block is not None and block.block_index == main_block.block_index) else 4
-            for entry in block.entries:
-                entry.paint_to_local_canvas(
+            for frontier_cluster in block.frontier_clusters:
+                frontier_cluster.paint_to_local_canvas(
                     canvas[target_channel],
                     agent_arr=agent_arr,
                     local_shape=local_shape,

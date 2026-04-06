@@ -14,9 +14,9 @@ from __future__ import annotations
     n         : 生成新随机地图
     p         : 切换语义叠加显示
     b         : 切换可达未知块显示
-    f         : 切换前沿入口显示
+    f         : 切换前沿簇显示
     t         : 切换轨迹显示
-    i         : 切换入口编号显示
+    i         : 切换前沿簇编号显示
     s         : 保存截图到 outputs/demo_frames/
     h         : 打印帮助信息
     esc       : 退出
@@ -165,9 +165,9 @@ def print_controls() -> None:
     print("n = 生成新地图")
     print("p = 切换语义叠加显示")
     print("b = 切换未知块显示")
-    print("f = 切换前沿入口显示")
+    print("f = 切换前沿簇显示")
     print("t = 切换轨迹显示")
-    print("i = 切换入口编号显示")
+    print("i = 切换前沿簇编号显示")
     print("s = 保存截图")
     print("h = 打印帮助")
     print("esc 或关闭窗口 = 退出")
@@ -269,7 +269,7 @@ class InteractiveSemanticDemo:
         self.semantic_snapshot = self.shared_semantic_layer.analyze(self.cum_map, self.agent_state)
         self.semantic_payload = build_semantic_visualization_payload(self.semantic_snapshot)
         self.metrics = dict(self.semantic_snapshot.metrics())
-        self.entry_count = sum(len(block["entries"]) for block in self.semantic_payload["blocks"])
+        self.entry_count = sum(len(block["frontier_clusters"]) for block in self.semantic_payload["blocks"])
         self.agent_array = tuple(int(v) for v in self.cum_map.world_to_array(self.agent_state))
         self.trajectory_array = [
             tuple(int(v) for v in self.cum_map.world_to_array(world_rc))
@@ -397,13 +397,13 @@ class InteractiveSemanticDemo:
             self._set_status(f"未知块显示已{'开启' if self.show_blocks else '关闭'}")
         elif key == "f":
             self.show_frontiers = not self.show_frontiers
-            self._set_status(f"前沿入口显示已{'开启' if self.show_frontiers else '关闭'}")
+            self._set_status(f"前沿簇显示已{'开启' if self.show_frontiers else '关闭'}")
         elif key == "t":
             self.show_trajectory = not self.show_trajectory
             self._set_status(f"轨迹显示已{'开启' if self.show_trajectory else '关闭'}")
         elif key == "i":
             self.show_entry_labels = not self.show_entry_labels
-            self._set_status(f"入口编号显示已{'开启' if self.show_entry_labels else '关闭'}")
+            self._set_status(f"前沿簇编号显示已{'开启' if self.show_entry_labels else '关闭'}")
         elif key == "h":
             print_controls()
             self._set_status("已在终端打印帮助信息")
@@ -610,9 +610,10 @@ class InteractiveSemanticDemo:
             main_block_index = self.semantic_payload["main_block_index"]
             block_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
             support_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
-            boundary_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
+            frontier_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
             block_labels: list[tuple[float, float, str, bool]] = []
-            entry_labels: list[tuple[float, float, str]] = []
+            frontier_labels: list[tuple[float, float, str]] = []
+            support_boxes: list[tuple[float, float, float, float, np.ndarray]] = []
 
             for block_slot, block in enumerate(blocks):
                 block_rows = np.asarray(block["rows"], dtype=np.int32)
@@ -636,32 +637,44 @@ class InteractiveSemanticDemo:
                     block_labels.append((label_c, label_r, f"B{int(block['block_index'])}", is_main))
 
                 if self.show_frontiers:
-                    for entry_slot, entry in enumerate(block["entries"]):
-                        entry_rows = np.asarray(entry["rows"], dtype=np.int32)
-                        entry_cols = np.asarray(entry["cols"], dtype=np.int32)
-                        boundary_rows = np.asarray(entry["boundary_rows"], dtype=np.int32)
-                        boundary_cols = np.asarray(entry["boundary_cols"], dtype=np.int32)
+                    for frontier_slot, frontier_cluster in enumerate(block["frontier_clusters"]):
+                        frontier_rows = np.asarray(frontier_cluster["frontier_rows"], dtype=np.int32)
+                        frontier_cols = np.asarray(frontier_cluster["frontier_cols"], dtype=np.int32)
+                        support = frontier_cluster["support"]
+                        support_rows = np.asarray(support["free_rows"], dtype=np.int32)
+                        support_cols = np.asarray(support["free_cols"], dtype=np.int32)
+                        support_box = support["local_box"]
                         entry_rgb = _mix_color(
                             block_rgb,
-                            _rgb_from_cmap(ENTRY_CMAP, int(entry_slot)),
+                            _rgb_from_cmap(ENTRY_CMAP, int(frontier_slot)),
                             0.35,
                         )
-                        support_rgba[entry_rows, entry_cols, :3] = entry_rgb
-                        support_rgba[entry_rows, entry_cols, 3] = np.maximum(
-                            support_rgba[entry_rows, entry_cols, 3],
-                            0.80,
+                        support_rgba[support_rows, support_cols, :3] = entry_rgb
+                        support_rgba[support_rows, support_cols, 3] = np.maximum(
+                            support_rgba[support_rows, support_cols, 3],
+                            0.46,
                         )
-                        boundary_rgba[boundary_rows, boundary_cols, :3] = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-                        boundary_rgba[boundary_rows, boundary_cols, 3] = 1.0
+                        frontier_rgba[frontier_rows, frontier_cols, :3] = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+                        frontier_rgba[frontier_rows, frontier_cols, 3] = 1.0
+                        support_boxes.append(
+                            (
+                                float(support_box["c0"]) - 0.5,
+                                float(support_box["r0"]) - 0.5,
+                                float(support_box["c1"] - support_box["c0"]),
+                                float(support_box["r1"] - support_box["r0"]),
+                                entry_rgb,
+                            )
+                        )
 
-                        label_rows = boundary_rows if boundary_rows.size > 0 else entry_rows
-                        label_cols = boundary_cols if boundary_cols.size > 0 else entry_cols
+                        anchor_r, anchor_c = frontier_cluster["frontier_anchor_rc"]
+                        label_rows = frontier_rows
+                        label_cols = frontier_cols
                         if label_rows.size > 0 and label_cols.size > 0:
-                            entry_labels.append(
+                            frontier_labels.append(
                                 (
-                                    float(np.mean(label_cols)),
-                                    float(np.mean(label_rows)),
-                                    f"E{int(entry['entry_index'])}",
+                                    float(anchor_c),
+                                    float(anchor_r),
+                                    f"F{int(frontier_cluster['frontier_index'])}",
                                 )
                             )
 
@@ -683,7 +696,21 @@ class InteractiveSemanticDemo:
             ax.imshow(block_rgba, origin="upper", interpolation="nearest")
             if self.show_frontiers:
                 ax.imshow(support_rgba, origin="upper", interpolation="nearest")
-                ax.imshow(boundary_rgba, origin="upper", interpolation="nearest")
+                ax.imshow(frontier_rgba, origin="upper", interpolation="nearest")
+                for box_c0, box_r0, box_w, box_h, box_rgb in support_boxes:
+                    ax.add_patch(
+                        Rectangle(
+                            (box_c0, box_r0),
+                            box_w,
+                            box_h,
+                            fill=False,
+                            edgecolor=box_rgb,
+                            linewidth=1.1,
+                            linestyle=":",
+                            alpha=0.75,
+                            zorder=8,
+                        )
+                    )
 
             for label_c, label_r, text, is_main in block_labels:
                 ax.text(
@@ -704,7 +731,7 @@ class InteractiveSemanticDemo:
                 )
 
             if self.show_frontiers and self.show_entry_labels:
-                for label_c, label_r, text in entry_labels:
+                for label_c, label_r, text in frontier_labels:
                     ax.text(
                         label_c,
                         label_r,
@@ -754,8 +781,8 @@ class InteractiveSemanticDemo:
                 _safe_metric_text("可达未知未知面积", float(self.metrics.get("total_accessible_unknown_area", 0.0))),
                 _safe_metric_text("最大未知块占比", float(self.metrics.get("top1_block_area_ratio", 0.0))),
                 _safe_metric_text("场景有序度", float(self.metrics.get("scene_orderliness", 1.0))),
-                _safe_metric_text("主未知块入口数", float(self.metrics.get("main_block_entry_count", 0.0))),
-                _safe_metric_text("最近主入口距离", float(self.metrics.get("nearest_main_entry_dist", float("nan")))),
+                _safe_metric_text("主未知块前沿簇数", float(self.metrics.get("main_block_entry_count", 0.0))),
+                _safe_metric_text("最近主前沿距离", float(self.metrics.get("nearest_main_entry_dist", float("nan")))),
             ]
         )
         ax.text(
@@ -851,7 +878,7 @@ class InteractiveSemanticDemo:
             f"覆盖率={float(self.cum_map.coverage_rate):.1%} "
             f"合法动作数={len(self.valid_action_indices)} "
             f"可达未知块数={int(self.metrics.get('accessible_block_count', 0.0))} "
-            f"前沿入口数={int(self.entry_count)} "
+            f"前沿簇数={int(self.entry_count)} "
             f"智能体=({int(self.agent_state[0])}, {int(self.agent_state[1])})"
         )
         if self.status_message:

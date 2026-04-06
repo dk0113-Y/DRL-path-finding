@@ -15,8 +15,8 @@ VALUE_BLOCK_FEATURES = (
     "bbox_height_ratio",
     "bbox_width_ratio",
     "bbox_aspect_ratio",
-    "entry_count_ratio",
-    "nearest_entry_dist_ratio",
+    "frontier_cluster_count_ratio",
+    "nearest_frontier_dist_ratio",
     "opportunity_score",
 )
 VALUE_ENTRY_FEATURES = (
@@ -24,8 +24,8 @@ VALUE_ENTRY_FEATURES = (
     "entry_dir_c",
     "entry_dist_ratio",
     "entry_width_ratio",
-    "entry_clearance",
-    "entry_support_area_ratio",
+    "support_clearance",
+    "support_area_ratio",
 )
 VALUE_BLOCK_FEATURE_COUNT = len(VALUE_BLOCK_FEATURES)
 VALUE_ENTRY_FEATURE_COUNT = len(VALUE_ENTRY_FEATURES)
@@ -42,9 +42,11 @@ class ValueStateBuilder:
     """
     Build the block-tree tensor state consumed by the value branch.
 
-    Mother blocks are the primary units. Entry clusters remain attached as
+    Unknown blocks are the primary units. Frontier clusters remain attached as
     children under each block and are never flattened into a single shared token
-    list.
+    list. The first four entry features come from FrontierCluster geometry,
+    while the last two come from SupportGeometry statistics inside the
+    frontier-cluster local analysis box.
     """
 
     def __init__(self, config: Optional[ValueStateConfig] = None):
@@ -81,18 +83,18 @@ class ValueStateBuilder:
             block_features[block_slot, 1] = np.float32(float(bbox_h) / bbox_h_scale)
             block_features[block_slot, 2] = np.float32(float(bbox_w) / bbox_w_scale)
             block_features[block_slot, 3] = np.float32(float(bbox_aspect))
-            block_features[block_slot, 4] = np.float32(min(1.0, float(block.entry_count) / entry_count_scale))
-            block_features[block_slot, 5] = np.float32(float(block.nearest_entry_dist) / box_diag)
+            block_features[block_slot, 4] = np.float32(min(1.0, float(block.frontier_cluster_count) / entry_count_scale))
+            block_features[block_slot, 5] = np.float32(float(block.nearest_frontier_dist) / box_diag)
             block_features[block_slot, 6] = np.float32(float(block.opportunity_score))
 
-            for entry_slot, entry in enumerate(block.entries[:max_entries]):
+            for entry_slot, frontier_cluster in enumerate(block.frontier_clusters[:max_entries]):
                 entry_mask[block_slot, entry_slot] = True
-                entry_features[block_slot, entry_slot, 0] = np.float32(entry.entry_dir[0])
-                entry_features[block_slot, entry_slot, 1] = np.float32(entry.entry_dir[1])
-                entry_features[block_slot, entry_slot, 2] = np.float32(float(entry.entry_dist) / box_diag)
-                entry_features[block_slot, entry_slot, 3] = np.float32(float(entry.entry_width) / entry_width_scale)
-                entry_features[block_slot, entry_slot, 4] = np.float32(float(entry.entry_clearance))
-                entry_features[block_slot, entry_slot, 5] = np.float32(float(entry.support_area) / box_hw_scale)
+                entry_features[block_slot, entry_slot, 0] = np.float32(frontier_cluster.entry_dir[0])
+                entry_features[block_slot, entry_slot, 1] = np.float32(frontier_cluster.entry_dir[1])
+                entry_features[block_slot, entry_slot, 2] = np.float32(float(frontier_cluster.entry_dist) / box_diag)
+                entry_features[block_slot, entry_slot, 3] = np.float32(float(frontier_cluster.entry_width) / entry_width_scale)
+                entry_features[block_slot, entry_slot, 4] = np.float32(float(frontier_cluster.support_clearance))
+                entry_features[block_slot, entry_slot, 5] = np.float32(float(frontier_cluster.support_area) / box_hw_scale)
 
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0

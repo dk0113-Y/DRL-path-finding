@@ -629,19 +629,19 @@ def save_episode_trajectory_plots(
                                 )
                                 ax_belief.add_patch(rect)
 
-                            entries = block.get("entries", [])
-                            if not isinstance(entries, list):
+                            frontier_clusters = block.get("frontier_clusters", [])
+                            if not isinstance(frontier_clusters, list):
                                 continue
-                            for entry in entries:
-                                if not isinstance(entry, dict):
+                            for frontier_cluster in frontier_clusters:
+                                if not isinstance(frontier_cluster, dict):
                                     continue
-                                entry_mask = _coords_to_true_grid_mask(
-                                    np.asarray(entry.get("rows", []), dtype=np.int32),
-                                    np.asarray(entry.get("cols", []), dtype=np.int32),
+                                frontier_mask = _coords_to_true_grid_mask(
+                                    np.asarray(frontier_cluster.get("frontier_rows", []), dtype=np.int32),
+                                    np.asarray(frontier_cluster.get("frontier_cols", []), dtype=np.int32),
                                     belief_origin,
                                     true_grid_arr.shape,
                                 )
-                                if not np.any(entry_mask):
+                                if not np.any(frontier_mask):
                                     continue
                                 entry_overlay = np.zeros((height, width, 4), dtype=np.float32)
                                 if is_main:
@@ -652,7 +652,7 @@ def save_episode_trajectory_plots(
                                     entry_overlay[..., 0] = 0.14
                                     entry_overlay[..., 1] = 0.68
                                     entry_overlay[..., 2] = 0.88
-                                entry_overlay[..., 3] = entry_mask.astype(np.float32) * (0.88 if is_main else 0.46)
+                                entry_overlay[..., 3] = frontier_mask.astype(np.float32) * (0.88 if is_main else 0.46)
                                 ax_belief.imshow(entry_overlay, origin="upper")
 
                 observed_ratio = float(np.mean(belief_map != INVISIBLE))
