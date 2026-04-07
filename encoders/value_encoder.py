@@ -54,7 +54,7 @@ class ValueTreeEncoder(nn.Module):
     Hierarchical value encoder.
 
     Tree shape:
-      block attributes (trunk)
+      direct block summary (area/count + representative frontier summary)
         -> child entry clusters are aggregated within each block
         -> block representations are aggregated into the final value state
     """

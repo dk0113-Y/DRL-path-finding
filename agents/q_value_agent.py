@@ -67,7 +67,7 @@ class ExplorationQNetwork(nn.Module):
 
     Data flow:
       advantage_canvas -> advantage encoder -> per-action advantage states
-      value block-tree -> value encoder -> state value context
+      value block-tree (6D block summary + 4D frontier entries) -> value encoder -> state value context
       {value_state, advantage_state} -> dueling head -> Q(s, a)
     """
 

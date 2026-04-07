@@ -131,32 +131,29 @@
 
 由 `ValueStateBuilder` 将语义树整理为 block-tree tensor state。
 
-#### Block 特征（7 维）
+#### Block 特征（6 维）
 
 1. `block_area_ratio`
-2. `bbox_height_ratio`
-3. `bbox_width_ratio`
-4. `bbox_aspect_ratio`
-5. `frontier_cluster_count_ratio`
-6. `nearest_frontier_dist_ratio`
-7. `opportunity_score`
+2. `frontier_cluster_count`
+3. `representative_delta_r_ratio`
+4. `representative_delta_c_ratio`
+5. `representative_entry_width_ratio`
+6. `representative_support_obstacle_density`
 
-这些特征表达的是 UnknownBlock 层的全局价值信息：
+这些特征表达的是 UnknownBlock 层的直接摘要信息：
 
-- 这块未知主干有多大
-- 形状如何
-- 挂了多少个前沿簇
-- 最近前沿簇离 agent 多远
-- 该未知块的综合推进价值
+- 这块未知区域占全部可达未知面积的比例
+- 该块当前挂了多少个 pure frontier clusters
+- 距离 agent 最近的 representative frontier 在行/列方向上的相对位置
+- 该 representative frontier 的入口宽度
+- 该 representative frontier 对应 known-side support box 的障碍密度
 
-#### Entry / Frontier 特征（6 维）
+#### Entry / Frontier 特征（4 维）
 
-1. `entry_dir_r`
-2. `entry_dir_c`
-3. `entry_dist_ratio`
-4. `entry_width_ratio`
-5. `support_clearance`
-6. `support_area_ratio`
+1. `delta_r_ratio`
+2. `delta_c_ratio`
+3. `entry_width_ratio`
+4. `support_obstacle_density`
 
 来源分工：
 
