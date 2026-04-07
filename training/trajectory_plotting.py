@@ -592,7 +592,6 @@ def save_episode_trajectory_plots(
                 ax_belief.imshow(belief_background, cmap="gray", vmin=0.0, vmax=1.0, origin="upper")
                 if semantic_viz_meta is not None:
                     blocks = semantic_viz_meta.get("blocks", [])
-                    main_block_index = semantic_viz_meta.get("main_block_index")
                     if isinstance(blocks, list) and len(blocks) > 0:
                         cmap = plt.cm.get_cmap("tab20", max(1, len(blocks)))
                         belief_origin = (
@@ -602,7 +601,6 @@ def save_episode_trajectory_plots(
                         for draw_idx, block in enumerate(blocks):
                             if not isinstance(block, dict):
                                 continue
-                            is_main = int(block.get("block_index", -1)) == int(main_block_index)
                             block_mask = _coords_to_true_grid_mask(
                                 np.asarray(block.get("rows", []), dtype=np.int32),
                                 np.asarray(block.get("cols", []), dtype=np.int32),
@@ -613,7 +611,7 @@ def save_episode_trajectory_plots(
                                 overlay = np.zeros((height, width, 4), dtype=np.float32)
                                 color = np.asarray(cmap(draw_idx % max(1, cmap.N))[:3], dtype=np.float32)
                                 overlay[..., :3] = color
-                                overlay[..., 3] = block_mask.astype(np.float32) * (0.28 if is_main else 0.10)
+                                overlay[..., 3] = block_mask.astype(np.float32) * 0.16
                                 ax_belief.imshow(overlay, origin="upper")
 
                                 rr, cc = np.nonzero(block_mask)
@@ -623,9 +621,9 @@ def save_episode_trajectory_plots(
                                     float(np.max(rr) - np.min(rr) + 1),
                                     fill=False,
                                     edgecolor=color,
-                                    linewidth=(1.8 if is_main else 1.0),
-                                    alpha=(0.95 if is_main else 0.35),
-                                    linestyle=("-" if is_main else "--"),
+                                    linewidth=1.1,
+                                    alpha=0.45,
+                                    linestyle="--",
                                 )
                                 ax_belief.add_patch(rect)
 
@@ -644,15 +642,10 @@ def save_episode_trajectory_plots(
                                 if not np.any(frontier_mask):
                                     continue
                                 entry_overlay = np.zeros((height, width, 4), dtype=np.float32)
-                                if is_main:
-                                    entry_overlay[..., 0] = 0.92
-                                    entry_overlay[..., 1] = 0.24
-                                    entry_overlay[..., 2] = 0.16
-                                else:
-                                    entry_overlay[..., 0] = 0.14
-                                    entry_overlay[..., 1] = 0.68
-                                    entry_overlay[..., 2] = 0.88
-                                entry_overlay[..., 3] = frontier_mask.astype(np.float32) * (0.88 if is_main else 0.46)
+                                entry_overlay[..., 0] = 0.14
+                                entry_overlay[..., 1] = 0.68
+                                entry_overlay[..., 2] = 0.88
+                                entry_overlay[..., 3] = frontier_mask.astype(np.float32) * 0.62
                                 ax_belief.imshow(entry_overlay, origin="upper")
 
                 observed_ratio = float(np.mean(belief_map != INVISIBLE))

@@ -730,7 +730,8 @@ def run_training(cfg: TrainConfig) -> None:
             f"mean_reward={row['eval_mean_reward']:.4f} mean_cov={row['eval_mean_coverage']:.4f} "
             f"success_rate={row['eval_success_rate']:.4f} mean_len={row['eval_mean_episode_length']:.2f} "
             f"blocks={row['eval_mean_accessible_block_count']:.2f} "
-            f"main_block_area={row['eval_mean_main_block_area']:.2f} "
+            f"frontiers={row['eval_mean_total_frontier_cluster_count']:.2f} "
+            f"mean_block_area={row['eval_mean_mean_block_area']:.2f} "
             f"best_saved={int(is_best)}"
         )
         return row, is_best

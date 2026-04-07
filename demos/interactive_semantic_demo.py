@@ -607,11 +607,10 @@ class InteractiveSemanticDemo:
 
         if self.show_semantics:
             blocks = self.semantic_payload["blocks"]
-            main_block_index = self.semantic_payload["main_block_index"]
             block_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
             support_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
             frontier_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
-            block_labels: list[tuple[float, float, str, bool]] = []
+            block_labels: list[tuple[float, float, str]] = []
             frontier_labels: list[tuple[float, float, str]] = []
             support_boxes: list[tuple[float, float, float, float, np.ndarray]] = []
 
@@ -622,8 +621,7 @@ class InteractiveSemanticDemo:
                     continue
 
                 block_rgb = _rgb_from_cmap(BLOCK_CMAP, int(block_slot))
-                is_main = int(block["block_index"]) == int(main_block_index) if main_block_index is not None else False
-                block_alpha = 0.62 if is_main else 0.34
+                block_alpha = 0.36
                 if self.show_blocks:
                     block_rgba[block_rows, block_cols, :3] = block_rgb
                     block_rgba[block_rows, block_cols, 3] = np.maximum(
@@ -634,7 +632,7 @@ class InteractiveSemanticDemo:
                 if self.show_blocks:
                     label_r = float(np.mean(block_rows))
                     label_c = float(np.mean(block_cols))
-                    block_labels.append((label_c, label_r, f"B{int(block['block_index'])}", is_main))
+                    block_labels.append((label_c, label_r, f"B{int(block['block_index'])}"))
 
                 if self.show_frontiers:
                     for frontier_slot, frontier_cluster in enumerate(block["frontier_clusters"]):
@@ -678,21 +676,6 @@ class InteractiveSemanticDemo:
                                 )
                             )
 
-                if self.show_blocks and is_main:
-                    r0, r1, c0, c1 = self._semantic_block_bbox(block_rows, block_cols)
-                    ax.add_patch(
-                        Rectangle(
-                            (c0, r0),
-                            c1 - c0,
-                            r1 - r0,
-                            fill=False,
-                            edgecolor="#f6bd60",
-                            linewidth=2.2,
-                            linestyle="-",
-                            zorder=9,
-                        )
-                    )
-
             ax.imshow(block_rgba, origin="upper", interpolation="nearest")
             if self.show_frontiers:
                 ax.imshow(support_rgba, origin="upper", interpolation="nearest")
@@ -712,7 +695,7 @@ class InteractiveSemanticDemo:
                         )
                     )
 
-            for label_c, label_r, text, is_main in block_labels:
+            for label_c, label_r, text in block_labels:
                 ax.text(
                     label_c,
                     label_r,
@@ -721,11 +704,11 @@ class InteractiveSemanticDemo:
                     va="center",
                     fontsize=8,
                     fontweight="bold",
-                    color="black" if is_main else "white",
+                    color="white",
                     bbox=dict(
                         boxstyle="round,pad=0.18",
-                        facecolor="#f6bd60dd" if is_main else "#00000099",
-                        edgecolor="#f6bd60" if is_main else "#ffffff80",
+                        facecolor="#00000099",
+                        edgecolor="#ffffff80",
                     ),
                     zorder=10,
                 )
@@ -779,10 +762,10 @@ class InteractiveSemanticDemo:
             [
                 _safe_metric_text("可达未知块数量", float(self.metrics.get("accessible_block_count", 0.0))),
                 _safe_metric_text("可达未知未知面积", float(self.metrics.get("total_accessible_unknown_area", 0.0))),
-                _safe_metric_text("最大未知块占比", float(self.metrics.get("top1_block_area_ratio", 0.0))),
-                _safe_metric_text("场景有序度", float(self.metrics.get("scene_orderliness", 1.0))),
-                _safe_metric_text("主未知块前沿簇数", float(self.metrics.get("main_block_entry_count", 0.0))),
-                _safe_metric_text("最近主前沿距离", float(self.metrics.get("nearest_main_entry_dist", float("nan")))),
+                _safe_metric_text("前沿簇总数", float(self.metrics.get("total_frontier_cluster_count", 0.0))),
+                _safe_metric_text("平均未知块面积", float(self.metrics.get("mean_block_area", 0.0))),
+                _safe_metric_text("局部前沿覆盖率", float(self.metrics.get("local_frontier_coverage", 0.0))),
+                _safe_metric_text("局部前沿块面积均值", float(self.metrics.get("local_frontier_block_area_mean", 0.0))),
             ]
         )
         ax.text(

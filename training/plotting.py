@@ -29,10 +29,8 @@ TRAIN_PLOT_COLUMNS: dict[str, str] = {
     "recent_mean_repeat_visit_ratio": "train_recent_mean_repeat_visit_ratio.png",
     "recent_accessible_block_count": "train_recent_accessible_block_count.png",
     "recent_total_accessible_unknown_area": "train_recent_total_accessible_unknown_area.png",
-    "recent_top1_block_area_ratio": "train_recent_top1_block_area_ratio.png",
-    "recent_scene_orderliness": "train_recent_scene_orderliness.png",
-    "recent_main_block_entry_count": "train_recent_main_block_entry_count.png",
-    "recent_nearest_main_entry_dist": "train_recent_nearest_main_entry_dist.png",
+    "recent_total_frontier_cluster_count": "train_recent_total_frontier_cluster_count.png",
+    "recent_mean_block_area": "train_recent_mean_block_area.png",
 }
 
 TRAIN_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
@@ -46,11 +44,11 @@ TRAIN_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
 TRAIN_REWARD_BREAKDOWN_FILENAME = "train_reward_breakdown.png"
 TRAIN_EPISODE_LENGTH_FILENAME = "train_episode_length_vs_episode_idx.png"
 TRAIN_LOCAL_ENTRY_COMPETITION_COLUMNS: tuple[str, str] = (
-    "recent_local_main_entry_coverage",
-    "recent_local_nonmain_entry_coverage",
+    "recent_local_frontier_coverage",
+    "recent_local_frontier_block_area_mean",
 )
-TRAIN_LOCAL_ENTRY_COMPETITION_FILENAME = "train_local_entry_competition.png"
-TRAIN_LOCAL_ENTRY_COMPETITION_TITLE = "train local main/nonmain entry competition"
+TRAIN_LOCAL_ENTRY_COMPETITION_FILENAME = "train_local_frontier_summary.png"
+TRAIN_LOCAL_ENTRY_COMPETITION_TITLE = "train local frontier summary"
 
 EVAL_PLOT_COLUMNS: dict[str, str] = {
     "eval_mean_reward": "eval_mean_reward.png",
@@ -60,10 +58,8 @@ EVAL_PLOT_COLUMNS: dict[str, str] = {
     "eval_mean_episode_length": "eval_mean_episode_length.png",
     "eval_mean_accessible_block_count": "eval_mean_accessible_block_count.png",
     "eval_mean_total_accessible_unknown_area": "eval_mean_total_accessible_unknown_area.png",
-    "eval_mean_top1_block_area_ratio": "eval_mean_top1_block_area_ratio.png",
-    "eval_mean_scene_orderliness": "eval_mean_scene_orderliness.png",
-    "eval_mean_main_block_entry_count": "eval_mean_main_block_entry_count.png",
-    "eval_mean_nearest_main_entry_dist": "eval_mean_nearest_main_entry_dist.png",
+    "eval_mean_total_frontier_cluster_count": "eval_mean_total_frontier_cluster_count.png",
+    "eval_mean_mean_block_area": "eval_mean_mean_block_area.png",
 }
 
 EVAL_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
@@ -76,11 +72,11 @@ EVAL_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
 )
 EVAL_REWARD_BREAKDOWN_FILENAME = "eval_reward_breakdown.png"
 EVAL_LOCAL_ENTRY_COMPETITION_COLUMNS: tuple[str, str] = (
-    "eval_mean_local_main_entry_coverage",
-    "eval_mean_local_nonmain_entry_coverage",
+    "eval_mean_local_frontier_coverage",
+    "eval_mean_local_frontier_block_area_mean",
 )
-EVAL_LOCAL_ENTRY_COMPETITION_FILENAME = "eval_local_entry_competition.png"
-EVAL_LOCAL_ENTRY_COMPETITION_TITLE = "eval local main/nonmain entry competition"
+EVAL_LOCAL_ENTRY_COMPETITION_FILENAME = "eval_local_frontier_summary.png"
+EVAL_LOCAL_ENTRY_COMPETITION_TITLE = "eval local frontier summary"
 
 
 def _warn(message: str) -> None:

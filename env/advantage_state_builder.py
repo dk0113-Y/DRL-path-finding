@@ -14,9 +14,8 @@ ADVANTAGE_CANVAS_CHANNELS = (
     "unknown",
     "free",
     "obstacle",
-    "main_entry_mask",
-    "nonmain_entry_mask",
-    "main_block_fragment_mask",
+    "frontier_mask",
+    "frontier_block_area_map",
 )
 ADVANTAGE_CANVAS_CHANNEL_COUNT = len(ADVANTAGE_CANVAS_CHANNELS)
 
@@ -32,7 +31,9 @@ class AdvantageStateBuilder:
 
     Canvas size is tied directly to the radar observation window (`cum_map.local_shape`),
     so the advantage branch always reasons over the same local scale that the
-    agent can currently observe.
+    agent can currently observe. The canvas exposes every locally visible
+    frontier cluster plus a projected block-area attribute on those frontier
+    cells, instead of a hand-crafted main/non-main split.
     """
 
     def __init__(self, config: Optional[AdvantageStateConfig] = None):
@@ -69,6 +70,33 @@ class AdvantageStateBuilder:
         cached.fill(0.0)
         return cached
 
+    @staticmethod
+    def _paint_geometry_value_to_local_canvas(
+        geometry,
+        canvas_channel: np.ndarray,
+        *,
+        value: float,
+        agent_arr: tuple[int, int],
+        local_shape: tuple[int, int],
+    ) -> None:
+        rows = np.asarray(geometry.rows, dtype=np.int32)
+        cols = np.asarray(geometry.cols, dtype=np.int32)
+        if rows.size <= 0 or cols.size <= 0:
+            return
+        h = int(local_shape[0])
+        w = int(local_shape[1])
+        center_r = h // 2
+        center_c = w // 2
+        local_rows = rows - int(agent_arr[0]) + center_r
+        local_cols = cols - int(agent_arr[1]) + center_c
+        inside = (
+            (local_rows >= 0) & (local_rows < h) &
+            (local_cols >= 0) & (local_cols < w)
+        )
+        if not np.any(inside):
+            return
+        canvas_channel[local_rows[inside], local_cols[inside]] = np.float32(value)
+
     def build(
         self,
         cum_map,
@@ -89,28 +117,29 @@ class AdvantageStateBuilder:
         canvas[1] = (sampled_map == EMPTY)
         canvas[2] = (sampled_map == OBSTACLE)
 
-        main_block = semantic_snapshot.main_block()
         agent_arr = cum_map.world_to_array(agent_state)
-        if main_block is not None:
-            main_block.paint_to_local_canvas(
-                canvas[5],
-                agent_arr=agent_arr,
-                local_shape=local_shape,
-            )
-
+        total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
         for block in semantic_snapshot.accessible_blocks:
-            target_channel = 3 if (main_block is not None and block.block_index == main_block.block_index) else 4
+            block_area_ratio = float(block.block_area) / total_unknown_area
             for frontier_cluster in block.frontier_clusters:
                 frontier_cluster.paint_to_local_canvas(
-                    canvas[target_channel],
+                    canvas[3],
+                    agent_arr=agent_arr,
+                    local_shape=local_shape,
+                )
+                self._paint_geometry_value_to_local_canvas(
+                    frontier_cluster.frontier_geometry,
+                    canvas[4],
+                    value=block_area_ratio,
                     agent_arr=agent_arr,
                     local_shape=local_shape,
                 )
 
         window_area = float(max(1, local_shape[0] * local_shape[1]))
+        frontier_visible = np.count_nonzero(canvas[3])
         meta = {
-            "local_main_entry_coverage": float(np.count_nonzero(canvas[3])) / window_area,
-            "local_nonmain_entry_coverage": float(np.count_nonzero(canvas[4])) / window_area,
+            "local_frontier_coverage": float(frontier_visible) / window_area,
+            "local_frontier_block_area_mean": float(canvas[4][canvas[3] > 0.0].mean()) if frontier_visible > 0 else 0.0,
         }
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0

@@ -145,7 +145,7 @@ class AdvantageCanvasEncoder(nn.Module):
             return action_state
 
         aux: Dict[str, torch.Tensor] = {
-            "advantage_canvas_main_entry_mean": canvas[:, 3].mean(dim=(1, 2)),
-            "advantage_canvas_nonmain_entry_mean": canvas[:, 4].mean(dim=(1, 2)),
+            "advantage_canvas_frontier_mean": canvas[:, 3].mean(dim=(1, 2)),
+            "advantage_canvas_frontier_block_area_mean": canvas[:, 4].mean(dim=(1, 2)),
         }
         return action_state, aux

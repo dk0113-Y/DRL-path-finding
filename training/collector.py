@@ -32,13 +32,10 @@ ACTION_DIM = len(ACTIONS_8)
 SEMANTIC_EPISODE_FIELDS = (
     "accessible_block_count",
     "total_accessible_unknown_area",
-    "top1_block_area_ratio",
-    "scene_orderliness",
-    "main_block_area",
-    "main_block_entry_count",
-    "nearest_main_entry_dist",
-    "local_main_entry_coverage",
-    "local_nonmain_entry_coverage",
+    "total_frontier_cluster_count",
+    "mean_block_area",
+    "local_frontier_coverage",
+    "local_frontier_block_area_mean",
 )
 
 

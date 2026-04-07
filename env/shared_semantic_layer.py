@@ -4,7 +4,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional
 
 import numpy as np
 
@@ -121,11 +121,17 @@ class SparseMaskGeometry:
 
 @dataclass(frozen=True, slots=True)
 class SupportGeometry:
+    """
+    Local known-side support descriptor attached to a frontier cluster.
+
+    The support local box is only a sampling window around the frontier cluster.
+    The learning-facing summary is reduced to obstacle density over known cells
+    inside that box. Free-cell geometry is kept only for visualization/debug.
+    """
+
     local_box_bounds: tuple[int, int, int, int]
     support_free_geometry: SparseMaskGeometry
-    support_area: int
-    support_clearance: float
-    support_complexity: float
+    support_obstacle_density: float
 
     @property
     def rows(self) -> np.ndarray:
@@ -172,8 +178,8 @@ class FrontierCluster:
     frontier_geometry: SparseMaskGeometry
     support_geometry: SupportGeometry
     frontier_anchor_rc: tuple[int, int]
-    entry_dir: tuple[float, float]
-    entry_dist: float
+    delta_r: float
+    delta_c: float
     entry_width: float
 
     @property
@@ -193,16 +199,12 @@ class FrontierCluster:
         return self.support_geometry.cols
 
     @property
-    def support_area(self) -> int:
-        return int(self.support_geometry.support_area)
+    def support_obstacle_density(self) -> float:
+        return float(self.support_geometry.support_obstacle_density)
 
     @property
-    def support_clearance(self) -> float:
-        return float(self.support_geometry.support_clearance)
-
-    @property
-    def support_complexity(self) -> float:
-        return float(self.support_geometry.support_complexity)
+    def anchor_distance(self) -> float:
+        return float(math.hypot(float(self.delta_r), float(self.delta_c)))
 
     def paint_to_local_canvas(
         self,
@@ -227,7 +229,6 @@ class UnknownBlock:
     block_bbox_shape: tuple[float, float, float]
     frontier_cluster_count: int
     nearest_frontier_dist: float
-    opportunity_score: float
 
     @property
     def rows(self) -> np.ndarray:
@@ -255,31 +256,22 @@ class UnknownBlock:
 class SharedSemanticSnapshot:
     analysis_box: AnalysisBox
     accessible_blocks: tuple[UnknownBlock, ...]
-    main_block_index: Optional[int]
     total_accessible_unknown_area: int
-    top1_block_area_ratio: float
-    scene_orderliness: float
-    main_block_area: float
-    main_block_entry_count: float
-    nearest_main_entry_dist: float
-
-    def main_block(self) -> Optional[UnknownBlock]:
-        if self.main_block_index is None:
-            return None
-        for block in self.accessible_blocks:
-            if int(block.block_index) == int(self.main_block_index):
-                return block
-        return None
 
     def metrics(self) -> dict[str, float]:
+        accessible_block_count = float(len(self.accessible_blocks))
+        total_unknown_area = float(self.total_accessible_unknown_area)
+        total_frontier_cluster_count = float(sum(int(block.frontier_cluster_count) for block in self.accessible_blocks))
+        mean_block_area = (
+            total_unknown_area / accessible_block_count
+            if accessible_block_count > 0.0
+            else 0.0
+        )
         return {
-            "accessible_block_count": float(len(self.accessible_blocks)),
-            "total_accessible_unknown_area": float(self.total_accessible_unknown_area),
-            "top1_block_area_ratio": float(self.top1_block_area_ratio),
-            "scene_orderliness": float(self.scene_orderliness),
-            "main_block_area": float(self.main_block_area),
-            "main_block_entry_count": float(self.main_block_entry_count),
-            "nearest_main_entry_dist": float(self.nearest_main_entry_dist),
+            "accessible_block_count": accessible_block_count,
+            "total_accessible_unknown_area": total_unknown_area,
+            "total_frontier_cluster_count": total_frontier_cluster_count,
+            "mean_block_area": float(mean_block_area),
         }
 
 
@@ -373,18 +365,6 @@ def _find_objects(labels: np.ndarray, count: int):
     return objects
 
 
-def _mask_entropy(values: Sequence[int]) -> float:
-    if len(values) <= 1:
-        return 0.0
-    arr = np.asarray(values, dtype=np.float32)
-    total = float(arr.sum())
-    if total <= 0.0:
-        return 0.0
-    probs = arr / total
-    probs = probs[probs > 0.0]
-    return float(-(probs * np.log(probs)).sum())
-
-
 def _sparse_geometry_from_local_mask(
     local_mask: np.ndarray,
     *,
@@ -418,12 +398,14 @@ class SharedSemanticLayer:
             -> SupportGeometry
 
     UnknownBlock groups one or more frontier clusters through frontier-first
-    unknown-side grouping.
+    unknown-side grouping and only carries lightweight parent-level summaries.
 
-    FrontierCluster is an 8-connected pure frontier-cell cluster.
+    FrontierCluster is an 8-connected pure frontier-cell cluster and carries the
+    local entry geometry seen by the model.
 
-    SupportGeometry is not a frontier dilation result. It is a local known-side
-    support description derived from the frontier cluster's local analysis box.
+    SupportGeometry is not a frontier dilation result. It is reduced to a local
+    obstacle-density descriptor derived from the frontier cluster's local
+    support box on the known side.
     """
 
     def __init__(self, config: Optional[SharedSemanticConfig] = None):
@@ -453,15 +435,6 @@ class SharedSemanticLayer:
             ),
             axis=0,
         )
-
-    @staticmethod
-    def _entry_direction(agent_arr: tuple[int, int], target_arr: tuple[int, int]) -> tuple[float, float]:
-        dr = float(int(target_arr[0]) - int(agent_arr[0]))
-        dc = float(int(target_arr[1]) - int(agent_arr[1]))
-        norm = math.hypot(dr, dc)
-        if norm <= 1e-6:
-            return 0.0, 0.0
-        return dr / norm, dc / norm
 
     @staticmethod
     def _frontier_anchor_rc(frontier_geometry: SparseMaskGeometry) -> tuple[int, int]:
@@ -504,45 +477,23 @@ class SharedSemanticLayer:
         return local_r0, local_r1, local_c0, local_c1
 
     @staticmethod
-    def _block_priority_score(
-        *,
-        block_area: int,
-        nearest_frontier_dist: float,
-        best_support_clearance: float,
-        analysis_diagonal: float,
-    ) -> float:
-        dist_norm = float(np.clip(nearest_frontier_dist / max(1.0, analysis_diagonal), 0.0, 1.0))
-        return float(
-            math.log1p(float(block_area))
-            + (0.25 * float(best_support_clearance))
-            - (0.35 * dist_norm)
-        )
-
-    @staticmethod
     def _support_stats(
         local_box_map: np.ndarray,
-    ) -> tuple[float, float]:
+    ) -> float:
         local_box = np.asarray(local_box_map, dtype=np.int8)
         known_mask = (local_box != INVISIBLE)
         known_count = int(np.count_nonzero(known_mask))
         if known_count <= 0:
-            return 0.0, 0.0
+            return 0.0
         obstacle_density = float(np.count_nonzero((local_box == OBSTACLE) & known_mask)) / float(known_count)
-        obstacle_density = float(np.clip(obstacle_density, 0.0, 1.0))
-        return float(1.0 - obstacle_density), obstacle_density
+        return float(np.clip(obstacle_density, 0.0, 1.0))
 
     @staticmethod
     def _empty_snapshot(analysis_box: AnalysisBox) -> SharedSemanticSnapshot:
         return SharedSemanticSnapshot(
             analysis_box=analysis_box,
             accessible_blocks=tuple(),
-            main_block_index=None,
             total_accessible_unknown_area=0,
-            top1_block_area_ratio=0.0,
-            scene_orderliness=1.0,
-            main_block_area=0.0,
-            main_block_entry_count=0.0,
-            nearest_main_entry_dist=float("nan"),
         )
 
     @staticmethod
@@ -656,7 +607,6 @@ class SharedSemanticLayer:
             for label in labels
         }
         agent_arr = cum_map.world_to_array(agent_state)
-        analysis_diagonal = math.hypot(float(max(1, analysis_box.shape[0])), float(max(1, analysis_box.shape[1])))
 
         frontier_records: dict[int, dict[str, object]] = {}
         for frontier_label in range(1, int(frontier_count) + 1):
@@ -695,7 +645,7 @@ class SharedSemanticLayer:
                 offset_r0=int(analysis_box.r0) + int(support_r0),
                 offset_c0=int(analysis_box.c0) + int(support_c0),
             )
-            support_clearance, support_complexity = self._support_stats(local_support_box)
+            support_obstacle_density = self._support_stats(local_support_box)
             support_geometry = SupportGeometry(
                 local_box_bounds=(
                     int(analysis_box.r0) + int(support_r0),
@@ -704,26 +654,19 @@ class SharedSemanticLayer:
                     int(analysis_box.c0) + int(support_c1),
                 ),
                 support_free_geometry=support_free_geometry,
-                support_area=int(np.count_nonzero(support_free_local)),
-                support_clearance=float(support_clearance),
-                support_complexity=float(support_complexity),
+                support_obstacle_density=float(support_obstacle_density),
             )
 
             frontier_anchor_rc = self._frontier_anchor_rc(frontier_geometry)
-            entry_dir = self._entry_direction(agent_arr, frontier_anchor_rc)
-            entry_dist = float(
-                math.hypot(
-                    float(int(frontier_anchor_rc[0]) - int(agent_arr[0])),
-                    float(int(frontier_anchor_rc[1]) - int(agent_arr[1])),
-                )
-            )
+            delta_r = float(int(frontier_anchor_rc[0]) - int(agent_arr[0]))
+            delta_c = float(int(frontier_anchor_rc[1]) - int(agent_arr[1]))
             frontier_records[int(frontier_label)] = {
                 "frontier_index": int(frontier_label) - 1,
                 "frontier_geometry": frontier_geometry,
                 "support_geometry": support_geometry,
                 "frontier_anchor_rc": tuple(int(v) for v in frontier_anchor_rc),
-                "entry_dir": tuple(float(v) for v in entry_dir),
-                "entry_dist": float(entry_dist),
+                "delta_r": float(delta_r),
+                "delta_c": float(delta_c),
                 "entry_width": float(frontier_geometry.count),
             }
 
@@ -756,21 +699,20 @@ class SharedSemanticLayer:
                             frontier_geometry=frontier_records[label]["frontier_geometry"],
                             support_geometry=frontier_records[label]["support_geometry"],
                             frontier_anchor_rc=frontier_records[label]["frontier_anchor_rc"],
-                            entry_dir=frontier_records[label]["entry_dir"],
-                            entry_dist=float(frontier_records[label]["entry_dist"]),
+                            delta_r=float(frontier_records[label]["delta_r"]),
+                            delta_c=float(frontier_records[label]["delta_c"]),
                             entry_width=float(frontier_records[label]["entry_width"]),
                         )
                         for label in frontier_labels_for_root
                     ),
                     key=lambda cluster: (
-                        float(cluster.entry_dist),
-                        -float(cluster.support_clearance),
                         int(cluster.frontier_index),
+                        int(cluster.frontier_anchor_rc[0]),
+                        int(cluster.frontier_anchor_rc[1]),
                     ),
                 )
             )
-            nearest_frontier_dist = min(float(cluster.entry_dist) for cluster in frontier_clusters)
-            best_support_clearance = max(float(cluster.support_clearance) for cluster in frontier_clusters)
+            nearest_frontier_dist = min(float(cluster.anchor_distance) for cluster in frontier_clusters)
             accessible_blocks.append(
                 UnknownBlock(
                     block_index=int(block_index),
@@ -780,53 +722,24 @@ class SharedSemanticLayer:
                     block_bbox_shape=self._bbox_shape_from_mask(block_geometry),
                     frontier_cluster_count=int(len(frontier_clusters)),
                     nearest_frontier_dist=float(nearest_frontier_dist),
-                    opportunity_score=self._block_priority_score(
-                        block_area=int(block_geometry.count),
-                        nearest_frontier_dist=float(nearest_frontier_dist),
-                        best_support_clearance=float(best_support_clearance),
-                        analysis_diagonal=float(analysis_diagonal),
-                    ),
                 )
             )
 
+        # Block ordering is only for stable tensor packing. It must not encode
+        # an expert preference over which block is more worthwhile to explore.
         accessible_blocks.sort(
             key=lambda block: (
-                -float(block.opportunity_score),
-                -int(block.block_area),
-                float(block.nearest_frontier_dist),
                 int(block.block_index),
+                int(block.rows[0]) if block.rows.size > 0 else int(analysis_box.r0),
+                int(block.cols[0]) if block.cols.size > 0 else int(analysis_box.c0),
             )
         )
 
         total_accessible_unknown_area = int(sum(block.block_area for block in accessible_blocks))
-        if total_accessible_unknown_area > 0 and len(accessible_blocks) > 0:
-            top1_block_area_ratio = float(accessible_blocks[0].block_area) / float(total_accessible_unknown_area)
-            area_entropy = _mask_entropy([int(block.block_area) for block in accessible_blocks])
-            max_entropy = math.log(float(len(accessible_blocks))) if len(accessible_blocks) > 1 else 1.0
-            scene_orderliness = 1.0 if len(accessible_blocks) <= 1 else float(1.0 - (area_entropy / max_entropy))
-            main_block = accessible_blocks[0]
-            main_block_index = int(main_block.block_index)
-            main_block_area = float(main_block.block_area)
-            main_block_entry_count = float(main_block.frontier_cluster_count)
-            nearest_main_entry_dist = float(main_block.nearest_frontier_dist)
-        else:
-            top1_block_area_ratio = 0.0
-            scene_orderliness = 1.0
-            main_block_index = None
-            main_block_area = 0.0
-            main_block_entry_count = 0.0
-            nearest_main_entry_dist = float("nan")
-
         snapshot = SharedSemanticSnapshot(
             analysis_box=analysis_box,
             accessible_blocks=tuple(accessible_blocks),
-            main_block_index=main_block_index,
             total_accessible_unknown_area=total_accessible_unknown_area,
-            top1_block_area_ratio=float(top1_block_area_ratio),
-            scene_orderliness=float(scene_orderliness),
-            main_block_area=float(main_block_area),
-            main_block_entry_count=float(main_block_entry_count),
-            nearest_main_entry_dist=float(nearest_main_entry_dist),
         )
         if self._timing_enabled:
             self.analysis_time += time.perf_counter() - t0
@@ -845,18 +758,15 @@ def build_semantic_visualization_payload(snapshot: SharedSemanticSnapshot) -> di
             "c1": int(snapshot.analysis_box.c1),
             "margin": int(snapshot.analysis_box.margin),
         },
-        "main_block_index": (
-            None if snapshot.main_block_index is None else int(snapshot.main_block_index)
-        ),
         "blocks": [
             {
                 "block_index": int(block.block_index),
                 "rows": np.asarray(block.rows, dtype=np.int32).copy(),
                 "cols": np.asarray(block.cols, dtype=np.int32).copy(),
                 "block_area": int(block.block_area),
+                "block_bbox_shape": tuple(float(v) for v in block.block_bbox_shape),
                 "frontier_cluster_count": int(block.frontier_cluster_count),
                 "nearest_frontier_dist": float(block.nearest_frontier_dist),
-                "opportunity_score": float(block.opportunity_score),
                 "frontier_clusters": [
                     {
                         "frontier_index": int(cluster.frontier_index),
@@ -866,11 +776,9 @@ def build_semantic_visualization_payload(snapshot: SharedSemanticSnapshot) -> di
                             int(cluster.frontier_anchor_rc[0]),
                             int(cluster.frontier_anchor_rc[1]),
                         ),
-                        "entry_dir": (
-                            float(cluster.entry_dir[0]),
-                            float(cluster.entry_dir[1]),
-                        ),
-                        "entry_dist": float(cluster.entry_dist),
+                        "delta_r": float(cluster.delta_r),
+                        "delta_c": float(cluster.delta_c),
+                        "anchor_distance": float(cluster.anchor_distance),
                         "entry_width": float(cluster.entry_width),
                         "support": {
                             "local_box": {
@@ -881,9 +789,7 @@ def build_semantic_visualization_payload(snapshot: SharedSemanticSnapshot) -> di
                             },
                             "free_rows": np.asarray(cluster.support_rows, dtype=np.int32).copy(),
                             "free_cols": np.asarray(cluster.support_cols, dtype=np.int32).copy(),
-                            "support_area": int(cluster.support_area),
-                            "support_clearance": float(cluster.support_clearance),
-                            "support_complexity": float(cluster.support_complexity),
+                            "support_obstacle_density": float(cluster.support_obstacle_density),
                         },
                     }
                     for cluster in block.frontier_clusters
