@@ -70,7 +70,7 @@ class TrainConfig:
     max_accessible_blocks: int = 16
     max_entries_per_block: int = 6
 
-    total_env_steps: int = 500_000
+    total_env_steps: int = 300_000
     warmup_steps: int = 4_000
     collect_steps_per_iter: int = 16
     learner_updates_per_iter: int = 2
@@ -1205,7 +1205,7 @@ def parse_args() -> TrainConfig:
         ),
     )
 
-    p.add_argument("--total-env-steps", type=int, default=500_000)
+    p.add_argument("--total-env-steps", type=int, default=300_000)
     p.add_argument("--warmup-steps", type=int, default=4_000)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--min-replay-size", type=int, default=4_000)
@@ -1550,7 +1550,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         obstacle_ratio=0.20,
         max_accessible_blocks=16,
         max_entries_per_block=6,
-        total_env_steps=500_000,
+        total_env_steps=300_000,
         warmup_steps=4_000,
         collect_steps_per_iter=16,
         learner_updates_per_iter=2,

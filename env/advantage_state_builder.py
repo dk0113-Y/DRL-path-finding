@@ -16,6 +16,7 @@ ADVANTAGE_CANVAS_CHANNELS = (
     "obstacle",
     "frontier_mask",
     "frontier_block_area_map",
+    "visit_count_log_norm",
 )
 ADVANTAGE_CANVAS_CHANNEL_COUNT = len(ADVANTAGE_CANVAS_CHANNELS)
 
@@ -23,6 +24,7 @@ ADVANTAGE_CANVAS_CHANNEL_COUNT = len(ADVANTAGE_CANVAS_CHANNELS)
 @dataclass(frozen=True)
 class AdvantageStateConfig:
     enable_timing: bool = False
+    visit_count_log_saturation: float = 8.0
 
 
 class AdvantageStateBuilder:
@@ -33,7 +35,11 @@ class AdvantageStateBuilder:
     so the advantage branch always reasons over the same local scale that the
     agent can currently observe. The canvas exposes every locally visible
     frontier cluster plus a projected block-area attribute on those frontier
-    cells, instead of a hand-crafted main/non-main split.
+    cells, plus a cumulative revisit-pressure channel derived from the
+    cumulative belief map visit counters. This revisit signal is deliberately
+    cumulative rather than recent-recency based, so the advantage branch can
+    distinguish pushing into fresh space from circling over established old
+    routes without introducing a short-horizon recency heuristic.
     """
 
     def __init__(self, config: Optional[AdvantageStateConfig] = None):
@@ -107,11 +113,11 @@ class AdvantageStateBuilder:
         local_shape = (int(cum_map.local_shape[0]), int(cum_map.local_shape[1]))
         canvas = self._canvas_buffer(local_shape)
         arr_rows, arr_cols, inside = self._local_index_arrays(cum_map, agent_state)
+        sampled_map = np.full(local_shape, INVISIBLE, dtype=np.int8)
+        sampled_visit = np.zeros(local_shape, dtype=np.float32)
         if np.any(inside):
-            sampled_map = np.full(local_shape, INVISIBLE, dtype=np.int8)
             sampled_map[inside] = cum_map.map[arr_rows[inside], arr_cols[inside]]
-        else:
-            sampled_map = np.full(local_shape, INVISIBLE, dtype=np.int8)
+            sampled_visit[inside] = cum_map.visit_count[arr_rows[inside], arr_cols[inside]].astype(np.float32)
 
         canvas[0] = (sampled_map == INVISIBLE)
         canvas[1] = (sampled_map == EMPTY)
@@ -134,6 +140,11 @@ class AdvantageStateBuilder:
                     agent_arr=agent_arr,
                     local_shape=local_shape,
                 )
+
+        revisit_count = np.maximum(sampled_visit - 1.0, 0.0).astype(np.float32, copy=False)
+        visit_log_denominator = float(np.log1p(max(1e-6, float(self.config.visit_count_log_saturation))))
+        visit_count_log_norm = np.log1p(revisit_count).astype(np.float32, copy=False) / max(1e-6, visit_log_denominator)
+        canvas[5] = np.clip(visit_count_log_norm, 0.0, 1.0).astype(np.float32, copy=False)
 
         window_area = float(max(1, local_shape[0] * local_shape[1]))
         frontier_visible = np.count_nonzero(canvas[3])

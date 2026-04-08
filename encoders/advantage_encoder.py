@@ -40,7 +40,10 @@ class AdvantageCanvasEncoder(nn.Module):
     Encode the local decision canvas into one action-specific state per move.
 
     The same semantic canvas is shared across all actions, but each action reads
-    it through its own directional spatial template and landing-cell view.
+    it through its own directional spatial template and landing-cell view. The
+    canvas now includes a cumulative revisit-pressure channel in addition to the
+    occupancy/frontier geometry channels, but the encoder architecture itself
+    stays unchanged.
     """
 
     def __init__(self, cfg: Optional[AdvantageEncoderConfig] = None):
@@ -147,5 +150,6 @@ class AdvantageCanvasEncoder(nn.Module):
         aux: Dict[str, torch.Tensor] = {
             "advantage_canvas_frontier_mean": canvas[:, 3].mean(dim=(1, 2)),
             "advantage_canvas_frontier_block_area_mean": canvas[:, 4].mean(dim=(1, 2)),
+            "advantage_canvas_visit_pressure_mean": canvas[:, 5].mean(dim=(1, 2)),
         }
         return action_state, aux

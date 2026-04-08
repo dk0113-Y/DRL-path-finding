@@ -66,9 +66,10 @@ class ExplorationQNetwork(nn.Module):
     Shared-semantic dueling exploration network.
 
     Data flow:
-      advantage_canvas -> advantage encoder -> per-action advantage states
-      value block-tree (6D block summary + 4D frontier entries) -> value encoder -> state value context
-      {value_state, advantage_state} -> dueling head -> Q(s, a)
+       advantage_canvas (local occupancy/frontier canvas + revisit pressure)
+         -> advantage encoder -> per-action advantage states
+       value block-tree (6D block summary + 4D frontier entries) -> value encoder -> state value context
+       {value_state, advantage_state} -> dueling head -> Q(s, a)
     """
 
     def __init__(self, cfg: Optional[ExplorationQConfig] = None):
