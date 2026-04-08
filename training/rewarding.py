@@ -11,10 +11,23 @@ REWARD_BREAKDOWN_FIELDS: tuple[str, ...] = (
     "timeout_penalty_sum",
     "terminal_bonus_sum",
 )
+REWARD_EVENT_SUMMARY_FIELDS: tuple[str, ...] = (
+    "delta_empty_sum",
+    "delta_obstacle_sum",
+    "weighted_info_gain_sum",
+    "recent_revisit_count",
+    "stall_trigger_count",
+    "zero_info_step_count",
+    "timeout_flag",
+)
 
 
 def zero_reward_breakdown() -> dict[str, float]:
     return {field: 0.0 for field in REWARD_BREAKDOWN_FIELDS}
+
+
+def zero_reward_event_summary() -> dict[str, float]:
+    return {field: 0.0 for field in REWARD_EVENT_SUMMARY_FIELDS}
 
 
 def add_reward_breakdown(target: dict[str, float], delta: dict[str, float]) -> None:

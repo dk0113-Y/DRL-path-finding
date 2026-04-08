@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 Offline monitoring-plot generation.
 
-This module intentionally stays out of the training hot path. It only reads CSV
-logs and writes PNGs when generate_all_plots(run_dir) is called explicitly by
+This module stays out of the training hot path. It only reads CSV logs and
+writes PNG dashboards when generate_all_plots(run_dir) is called explicitly by
 the training script or by a post-run utility.
 """
 
@@ -13,70 +13,244 @@ import math
 from pathlib import Path
 
 
-TRAIN_PLOT_COLUMNS: dict[str, str] = {
-    "replay_size": "train_replay_size.png",
-    "epsilon": "train_epsilon.png",
-    "loss": "train_loss.png",
-    "q_mean": "train_q_mean.png",
-    "target_q_mean": "train_target_q_mean.png",
-    "td_abs_mean": "train_td_abs_mean.png",
-    "grad_norm": "train_grad_norm.png",
-    "learner_steps": "train_learner_steps.png",
-    "recent_mean_reward": "train_recent_mean_reward.png",
-    "recent_mean_coverage": "train_recent_mean_coverage.png",
-    "recent_success_rate": "train_recent_success_rate.png",
-    "recent_mean_episode_length": "train_recent_mean_episode_length.png",
-    "recent_mean_repeat_visit_ratio": "train_recent_mean_repeat_visit_ratio.png",
-    "recent_accessible_block_count": "train_recent_accessible_block_count.png",
-    "recent_total_accessible_unknown_area": "train_recent_total_accessible_unknown_area.png",
-    "recent_total_frontier_cluster_count": "train_recent_total_frontier_cluster_count.png",
-    "recent_mean_block_area": "train_recent_mean_block_area.png",
-}
+_TRAIN_STEPS_CSV = "train_steps.csv"
+_TRAIN_EPISODES_CSV = "train_episodes.csv"
+_EVAL_METRICS_CSV = "eval_metrics.csv"
 
-TRAIN_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
-    "info_reward_sum",
-    "step_penalty_sum",
-    "recent_revisit_penalty_sum",
-    "stall_penalty_sum",
-    "timeout_penalty_sum",
-    "terminal_bonus_sum",
-)
-TRAIN_REWARD_BREAKDOWN_FILENAME = "train_reward_breakdown.png"
-TRAIN_EPISODE_LENGTH_FILENAME = "train_episode_length_vs_episode_idx.png"
-TRAIN_LOCAL_ENTRY_COMPETITION_COLUMNS: tuple[str, str] = (
-    "recent_local_frontier_coverage",
-    "recent_local_frontier_block_area_mean",
-)
-TRAIN_LOCAL_ENTRY_COMPETITION_FILENAME = "train_local_frontier_summary.png"
-TRAIN_LOCAL_ENTRY_COMPETITION_TITLE = "train local frontier summary"
 
-EVAL_PLOT_COLUMNS: dict[str, str] = {
-    "eval_mean_reward": "eval_mean_reward.png",
-    "eval_mean_coverage": "eval_mean_coverage.png",
-    "eval_success_rate": "eval_success_rate.png",
-    "eval_mean_repeat_visit_ratio": "eval_mean_repeat_visit_ratio.png",
-    "eval_mean_episode_length": "eval_mean_episode_length.png",
-    "eval_mean_accessible_block_count": "eval_mean_accessible_block_count.png",
-    "eval_mean_total_accessible_unknown_area": "eval_mean_total_accessible_unknown_area.png",
-    "eval_mean_total_frontier_cluster_count": "eval_mean_total_frontier_cluster_count.png",
-    "eval_mean_mean_block_area": "eval_mean_mean_block_area.png",
-}
+TRAIN_LEARNING_STATE_PANELS = (
+    {"title": "Replay size", "y_label": "replay size", "series": (("replay_size", "replay size"),)},
+    {"title": "Exploration epsilon", "y_label": "epsilon", "series": (("epsilon", "epsilon"),)},
+    {"title": "Learner steps", "y_label": "learner steps", "series": (("learner_steps", "learner steps"),)},
+)
+TRAIN_VALUE_LEARNING_PANELS = (
+    {"title": "Value loss", "y_label": "loss", "series": (("loss", "loss"),)},
+    {"title": "TD magnitude", "y_label": "td abs mean", "series": (("td_abs_mean", "td abs mean"),)},
+    {"title": "Gradient norm", "y_label": "grad norm", "series": (("grad_norm", "grad norm"),)},
+    {
+        "title": "Q vs target Q",
+        "y_label": "q value",
+        "series": (("q_mean", "q mean"), ("target_q_mean", "target q mean")),
+    },
+)
+TRAIN_POLICY_PERFORMANCE_PANELS = (
+    {"title": "Mean reward (recent)", "y_label": "reward", "series": (("recent_mean_reward", "mean reward"),)},
+    {"title": "Coverage (recent)", "y_label": "coverage", "series": (("recent_mean_coverage", "coverage"),)},
+    {"title": "Success rate (recent)", "y_label": "success rate", "series": (("recent_success_rate", "success rate"),)},
+    {"title": "Episode length (recent)", "y_label": "steps", "series": (("recent_mean_episode_length", "episode length"),)},
+    {
+        "title": "Repeat-visit ratio (recent)",
+        "y_label": "ratio",
+        "series": (("recent_mean_repeat_visit_ratio", "repeat-visit ratio"),),
+    },
+)
+TRAIN_SEMANTIC_SUMMARY_PANELS = (
+    {
+        "title": "Accessible block count (recent)",
+        "y_label": "blocks",
+        "series": (("recent_accessible_block_count", "accessible blocks"),),
+    },
+    {
+        "title": "Accessible unknown area (recent)",
+        "y_label": "cells",
+        "series": (("recent_total_accessible_unknown_area", "unknown area"),),
+    },
+    {
+        "title": "Frontier cluster count (recent)",
+        "y_label": "clusters",
+        "series": (("recent_total_frontier_cluster_count", "frontier clusters"),),
+    },
+    {
+        "title": "Mean block area (recent)",
+        "y_label": "cells",
+        "series": (("recent_mean_block_area", "mean block area"),),
+    },
+    {
+        "title": "Local frontier coverage (recent)",
+        "y_label": "coverage",
+        "series": (("recent_local_frontier_coverage", "local frontier coverage"),),
+    },
+    {
+        "title": "Local frontier block-area mean (recent)",
+        "y_label": "area",
+        "series": (("recent_local_frontier_block_area_mean", "local frontier block-area mean"),),
+    },
+)
+TRAIN_REWARD_BREAKDOWN_PANELS = (
+    {"title": "Information reward", "y_label": "reward", "series": (("info_reward_sum", "info reward"),)},
+    {"title": "Step penalty", "y_label": "penalty", "series": (("step_penalty_sum", "step penalty"),)},
+    {
+        "title": "Revisit penalty",
+        "y_label": "penalty",
+        "series": (("recent_revisit_penalty_sum", "revisit penalty"),),
+    },
+    {"title": "Stall penalty", "y_label": "penalty", "series": (("stall_penalty_sum", "stall penalty"),)},
+    {"title": "Timeout penalty", "y_label": "penalty", "series": (("timeout_penalty_sum", "timeout penalty"),)},
+    {"title": "Terminal bonus", "y_label": "reward", "series": (("terminal_bonus_sum", "terminal bonus"),)},
+)
+TRAIN_REWARD_EVENT_PANELS = (
+    {"title": "Revealed free cells", "y_label": "count", "series": (("delta_empty_sum", "free cells"),)},
+    {
+        "title": "Revealed obstacle cells",
+        "y_label": "count",
+        "series": (("delta_obstacle_sum", "obstacle cells"),),
+    },
+    {
+        "title": "Weighted information gain",
+        "y_label": "gain",
+        "series": (("weighted_info_gain_sum", "weighted info gain"),),
+    },
+    {"title": "Recent revisit count", "y_label": "count", "series": (("recent_revisit_count", "recent revisit"),)},
+    {"title": "Stall trigger count", "y_label": "count", "series": (("stall_trigger_count", "stall trigger"),)},
+    {"title": "Zero-info step count", "y_label": "count", "series": (("zero_info_step_count", "zero-info steps"),)},
+    {"title": "Timeout indicator", "y_label": "flag", "series": (("timeout_flag", "timeout flag"),)},
+)
 
-EVAL_REWARD_BREAKDOWN_COLUMNS: tuple[str, ...] = (
-    "eval_mean_info_reward_sum",
-    "eval_mean_step_penalty_sum",
-    "eval_mean_recent_revisit_penalty_sum",
-    "eval_mean_stall_penalty_sum",
-    "eval_mean_timeout_penalty_sum",
-    "eval_mean_terminal_bonus_sum",
+EVAL_POLICY_PERFORMANCE_PANELS = (
+    {"title": "Mean reward", "y_label": "reward", "series": (("eval_mean_reward", "mean reward"),)},
+    {"title": "Mean coverage", "y_label": "coverage", "series": (("eval_mean_coverage", "coverage"),)},
+    {"title": "Success rate", "y_label": "success rate", "series": (("eval_success_rate", "success rate"),)},
+    {"title": "Mean episode length", "y_label": "steps", "series": (("eval_mean_episode_length", "episode length"),)},
+    {
+        "title": "Mean repeat-visit ratio",
+        "y_label": "ratio",
+        "series": (("eval_mean_repeat_visit_ratio", "repeat-visit ratio"),),
+    },
 )
-EVAL_REWARD_BREAKDOWN_FILENAME = "eval_reward_breakdown.png"
-EVAL_LOCAL_ENTRY_COMPETITION_COLUMNS: tuple[str, str] = (
-    "eval_mean_local_frontier_coverage",
-    "eval_mean_local_frontier_block_area_mean",
+EVAL_SEMANTIC_SUMMARY_PANELS = (
+    {
+        "title": "Accessible block count",
+        "y_label": "blocks",
+        "series": (("eval_mean_accessible_block_count", "accessible blocks"),),
+    },
+    {
+        "title": "Accessible unknown area",
+        "y_label": "cells",
+        "series": (("eval_mean_total_accessible_unknown_area", "unknown area"),),
+    },
+    {
+        "title": "Frontier cluster count",
+        "y_label": "clusters",
+        "series": (("eval_mean_total_frontier_cluster_count", "frontier clusters"),),
+    },
+    {
+        "title": "Mean block area",
+        "y_label": "cells",
+        "series": (("eval_mean_mean_block_area", "mean block area"),),
+    },
+    {
+        "title": "Local frontier coverage",
+        "y_label": "coverage",
+        "series": (("eval_mean_local_frontier_coverage", "local frontier coverage"),),
+    },
+    {
+        "title": "Local frontier block-area mean",
+        "y_label": "area",
+        "series": (("eval_mean_local_frontier_block_area_mean", "local frontier block-area mean"),),
+    },
 )
-EVAL_LOCAL_ENTRY_COMPETITION_FILENAME = "eval_local_frontier_summary.png"
-EVAL_LOCAL_ENTRY_COMPETITION_TITLE = "eval local frontier summary"
+EVAL_REWARD_BREAKDOWN_PANELS = (
+    {"title": "Information reward", "y_label": "reward", "series": (("eval_mean_info_reward_sum", "info reward"),)},
+    {"title": "Step penalty", "y_label": "penalty", "series": (("eval_mean_step_penalty_sum", "step penalty"),)},
+    {
+        "title": "Revisit penalty",
+        "y_label": "penalty",
+        "series": (("eval_mean_recent_revisit_penalty_sum", "revisit penalty"),),
+    },
+    {"title": "Stall penalty", "y_label": "penalty", "series": (("eval_mean_stall_penalty_sum", "stall penalty"),)},
+    {"title": "Timeout penalty", "y_label": "penalty", "series": (("eval_mean_timeout_penalty_sum", "timeout penalty"),)},
+    {"title": "Terminal bonus", "y_label": "reward", "series": (("eval_mean_terminal_bonus_sum", "terminal bonus"),)},
+)
+EVAL_REWARD_EVENT_PANELS = (
+    {"title": "Revealed free cells", "y_label": "count", "series": (("eval_mean_delta_empty_sum", "free cells"),)},
+    {
+        "title": "Revealed obstacle cells",
+        "y_label": "count",
+        "series": (("eval_mean_delta_obstacle_sum", "obstacle cells"),),
+    },
+    {
+        "title": "Weighted information gain",
+        "y_label": "gain",
+        "series": (("eval_mean_weighted_info_gain_sum", "weighted info gain"),),
+    },
+    {"title": "Recent revisit count", "y_label": "count", "series": (("eval_mean_recent_revisit_count", "recent revisit"),)},
+    {"title": "Stall trigger count", "y_label": "count", "series": (("eval_mean_stall_trigger_count", "stall trigger"),)},
+    {"title": "Zero-info step count", "y_label": "count", "series": (("eval_mean_zero_info_step_count", "zero-info steps"),)},
+    {"title": "Timeout indicator", "y_label": "flag", "series": (("eval_mean_timeout_flag", "timeout flag"),)},
+)
+
+_DASHBOARD_SPECS = (
+    {
+        "csv_name": _TRAIN_STEPS_CSV,
+        "filename": "train_learning_state.png",
+        "title": "Train learning state",
+        "panels": TRAIN_LEARNING_STATE_PANELS,
+        "ncols": 2,
+    },
+    {
+        "csv_name": _TRAIN_STEPS_CSV,
+        "filename": "train_value_learning.png",
+        "title": "Train value learning",
+        "panels": TRAIN_VALUE_LEARNING_PANELS,
+        "ncols": 2,
+    },
+    {
+        "csv_name": _TRAIN_STEPS_CSV,
+        "filename": "train_policy_performance.png",
+        "title": "Train policy performance",
+        "panels": TRAIN_POLICY_PERFORMANCE_PANELS,
+        "ncols": 2,
+    },
+    {
+        "csv_name": _TRAIN_STEPS_CSV,
+        "filename": "train_semantic_summary.png",
+        "title": "Train semantic summary",
+        "panels": TRAIN_SEMANTIC_SUMMARY_PANELS,
+        "ncols": 2,
+    },
+    {
+        "csv_name": _TRAIN_EPISODES_CSV,
+        "filename": "train_reward_breakdown.png",
+        "title": "Train reward breakdown",
+        "panels": TRAIN_REWARD_BREAKDOWN_PANELS,
+        "ncols": 3,
+    },
+    {
+        "csv_name": _TRAIN_EPISODES_CSV,
+        "filename": "train_reward_event_summary.png",
+        "title": "Train reward event summary",
+        "panels": TRAIN_REWARD_EVENT_PANELS,
+        "ncols": 3,
+    },
+    {
+        "csv_name": _EVAL_METRICS_CSV,
+        "filename": "eval_policy_performance.png",
+        "title": "Eval policy performance",
+        "panels": EVAL_POLICY_PERFORMANCE_PANELS,
+        "ncols": 2,
+    },
+    {
+        "csv_name": _EVAL_METRICS_CSV,
+        "filename": "eval_semantic_summary.png",
+        "title": "Eval semantic summary",
+        "panels": EVAL_SEMANTIC_SUMMARY_PANELS,
+        "ncols": 2,
+    },
+    {
+        "csv_name": _EVAL_METRICS_CSV,
+        "filename": "eval_reward_breakdown.png",
+        "title": "Eval reward breakdown",
+        "panels": EVAL_REWARD_BREAKDOWN_PANELS,
+        "ncols": 3,
+    },
+    {
+        "csv_name": _EVAL_METRICS_CSV,
+        "filename": "eval_reward_event_summary.png",
+        "title": "Eval reward event summary",
+        "panels": EVAL_REWARD_EVENT_PANELS,
+        "ncols": 3,
+    },
+)
 
 
 def _warn(message: str) -> None:
@@ -110,7 +284,7 @@ def _load_csv_rows(csv_path: Path) -> list[dict[str, str]]:
         _warn(f"failed to read {csv_path}: {exc}")
         return []
 
-    if csv_path.name == "eval_metrics.csv":
+    if csv_path.name == _EVAL_METRICS_CSV:
         rows = [row for row in rows if str(row.get("tag", "")).strip() != "final_probe"]
 
     if len(rows) <= 0:
@@ -135,105 +309,86 @@ def _extract_xy(rows: list[dict[str, str]], y_column: str) -> tuple[list[float],
     if len(rows) <= 0 or y_column not in rows[0]:
         return None
 
-    use_env_steps = "env_steps" in rows[0]
+    if "env_steps" in rows[0]:
+        x_column = "env_steps"
+    elif "episode_idx" in rows[0]:
+        x_column = "episode_idx"
+    else:
+        x_column = ""
+
     xs: list[float] = []
     ys: list[float] = []
-
-    for idx, row in enumerate(rows):
+    for row_idx, row in enumerate(rows):
         y = _try_float(row.get(y_column))
-        if y is None:
+        if y is None or not math.isfinite(y):
             continue
-
-        if use_env_steps:
-            x = _try_float(row.get("env_steps"))
-            if x is None:
-                x = float(idx)
+        if x_column == "":
+            x = float(row_idx)
         else:
-            x = float(idx)
-
-        xs.append(x)
-        ys.append(y)
+            x_val = _try_float(row.get(x_column))
+            if x_val is None or not math.isfinite(x_val):
+                continue
+            x = x_val
+        xs.append(float(x))
+        ys.append(float(y))
 
     if len(xs) <= 0:
         return None
-    if not any(math.isfinite(y) for y in ys):
-        return None
-    return xs, ys, ("env_steps" if use_env_steps else "index")
+    return xs, ys, (x_column if x_column else "index")
 
 
-def _rolling_mean(values: list[float], window: int) -> list[float]:
-    if window <= 1 or len(values) <= 0:
-        return list(values)
-
-    smoothed: list[float] = []
-    running_sum = 0.0
-    for idx, value in enumerate(values):
-        running_sum += value
-        if idx >= window:
-            running_sum -= values[idx - window]
-        count = min(idx + 1, window)
-        smoothed.append(running_sum / float(count))
-    return smoothed
-
-
-def _normalize_window(window: int, length: int) -> int:
-    if length <= 1:
+def _adaptive_smoothing_window(series_len: int, *, fraction: float, min_window: int, max_window: int) -> int:
+    if series_len <= 1:
         return 1
-    window_use = max(1, int(window))
-    max_window = int(length) if (int(length) % 2 == 1) else int(length) - 1
-    if max_window <= 1:
-        return 1
-    window_use = min(window_use, max_window)
-    if (window_use % 2) == 0:
-        window_use += 1 if window_use < max_window else -1
-    return max(1, window_use)
+    window = int(round(series_len * float(fraction)))
+    window = max(int(min_window), min(int(max_window), window))
+    window = min(window, int(series_len))
+    if window % 2 == 0:
+        window = max(1, window - 1)
+    return max(1, window)
 
 
-def _centered_rolling_mean(values: list[float], window: int) -> list[float]:
-    if len(values) <= 0:
+def _metric_smoothing_window(csv_path: Path, y_column: str, series_len: int) -> int:
+    if csv_path.name == _TRAIN_STEPS_CSV:
+        if y_column == "loss":
+            return _adaptive_smoothing_window(series_len, fraction=0.12, min_window=21, max_window=61)
+        return _adaptive_smoothing_window(series_len, fraction=0.08, min_window=15, max_window=41)
+    if csv_path.name == _EVAL_METRICS_CSV:
+        return _adaptive_smoothing_window(series_len, fraction=0.25, min_window=3, max_window=9)
+    if csv_path.name == _TRAIN_EPISODES_CSV:
+        return _adaptive_smoothing_window(series_len, fraction=0.08, min_window=15, max_window=51)
+    return _adaptive_smoothing_window(series_len, fraction=0.10, min_window=5, max_window=31)
+
+
+def _raw_marker_style(csv_path: Path) -> tuple[float, float]:
+    if csv_path.name == _TRAIN_STEPS_CSV:
+        return 10.0, 0.24
+    if csv_path.name == _EVAL_METRICS_CSV:
+        return 22.0, 0.34
+    if csv_path.name == _TRAIN_EPISODES_CSV:
+        return 10.0, 0.22
+    return 12.0, 0.25
+
+
+def _centered_rolling_mean(values: list[float], *, window: int) -> list[float]:
+    n = len(values)
+    if n <= 0:
         return []
-    window_use = _normalize_window(window, len(values))
-    if window_use <= 1:
+    if window <= 1 or n <= 2:
         return list(values)
 
-    half = window_use // 2
+    half = window // 2
+    out: list[float] = [0.0] * n
     prefix = [0.0]
     for value in values:
         prefix.append(prefix[-1] + float(value))
 
-    smoothed: list[float] = []
-    for idx in range(len(values)):
-        start = max(0, idx - half)
-        end = min(len(values), idx + half + 1)
-        count = max(1, end - start)
-        smoothed.append((prefix[end] - prefix[start]) / float(count))
-    return smoothed
-
-
-def _adaptive_smoothing_window(
-    series_len: int,
-    *,
-    fraction: float,
-    min_window: int,
-    max_window: int,
-) -> int:
-    if series_len <= 1:
-        return 1
-    estimated = int(round(float(series_len) * float(fraction)))
-    return _normalize_window(max(min_window, min(max_window, estimated)), series_len)
-
-
-def _metric_smoothing_window(csv_path: Path, y_column: str, series_len: int) -> int:
-    name = csv_path.name
-    if name == "train_steps.csv":
-        if y_column == "loss":
-            return _adaptive_smoothing_window(series_len, fraction=0.12, min_window=21, max_window=61)
-        return _adaptive_smoothing_window(series_len, fraction=0.08, min_window=15, max_window=41)
-    if name == "eval_metrics.csv":
-        return _adaptive_smoothing_window(series_len, fraction=0.25, min_window=3, max_window=9)
-    if name == "train_episodes.csv":
-        return _adaptive_smoothing_window(series_len, fraction=0.08, min_window=15, max_window=51)
-    return _adaptive_smoothing_window(series_len, fraction=0.10, min_window=5, max_window=31)
+    for idx in range(n):
+        lo = max(0, idx - half)
+        hi = min(n, idx + half + 1)
+        denom = max(1, hi - lo)
+        out[idx] = (prefix[hi] - prefix[lo]) / float(denom)
+    return out
 
 
 def _plot_raw_and_smooth(
@@ -242,9 +397,8 @@ def _plot_raw_and_smooth(
     ys: list[float],
     *,
     smooth_window: int,
-    raw_marker_size: float = 10.0,
-    raw_alpha: float = 0.24,
-    color=None,
+    raw_marker_size: float,
+    raw_alpha: float,
     label: str | None = None,
 ) -> None:
     smooth = _centered_rolling_mean(ys, window=smooth_window)
@@ -253,7 +407,6 @@ def _plot_raw_and_smooth(
         smooth,
         linewidth=2.3,
         alpha=0.95,
-        color=color,
         label=label,
         zorder=3,
     )[0]
@@ -268,78 +421,14 @@ def _plot_raw_and_smooth(
     )
 
 
-def _raw_marker_style(csv_path: Path) -> tuple[float, float]:
-    name = csv_path.name
-    if name == "eval_metrics.csv":
-        return 24.0, 0.34
-    if name == "train_steps.csv":
-        return 12.0, 0.24
-    if name == "train_episodes.csv":
-        return 10.0, 0.18
-    return 12.0, 0.22
-
-
-def _plot_metric_csv(
+def _plot_dashboard_csv(
     *,
     csv_path: Path,
     plots_dir: Path,
-    columns_to_filenames: dict[str, str],
-) -> list[Path]:
-    rows = _load_csv_rows(csv_path)
-    if len(rows) <= 0:
-        return []
-
-    plt = _load_matplotlib_pyplot()
-    if plt is None:
-        return []
-
-    generated: list[Path] = []
-    for y_column, filename in columns_to_filenames.items():
-        xy = _extract_xy(rows, y_column)
-        if xy is None:
-            if y_column not in rows[0]:
-                _warn(f"missing column '{y_column}' in {csv_path.name}, skip")
-            continue
-
-        xs, ys, x_label = xy
-        fig = None
-        try:
-            fig, ax = plt.subplots(figsize=(7.0, 4.0))
-            smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
-            raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
-            _plot_raw_and_smooth(
-                ax,
-                xs,
-                ys,
-                smooth_window=smooth_window,
-                raw_marker_size=raw_marker_size,
-                raw_alpha=raw_alpha,
-            )
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(y_column)
-            ax.set_title(y_column)
-            ax.grid(True, alpha=0.3)
-            fig.tight_layout()
-
-            out_path = plots_dir / filename
-            fig.savefig(out_path, dpi=150)
-            generated.append(out_path)
-        except Exception as exc:
-            _warn(f"failed to plot {y_column} from {csv_path.name}: {exc}")
-        finally:
-            if fig is not None:
-                plt.close(fig)
-
-    return generated
-
-
-def _plot_multi_series_csv(
-    *,
-    csv_path: Path,
-    plots_dir: Path,
-    columns: tuple[str, ...],
     filename: str,
     title: str,
+    panels: tuple[dict[str, object], ...],
+    ncols: int,
 ) -> list[Path]:
     rows = _load_csv_rows(csv_path)
     if len(rows) <= 0:
@@ -349,206 +438,87 @@ def _plot_multi_series_csv(
     if plt is None:
         return []
 
-    fig = None
-    generated: list[Path] = []
-    try:
-        valid_series: list[tuple[str, list[float], list[float], str]] = []
-        for y_column in columns:
-            xy = _extract_xy(rows, y_column)
-            if xy is None:
-                if y_column not in rows[0]:
-                    _warn(f"missing column '{y_column}' in {csv_path.name}, skip")
+    panel_payloads: list[dict[str, object]] = []
+    for panel in panels:
+        series_payloads = []
+        for column, label in tuple(panel.get("series", ())):
+            extracted = _extract_xy(rows, str(column))
+            if extracted is None:
                 continue
-            xs, ys, x_label = xy
-            valid_series.append((y_column, xs, ys, x_label))
-
-        plotted = len(valid_series)
-        if plotted <= 0:
-            _warn(f"no plottable series in {csv_path.name} for {title}")
-            return []
-
-        ncols = 2
-        nrows = int(math.ceil(plotted / float(ncols)))
-        fig, axes = plt.subplots(
-            nrows=nrows,
-            ncols=ncols,
-            figsize=(11.0, 3.2 * nrows),
-            squeeze=False,
-            sharex=False,
-        )
-
-        for idx, (y_column, xs, ys, x_label) in enumerate(valid_series):
-            ax = axes[idx // ncols][idx % ncols]
-            smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
-            raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
-            _plot_raw_and_smooth(
-                ax,
-                xs,
-                ys,
-                smooth_window=smooth_window,
-                raw_marker_size=raw_marker_size,
-                raw_alpha=raw_alpha,
+            xs, ys, x_label = extracted
+            if len(xs) <= 0:
+                continue
+            series_payloads.append(
+                {
+                    "column": str(column),
+                    "label": str(label),
+                    "xs": xs,
+                    "ys": ys,
+                    "x_label": x_label,
+                }
             )
-            ax.set_title(y_column)
-            ax.set_xlabel(x_label)
-            ax.set_ylabel("value")
-            ax.grid(True, alpha=0.3)
-
-        for idx in range(plotted, nrows * ncols):
-            axes[idx // ncols][idx % ncols].axis("off")
-
-        fig.suptitle(title)
-        fig.tight_layout()
-        fig.subplots_adjust(top=0.92)
-
-        out_path = plots_dir / filename
-        fig.savefig(out_path, dpi=150)
-        generated.append(out_path)
-    except Exception as exc:
-        _warn(f"failed to plot multi-series chart from {csv_path.name}: {exc}")
-    finally:
-        if fig is not None:
-            plt.close(fig)
-
-    return generated
-
-
-def _plot_competing_series_csv(
-    *,
-    csv_path: Path,
-    plots_dir: Path,
-    columns: tuple[str, str],
-    labels: tuple[str, str],
-    filename: str,
-    title: str,
-) -> list[Path]:
-    rows = _load_csv_rows(csv_path)
-    if len(rows) <= 0:
-        return []
-
-    plt = _load_matplotlib_pyplot()
-    if plt is None:
-        return []
-
-    valid_series: list[tuple[str, str, list[float], list[float], str]] = []
-    for y_column, label in zip(columns, labels):
-        xy = _extract_xy(rows, y_column)
-        if xy is None:
-            if y_column not in rows[0]:
-                _warn(f"missing column '{y_column}' in {csv_path.name}, skip")
-            continue
-        xs, ys, x_label = xy
-        valid_series.append((y_column, label, xs, ys, x_label))
-
-    if len(valid_series) <= 0:
-        _warn(f"no plottable series in {csv_path.name} for {title}")
-        return []
-
-    fig = None
-    generated: list[Path] = []
-    try:
-        fig, ax = plt.subplots(figsize=(7.4, 4.2))
-        raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
-        palette = ("tab:red", "tab:blue")
-        x_label = valid_series[0][4]
-
-        for idx, (y_column, label, xs, ys, _) in enumerate(valid_series):
-            smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
-            _plot_raw_and_smooth(
-                ax,
-                xs,
-                ys,
-                smooth_window=smooth_window,
-                raw_marker_size=raw_marker_size,
-                raw_alpha=raw_alpha,
-                color=palette[idx % len(palette)],
-                label=label,
+        if len(series_payloads) > 0:
+            panel_payloads.append(
+                {
+                    "title": str(panel.get("title", "")),
+                    "y_label": str(panel.get("y_label", "")),
+                    "series": series_payloads,
+                }
             )
 
+    if len(panel_payloads) <= 0:
+        _warn(f"no plottable panels in {csv_path.name} for {filename}")
+        return []
+
+    ncols = max(1, min(int(ncols), len(panel_payloads)))
+    nrows = int(math.ceil(len(panel_payloads) / float(ncols)))
+    fig_w = max(7.0, float(ncols) * 4.8)
+    fig_h = max(4.2, float(nrows) * 3.6)
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(fig_w, fig_h), squeeze=False)
+    raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
+
+    for idx, panel_payload in enumerate(panel_payloads):
+        ax = axes[idx // ncols][idx % ncols]
+        series_payloads = panel_payload["series"]
+        x_label = str(series_payloads[0]["x_label"])
+        for series_payload in series_payloads:
+            _plot_raw_and_smooth(
+                ax,
+                list(series_payload["xs"]),
+                list(series_payload["ys"]),
+                smooth_window=_metric_smoothing_window(
+                    csv_path,
+                    str(series_payload["column"]),
+                    len(series_payload["ys"]),
+                ),
+                raw_marker_size=raw_marker_size,
+                raw_alpha=raw_alpha,
+                label=(str(series_payload["label"]) if len(series_payloads) > 1 else None),
+            )
+        ax.set_title(str(panel_payload["title"]))
         ax.set_xlabel(x_label)
-        ax.set_ylabel("coverage")
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc="best")
-        fig.tight_layout()
+        ax.set_ylabel(str(panel_payload["y_label"]))
+        ax.grid(True, linestyle=":", linewidth=0.8, alpha=0.6)
+        if len(series_payloads) > 1:
+            ax.legend(loc="best")
 
-        out_path = plots_dir / filename
-        fig.savefig(out_path, dpi=150)
-        generated.append(out_path)
-    except Exception as exc:
-        _warn(f"failed to plot competing-series chart from {csv_path.name}: {exc}")
-    finally:
-        if fig is not None:
-            plt.close(fig)
+    for idx in range(len(panel_payloads), nrows * ncols):
+        axes[idx // ncols][idx % ncols].axis("off")
 
-    return generated
+    fig.suptitle(title)
+    fig.subplots_adjust(top=0.90)
+    fig.tight_layout()
 
-
-def _plot_xy_csv(
-    *,
-    csv_path: Path,
-    plots_dir: Path,
-    x_column: str,
-    y_column: str,
-    filename: str,
-    title: str,
-) -> list[Path]:
-    rows = _load_csv_rows(csv_path)
-    if len(rows) <= 0:
-        return []
-    if x_column not in rows[0] or y_column not in rows[0]:
-        missing = x_column if x_column not in rows[0] else y_column
-        _warn(f"missing column '{missing}' in {csv_path.name}, skip")
-        return []
-
-    xs: list[float] = []
-    ys: list[float] = []
-    for row in rows:
-        x = _try_float(row.get(x_column))
-        y = _try_float(row.get(y_column))
-        if x is None or y is None:
-            continue
-        xs.append(x)
-        ys.append(y)
-
-    if len(xs) <= 0 or not any(math.isfinite(y) for y in ys):
-        _warn(f"no plottable rows for {y_column} vs {x_column} in {csv_path.name}")
-        return []
-
-    plt = _load_matplotlib_pyplot()
-    if plt is None:
-        return []
-
-    fig = None
-    generated: list[Path] = []
+    out_path = plots_dir / filename
     try:
-        fig, ax = plt.subplots(figsize=(7.0, 4.0))
-        smooth_window = _metric_smoothing_window(csv_path, y_column, len(ys))
-        raw_marker_size, raw_alpha = _raw_marker_style(csv_path)
-        _plot_raw_and_smooth(
-            ax,
-            xs,
-            ys,
-            smooth_window=smooth_window,
-            raw_marker_size=raw_marker_size,
-            raw_alpha=raw_alpha,
-        )
-        ax.set_xlabel(x_column)
-        ax.set_ylabel(y_column)
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-
-        out_path = plots_dir / filename
         fig.savefig(out_path, dpi=150)
-        generated.append(out_path)
     except Exception as exc:
-        _warn(f"failed to plot {y_column} vs {x_column} from {csv_path.name}: {exc}")
-    finally:
-        if fig is not None:
-            plt.close(fig)
+        plt.close(fig)
+        _warn(f"failed to plot dashboard {filename} from {csv_path.name}: {exc}")
+        return []
 
-    return generated
+    plt.close(fig)
+    return [out_path]
 
 
 def generate_all_plots(run_dir: Path) -> list[Path]:
@@ -563,66 +533,15 @@ def generate_all_plots(run_dir: Path) -> list[Path]:
         return []
 
     generated: list[Path] = []
-    generated.extend(
-        _plot_metric_csv(
-            csv_path=log_dir / "train_steps.csv",
-            plots_dir=plots_dir,
-            columns_to_filenames=TRAIN_PLOT_COLUMNS,
+    for spec in _DASHBOARD_SPECS:
+        generated.extend(
+            _plot_dashboard_csv(
+                csv_path=log_dir / str(spec["csv_name"]),
+                plots_dir=plots_dir,
+                filename=str(spec["filename"]),
+                title=str(spec["title"]),
+                panels=tuple(spec["panels"]),
+                ncols=int(spec["ncols"]),
+            )
         )
-    )
-    generated.extend(
-        _plot_metric_csv(
-            csv_path=log_dir / "eval_metrics.csv",
-            plots_dir=plots_dir,
-            columns_to_filenames=EVAL_PLOT_COLUMNS,
-        )
-    )
-    generated.extend(
-        _plot_xy_csv(
-            csv_path=log_dir / "train_episodes.csv",
-            plots_dir=plots_dir,
-            x_column="episode_idx",
-            y_column="episode_length",
-            filename=TRAIN_EPISODE_LENGTH_FILENAME,
-            title="train_episode_length_vs_episode_idx",
-        )
-    )
-    generated.extend(
-        _plot_multi_series_csv(
-            csv_path=log_dir / "train_episodes.csv",
-            plots_dir=plots_dir,
-            columns=TRAIN_REWARD_BREAKDOWN_COLUMNS,
-            filename=TRAIN_REWARD_BREAKDOWN_FILENAME,
-            title="train reward breakdown",
-        )
-    )
-    generated.extend(
-        _plot_competing_series_csv(
-            csv_path=log_dir / "train_steps.csv",
-            plots_dir=plots_dir,
-            columns=TRAIN_LOCAL_ENTRY_COMPETITION_COLUMNS,
-            labels=("main entry coverage", "nonmain entry coverage"),
-            filename=TRAIN_LOCAL_ENTRY_COMPETITION_FILENAME,
-            title=TRAIN_LOCAL_ENTRY_COMPETITION_TITLE,
-        )
-    )
-    generated.extend(
-        _plot_multi_series_csv(
-            csv_path=log_dir / "eval_metrics.csv",
-            plots_dir=plots_dir,
-            columns=EVAL_REWARD_BREAKDOWN_COLUMNS,
-            filename=EVAL_REWARD_BREAKDOWN_FILENAME,
-            title="eval reward breakdown",
-        )
-    )
-    generated.extend(
-        _plot_competing_series_csv(
-            csv_path=log_dir / "eval_metrics.csv",
-            plots_dir=plots_dir,
-            columns=EVAL_LOCAL_ENTRY_COMPETITION_COLUMNS,
-            labels=("main entry coverage", "nonmain entry coverage"),
-            filename=EVAL_LOCAL_ENTRY_COMPETITION_FILENAME,
-            title=EVAL_LOCAL_ENTRY_COMPETITION_TITLE,
-        )
-    )
     return generated

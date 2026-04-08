@@ -19,12 +19,15 @@ from env.shared_semantic_layer import build_semantic_visualization_payload
 from training.collector import CollectorConfig, SEMANTIC_EPISODE_FIELDS, summarize_semantic_records
 from training.rewarding import (
     REWARD_BREAKDOWN_FIELDS,
+    REWARD_EVENT_SUMMARY_FIELDS,
     add_reward_breakdown,
     resolve_reward_info_norm,
     reward_from_breakdown,
     timeout_penalty_breakdown,
     valid_step_reward_breakdown,
+    weighted_info_gain,
     zero_reward_breakdown,
+    zero_reward_event_summary,
 )
 
 
@@ -279,6 +282,7 @@ class GreedyEvaluator:
         episode_reward = 0.0
         episode_len = 0
         episode_breakdown = zero_reward_breakdown()
+        episode_event_summary = zero_reward_event_summary()
         episode_semantic_records: list[dict[str, float]] = []
         recent_positions: deque[tuple[int, int]] = deque(
             [(int(agent[0]), int(agent[1]))],
@@ -361,6 +365,20 @@ class GreedyEvaluator:
             else:
                 stall_streak = 0
             stall_triggered = bool(stall_streak >= self._stall_window)
+            episode_event_summary["delta_empty_sum"] += float(delta_empty)
+            episode_event_summary["delta_obstacle_sum"] += float(delta_obstacle)
+            episode_event_summary["weighted_info_gain_sum"] += float(
+                weighted_info_gain(
+                    delta_empty=delta_empty,
+                    delta_obstacle=delta_obstacle,
+                    obstacle_weight=float(self.cfg.reward_obstacle_weight),
+                    info_norm=self.reward_info_norm,
+                )
+            )
+            episode_event_summary["recent_revisit_count"] += float(bool(recent_revisit))
+            episode_event_summary["stall_trigger_count"] += float(bool(stall_triggered))
+            if int(delta_empty) == 0 and int(delta_obstacle) == 0:
+                episode_event_summary["zero_info_step_count"] += 1.0
             success = bool(cum_map.coverage_rate >= float(self.cfg.coverage_stop_threshold))
             no_valid_after_step = bool((not success) and (len(self.valid_action_indices) <= 0))
 
@@ -399,6 +417,7 @@ class GreedyEvaluator:
             add_reward_breakdown(episode_breakdown, step_breakdown)
 
             if done:
+                episode_event_summary["timeout_flag"] = float(done_reason == "max_episode_steps")
                 semantic_viz = build_semantic_visualization_payload(shared_artifacts.semantic_snapshot)
                 return {
                     "episode_reward": float(episode_reward),
@@ -417,6 +436,7 @@ class GreedyEvaluator:
                     ),
                     "semantic_viz": semantic_viz,
                     **{field: float(episode_breakdown[field]) for field in REWARD_BREAKDOWN_FIELDS},
+                    **{field: float(episode_event_summary[field]) for field in REWARD_EVENT_SUMMARY_FIELDS},
                 }
 
     def evaluate(self, model, num_episodes: int = 5, seed_base: int | None = None) -> Dict[str, object]:
@@ -455,6 +475,10 @@ class GreedyEvaluator:
                 np.nanmean(np.asarray([float(ep[field]) for ep in episodes], dtype=np.float32))
             )
         for field in REWARD_BREAKDOWN_FIELDS:
+            result[f"eval_mean_{field}"] = float(
+                np.nanmean(np.asarray([float(ep[field]) for ep in episodes], dtype=np.float32))
+            )
+        for field in REWARD_EVENT_SUMMARY_FIELDS:
             result[f"eval_mean_{field}"] = float(
                 np.nanmean(np.asarray([float(ep[field]) for ep in episodes], dtype=np.float32))
             )

@@ -18,12 +18,15 @@ from env.core_radar import RadarSensor
 from env.grid_topology import ACTIONS_8, GridTopology
 from env.shared_semantic_layer import build_semantic_visualization_payload
 from training.rewarding import (
+    REWARD_EVENT_SUMMARY_FIELDS,
     add_reward_breakdown,
     resolve_reward_info_norm,
     reward_from_breakdown,
     timeout_penalty_breakdown,
     valid_step_reward_breakdown,
+    weighted_info_gain,
     zero_reward_breakdown,
+    zero_reward_event_summary,
 )
 from training.replay_buffer import NStepTransitionBuilder, ReplayBuffer
 
@@ -153,6 +156,7 @@ class TransitionCollector:
         self.total_episodes = 0
         self._episode_reward = 0.0
         self._episode_reward_breakdown = zero_reward_breakdown()
+        self._episode_event_summary = zero_reward_event_summary()
         self._recent_positions: deque[tuple[int, int]] = deque(maxlen=self._recent_revisit_window)
         self._stall_streak = 0
         self._current_state_tensors = None
@@ -213,6 +217,7 @@ class TransitionCollector:
         self.episode_steps = 0
         self._episode_reward = 0.0
         self._episode_reward_breakdown = zero_reward_breakdown()
+        self._episode_event_summary = zero_reward_event_summary()
         self._recent_positions = deque(
             [(int(self.agent[0]), int(self.agent[1]))],
             maxlen=self._recent_revisit_window,
@@ -418,6 +423,21 @@ class TransitionCollector:
 
             recent_revisit = self._is_recent_revisit(self.agent)
             stall_triggered = self._update_stall_streak(delta_empty, delta_obstacle)
+            event_summary = self._episode_event_summary
+            event_summary["delta_empty_sum"] += float(delta_empty)
+            event_summary["delta_obstacle_sum"] += float(delta_obstacle)
+            event_summary["weighted_info_gain_sum"] += float(
+                weighted_info_gain(
+                    delta_empty=delta_empty,
+                    delta_obstacle=delta_obstacle,
+                    obstacle_weight=float(self.cfg.reward_obstacle_weight),
+                    info_norm=self.reward_info_norm,
+                )
+            )
+            event_summary["recent_revisit_count"] += float(bool(recent_revisit))
+            event_summary["stall_trigger_count"] += float(bool(stall_triggered))
+            if int(delta_empty) == 0 and int(delta_obstacle) == 0:
+                event_summary["zero_info_step_count"] += 1.0
             success = bool(self.cum_map.coverage_rate >= float(self.cfg.coverage_stop_threshold))
             no_valid_after_step = bool((not success) and (len(self.valid_action_indices) <= 0))
             done = False
@@ -574,6 +594,8 @@ class TransitionCollector:
 
                 final_coverage = float(self.cum_map.coverage_rate)
                 success = bool(done_reason == "coverage_reached")
+                episode_event_summary = dict(self._episode_event_summary)
+                episode_event_summary["timeout_flag"] = float(done_reason == "max_episode_steps")
                 episodes.append(
                     {
                         "episode_idx": int(self.total_episodes),
@@ -586,6 +608,7 @@ class TransitionCollector:
                         "done_reason": str(done_reason),
                         **summarize_semantic_records(self._episode_semantic_records),
                         **{k: float(self._episode_reward_breakdown[k]) for k in self._episode_reward_breakdown},
+                        **{k: float(episode_event_summary.get(k, 0.0)) for k in REWARD_EVENT_SUMMARY_FIELDS},
                         **(self._episode_visual_artifacts() if self._record_episode_artifacts else {}),
                     }
                 )

@@ -24,7 +24,7 @@ from training.learner import DDQNLearner, DDQNLearnerConfig
 from training.logger import CSVMetricLogger
 from training.plotting import generate_all_plots
 from training.replay_buffer import ReplayBuffer, ReplayBufferConfig
-from training.rewarding import REWARD_BREAKDOWN_FIELDS
+from training.rewarding import REWARD_BREAKDOWN_FIELDS, REWARD_EVENT_SUMMARY_FIELDS
 from training.trajectory_plotting import save_episode_trajectory_plots
 
 EVAL_SEMANTIC_METRIC_NAMES = SEMANTIC_EPISODE_FIELDS
@@ -646,6 +646,11 @@ def run_training(cfg: TrainConfig) -> None:
                     field: float(ep[field])
                     for field in REWARD_BREAKDOWN_FIELDS
                 },
+                **{
+                    field: float(ep[field])
+                    for field in REWARD_EVENT_SUMMARY_FIELDS
+                    if field in ep
+                },
             }
             logger.log_train_episode(row)
             recent_eps.append(row)
@@ -694,6 +699,10 @@ def run_training(cfg: TrainConfig) -> None:
             **{
                 f"eval_mean_{field}": float(em[f"eval_mean_{field}"])
                 for field in REWARD_BREAKDOWN_FIELDS
+            },
+            **{
+                f"eval_mean_{field}": float(em[f"eval_mean_{field}"])
+                for field in REWARD_EVENT_SUMMARY_FIELDS
             },
         }
         logger.log_eval(row)
@@ -892,6 +901,10 @@ def run_training(cfg: TrainConfig) -> None:
         **{
             f"eval_mean_{field}": float(probe[f"eval_mean_{field}"])
             for field in REWARD_BREAKDOWN_FIELDS
+        },
+        **{
+            f"eval_mean_{field}": float(probe[f"eval_mean_{field}"])
+            for field in REWARD_EVENT_SUMMARY_FIELDS
         },
     }
     logger.log_final_probe(probe_row)
