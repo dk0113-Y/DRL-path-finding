@@ -8,6 +8,7 @@ REWARD_BREAKDOWN_FIELDS: tuple[str, ...] = (
     "step_penalty_sum",
     "recent_revisit_penalty_sum",
     "stall_penalty_sum",
+    "turn_penalty_sum",
     "timeout_penalty_sum",
     "terminal_bonus_sum",
 )
@@ -18,6 +19,10 @@ REWARD_EVENT_SUMMARY_FIELDS: tuple[str, ...] = (
     "recent_revisit_count",
     "stall_trigger_count",
     "zero_info_step_count",
+    "turn_ge_90_count",
+    "turn_135_count",
+    "turn_180_count",
+    "turn_penalty_weight_sum",
     "timeout_flag",
 )
 
@@ -130,6 +135,17 @@ def weighted_info_gain(
     return float(weighted_delta / max(1e-6, float(info_norm)))
 
 
+def turn_penalty_weight_from_steps(turn_steps: int) -> float:
+    steps = int(turn_steps)
+    if steps <= 1:
+        return 0.0
+    if steps == 2:
+        return 1.0 / 3.0
+    if steps == 3:
+        return 2.0 / 3.0
+    return 1.0
+
+
 def valid_step_reward(
     cfg,
     *,
@@ -138,6 +154,7 @@ def valid_step_reward(
     reward_info_norm: float,
     recent_revisit: bool,
     stall_triggered: bool,
+    turn_penalty_weight: float = 0.0,
     success: bool,
 ) -> float:
     return reward_from_breakdown(
@@ -148,6 +165,7 @@ def valid_step_reward(
             reward_info_norm=reward_info_norm,
             recent_revisit=recent_revisit,
             stall_triggered=stall_triggered,
+            turn_penalty_weight=turn_penalty_weight,
             success=success,
         )
     )
@@ -161,6 +179,7 @@ def valid_step_reward_breakdown(
     reward_info_norm: float,
     recent_revisit: bool,
     stall_triggered: bool,
+    turn_penalty_weight: float = 0.0,
     success: bool,
 ) -> dict[str, float]:
     # Reward mainline:
@@ -168,6 +187,7 @@ def valid_step_reward_breakdown(
     #   - fixed step cost
     #   - recent-window revisit penalty
     #   - stall penalty after consecutive zero-info steps
+    #   - light large-turn efficiency penalty
     #   + success bonus
     breakdown = zero_reward_breakdown()
     info_gain = weighted_info_gain(
@@ -183,6 +203,8 @@ def valid_step_reward_breakdown(
         breakdown["recent_revisit_penalty_sum"] = float(-cfg.reward_revisit_penalty)
     if stall_triggered:
         breakdown["stall_penalty_sum"] = float(-cfg.reward_stall_penalty)
+    if float(turn_penalty_weight) > 0.0:
+        breakdown["turn_penalty_sum"] = float(-cfg.reward_turn_penalty_scale * float(turn_penalty_weight))
     if success:
         breakdown["terminal_bonus_sum"] = float(cfg.reward_terminal_bonus)
 

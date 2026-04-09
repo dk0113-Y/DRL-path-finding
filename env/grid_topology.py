@@ -103,6 +103,32 @@ class GridTopology:
         return tuple(valid)
 
     @staticmethod
+    def circular_turn_steps(prev_action_idx: int | None, curr_action_idx: int) -> int:
+        """
+        Circular action-index distance on the canonical ACTIONS_8 ring.
+
+        Returns:
+          0 for no turn / missing previous action
+          1 for 45 degrees
+          2 for 90 degrees
+          3 for 135 degrees
+          4 for 180 degrees
+        """
+        if prev_action_idx is None:
+            return 0
+
+        action_dim = len(ACTIONS_8)
+        prev_idx = int(prev_action_idx)
+        curr_idx = int(curr_action_idx)
+        if not (0 <= prev_idx < action_dim):
+            raise ValueError(f"prev_action_idx out of range: {prev_action_idx}")
+        if not (0 <= curr_idx < action_dim):
+            raise ValueError(f"curr_action_idx out of range: {curr_action_idx}")
+
+        delta = (curr_idx - prev_idx) % action_dim
+        return int(min(delta, action_dim - delta))
+
+    @staticmethod
     def valid_action_indices(free: np.ndarray, state: Tuple[int, int]) -> set[int]:
         return set(GridTopology.valid_action_indices_fast(free, state))
 

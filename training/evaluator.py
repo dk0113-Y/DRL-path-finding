@@ -24,6 +24,7 @@ from training.rewarding import (
     resolve_reward_info_norm,
     reward_from_breakdown,
     timeout_penalty_breakdown,
+    turn_penalty_weight_from_steps,
     valid_step_reward_breakdown,
     weighted_info_gain,
     zero_reward_breakdown,
@@ -52,6 +53,7 @@ class EvaluatorConfig:
     reward_terminal_bonus: float = 0.5
     reward_revisit_penalty: float = 0.05
     reward_stall_penalty: float = 0.02
+    reward_turn_penalty_scale: float = 0.0
     reward_timeout_penalty: float = 0.5
     enable_inference_amp: bool = False
     inference_amp_dtype: str = "fp16"
@@ -116,6 +118,7 @@ class GreedyEvaluator:
             reward_terminal_bonus=cfg.reward_terminal_bonus,
             reward_revisit_penalty=cfg.reward_revisit_penalty,
             reward_stall_penalty=cfg.reward_stall_penalty,
+            reward_turn_penalty_scale=cfg.reward_turn_penalty_scale,
             reward_timeout_penalty=cfg.reward_timeout_penalty,
             enable_inference_amp=cfg.enable_inference_amp,
             inference_amp_dtype=cfg.inference_amp_dtype,
@@ -296,6 +299,7 @@ class GreedyEvaluator:
             maxlen=max(1, int(self.cfg.trajectory_history_steps)) + 1,
         )
         stall_streak = 0
+        prev_action_idx: int | None = None
         trajectory_positions: list[tuple[int, int]] = [(int(agent[0]), int(agent[1]))]
 
         while True:
@@ -344,6 +348,8 @@ class GreedyEvaluator:
                     "This is treated as a defensive invariant violation."
                 )
 
+            turn_steps = GridTopology.circular_turn_steps(prev_action_idx, action_idx)
+            turn_penalty_weight = float(turn_penalty_weight_from_steps(turn_steps))
             dr, dc = ACTIONS_8[action_idx]
             agent = (int(agent[0] + dr), int(agent[1] + dc))
             recent_trajectory_positions.append((int(agent[0]), int(agent[1])))
@@ -388,6 +394,13 @@ class GreedyEvaluator:
             episode_event_summary["stall_trigger_count"] += float(bool(stall_triggered))
             if int(delta_empty) == 0 and int(delta_obstacle) == 0:
                 episode_event_summary["zero_info_step_count"] += 1.0
+            if int(turn_steps) >= 2:
+                episode_event_summary["turn_ge_90_count"] += 1.0
+            if int(turn_steps) == 3:
+                episode_event_summary["turn_135_count"] += 1.0
+            if int(turn_steps) == 4:
+                episode_event_summary["turn_180_count"] += 1.0
+            episode_event_summary["turn_penalty_weight_sum"] += float(turn_penalty_weight)
             success = bool(cum_map.coverage_rate >= float(self.cfg.coverage_stop_threshold))
             no_valid_after_step = bool((not success) and (len(self.valid_action_indices) <= 0))
 
@@ -398,9 +411,11 @@ class GreedyEvaluator:
                 reward_info_norm=self.reward_info_norm,
                 recent_revisit=recent_revisit,
                 stall_triggered=stall_triggered,
+                turn_penalty_weight=turn_penalty_weight,
                 success=success,
             )
             reward = reward_from_breakdown(step_breakdown)
+            prev_action_idx = int(action_idx)
             done = False
             done_reason = ""
 

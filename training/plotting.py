@@ -85,6 +85,7 @@ TRAIN_REWARD_BREAKDOWN_PANELS = (
         "series": (("recent_revisit_penalty_sum", "revisit penalty"),),
     },
     {"title": "Stall penalty", "y_label": "penalty", "series": (("stall_penalty_sum", "stall penalty"),)},
+    {"title": "Turn penalty", "y_label": "penalty", "series": (("turn_penalty_sum", "turn penalty"),)},
     {"title": "Timeout penalty", "y_label": "penalty", "series": (("timeout_penalty_sum", "timeout penalty"),)},
     {"title": "Terminal bonus", "y_label": "reward", "series": (("terminal_bonus_sum", "terminal bonus"),)},
 )
@@ -103,6 +104,14 @@ TRAIN_REWARD_EVENT_PANELS = (
     {"title": "Recent revisit count", "y_label": "count", "series": (("recent_revisit_count", "recent revisit"),)},
     {"title": "Stall trigger count", "y_label": "count", "series": (("stall_trigger_count", "stall trigger"),)},
     {"title": "Zero-info step count", "y_label": "count", "series": (("zero_info_step_count", "zero-info steps"),)},
+    {"title": "Turn >= 90 count", "y_label": "count", "series": (("turn_ge_90_count", "turn >= 90"),)},
+    {"title": "Turn 135 count", "y_label": "count", "series": (("turn_135_count", "turn 135"),)},
+    {"title": "Turn 180 count", "y_label": "count", "series": (("turn_180_count", "turn 180"),)},
+    {
+        "title": "Turn penalty weight sum",
+        "y_label": "weight",
+        "series": (("turn_penalty_weight_sum", "turn penalty weight"),),
+    },
     {"title": "Timeout indicator", "y_label": "flag", "series": (("timeout_flag", "timeout flag"),)},
 )
 
@@ -158,6 +167,7 @@ EVAL_REWARD_BREAKDOWN_PANELS = (
         "series": (("eval_mean_recent_revisit_penalty_sum", "revisit penalty"),),
     },
     {"title": "Stall penalty", "y_label": "penalty", "series": (("eval_mean_stall_penalty_sum", "stall penalty"),)},
+    {"title": "Turn penalty", "y_label": "penalty", "series": (("eval_mean_turn_penalty_sum", "turn penalty"),)},
     {"title": "Timeout penalty", "y_label": "penalty", "series": (("eval_mean_timeout_penalty_sum", "timeout penalty"),)},
     {"title": "Terminal bonus", "y_label": "reward", "series": (("eval_mean_terminal_bonus_sum", "terminal bonus"),)},
 )
@@ -176,6 +186,14 @@ EVAL_REWARD_EVENT_PANELS = (
     {"title": "Recent revisit count", "y_label": "count", "series": (("eval_mean_recent_revisit_count", "recent revisit"),)},
     {"title": "Stall trigger count", "y_label": "count", "series": (("eval_mean_stall_trigger_count", "stall trigger"),)},
     {"title": "Zero-info step count", "y_label": "count", "series": (("eval_mean_zero_info_step_count", "zero-info steps"),)},
+    {"title": "Turn >= 90 count", "y_label": "count", "series": (("eval_mean_turn_ge_90_count", "turn >= 90"),)},
+    {"title": "Turn 135 count", "y_label": "count", "series": (("eval_mean_turn_135_count", "turn 135"),)},
+    {"title": "Turn 180 count", "y_label": "count", "series": (("eval_mean_turn_180_count", "turn 180"),)},
+    {
+        "title": "Turn penalty weight sum",
+        "y_label": "weight",
+        "series": (("eval_mean_turn_penalty_weight_sum", "turn penalty weight"),),
+    },
     {"title": "Timeout indicator", "y_label": "flag", "series": (("eval_mean_timeout_flag", "timeout flag"),)},
 )
 

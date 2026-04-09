@@ -23,6 +23,7 @@ from training.rewarding import (
     resolve_reward_info_norm,
     reward_from_breakdown,
     timeout_penalty_breakdown,
+    turn_penalty_weight_from_steps,
     valid_step_reward_breakdown,
     weighted_info_gain,
     zero_reward_breakdown,
@@ -82,6 +83,7 @@ class CollectorConfig:
     reward_terminal_bonus: float = 0.5
     reward_revisit_penalty: float = 0.05
     reward_stall_penalty: float = 0.02
+    reward_turn_penalty_scale: float = 0.0
     reward_timeout_penalty: float = 0.5
 
     n_step: int = 3
@@ -164,6 +166,7 @@ class TransitionCollector:
             maxlen=self._trajectory_history_steps + 1
         )
         self._stall_streak = 0
+        self._prev_action_idx: int | None = None
         self._current_state_tensors = None
         self._trajectory_positions: list[tuple[int, int]] = []
         self.state_build_time = 0.0
@@ -232,6 +235,7 @@ class TransitionCollector:
             maxlen=self._trajectory_history_steps + 1,
         )
         self._stall_streak = 0
+        self._prev_action_idx = None
         self._trajectory_positions = (
             [(int(self.agent[0]), int(self.agent[1]))] if self._record_episode_artifacts else []
         )
@@ -413,6 +417,8 @@ class TransitionCollector:
                 "This is treated as a defensive invariant violation."
             )
         else:
+            turn_steps = GridTopology.circular_turn_steps(self._prev_action_idx, int(action_idx))
+            turn_penalty_weight = float(turn_penalty_weight_from_steps(turn_steps))
             dr, dc = ACTIONS_8[int(action_idx)]
             self.agent = (int(self.agent[0] + dr), int(self.agent[1] + dc))
             self._recent_trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
@@ -449,6 +455,13 @@ class TransitionCollector:
             event_summary["stall_trigger_count"] += float(bool(stall_triggered))
             if int(delta_empty) == 0 and int(delta_obstacle) == 0:
                 event_summary["zero_info_step_count"] += 1.0
+            if int(turn_steps) >= 2:
+                event_summary["turn_ge_90_count"] += 1.0
+            if int(turn_steps) == 3:
+                event_summary["turn_135_count"] += 1.0
+            if int(turn_steps) == 4:
+                event_summary["turn_180_count"] += 1.0
+            event_summary["turn_penalty_weight_sum"] += float(turn_penalty_weight)
             success = bool(self.cum_map.coverage_rate >= float(self.cfg.coverage_stop_threshold))
             no_valid_after_step = bool((not success) and (len(self.valid_action_indices) <= 0))
             done = False
@@ -459,9 +472,11 @@ class TransitionCollector:
                 reward_info_norm=self.reward_info_norm,
                 recent_revisit=recent_revisit,
                 stall_triggered=stall_triggered,
+                turn_penalty_weight=turn_penalty_weight,
                 success=success,
             )
             reward = reward_from_breakdown(step_breakdown)
+            self._prev_action_idx = int(action_idx)
 
             if success:
                 done = True

@@ -114,6 +114,7 @@ class TrainConfig:
     reward_terminal_bonus: float = 20.0
     reward_revisit_penalty: float = 0.12
     reward_stall_penalty: float = 0.12
+    reward_turn_penalty_scale: float = 0.0
     reward_timeout_penalty: float = 8.0
 
     output_root: str = "outputs"
@@ -567,6 +568,7 @@ def build_system(cfg: TrainConfig):
         reward_terminal_bonus=float(cfg.reward_terminal_bonus),
         reward_revisit_penalty=float(cfg.reward_revisit_penalty),
         reward_stall_penalty=float(cfg.reward_stall_penalty),
+        reward_turn_penalty_scale=float(cfg.reward_turn_penalty_scale),
         reward_timeout_penalty=float(cfg.reward_timeout_penalty),
         n_step=int(cfg.n_step),
         gamma=float(cfg.gamma),
@@ -1283,6 +1285,12 @@ def parse_args() -> TrainConfig:
     p.add_argument("--reward-terminal-bonus", type=float, default=20.0, help="terminal success bonus")
     p.add_argument("--reward-revisit-penalty", type=float, default=0.12, help="revisit penalty")
     p.add_argument("--reward-stall-penalty", type=float, default=0.12, help="stall penalty")
+    p.add_argument(
+        "--reward-turn-penalty-scale",
+        type=float,
+        default=0.0,
+        help="light large-turn penalty scale; default 0.0 keeps the current baseline unchanged",
+    )
     p.add_argument("--reward-timeout-penalty", type=float, default=8.0, help="timeout penalty")
 
     p.add_argument("--output-root", type=str, default="outputs")
@@ -1392,6 +1400,7 @@ def parse_args() -> TrainConfig:
             reward_terminal_bonus=args.reward_terminal_bonus,
             reward_revisit_penalty=args.reward_revisit_penalty,
             reward_stall_penalty=args.reward_stall_penalty,
+            reward_turn_penalty_scale=args.reward_turn_penalty_scale,
             reward_timeout_penalty=args.reward_timeout_penalty,
             output_root=args.output_root,
             run_name=args.run_name,
@@ -1465,6 +1474,7 @@ def parse_args() -> TrainConfig:
         reward_terminal_bonus=args.reward_terminal_bonus,
         reward_revisit_penalty=args.reward_revisit_penalty,
         reward_stall_penalty=args.reward_stall_penalty,
+        reward_turn_penalty_scale=args.reward_turn_penalty_scale,
         reward_timeout_penalty=args.reward_timeout_penalty,
         output_root=args.output_root,
         run_name=args.run_name,
@@ -1588,6 +1598,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         reward_terminal_bonus=20.0,
         reward_revisit_penalty=0.12,
         reward_stall_penalty=0.12,
+        reward_turn_penalty_scale=0.0,
         reward_timeout_penalty=8.0,
     )
 
