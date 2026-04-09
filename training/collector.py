@@ -71,6 +71,7 @@ class CollectorConfig:
 
     max_episode_steps: int = 300  # tune with map scale as needed
     coverage_stop_threshold: float = 0.98
+    trajectory_history_steps: int = 10
 
     reward_info_scale: float = 10.0
     reward_obstacle_weight: float = 0.25
@@ -129,6 +130,7 @@ class TransitionCollector:
         )
         self._recent_revisit_window = max(1, int(cfg.reward_recent_revisit_window))
         self._stall_window = max(1, int(cfg.reward_stall_window))
+        self._trajectory_history_steps = max(1, int(cfg.trajectory_history_steps))
         self.generator = RandomMapGenerator(
             rows=cfg.rows,
             cols=cfg.cols,
@@ -158,6 +160,9 @@ class TransitionCollector:
         self._episode_reward_breakdown = zero_reward_breakdown()
         self._episode_event_summary = zero_reward_event_summary()
         self._recent_positions: deque[tuple[int, int]] = deque(maxlen=self._recent_revisit_window)
+        self._recent_trajectory_positions: deque[tuple[int, int]] = deque(
+            maxlen=self._trajectory_history_steps + 1
+        )
         self._stall_streak = 0
         self._current_state_tensors = None
         self._trajectory_positions: list[tuple[int, int]] = []
@@ -222,6 +227,10 @@ class TransitionCollector:
             [(int(self.agent[0]), int(self.agent[1]))],
             maxlen=self._recent_revisit_window,
         )
+        self._recent_trajectory_positions = deque(
+            [(int(self.agent[0]), int(self.agent[1]))],
+            maxlen=self._trajectory_history_steps + 1,
+        )
         self._stall_streak = 0
         self._trajectory_positions = (
             [(int(self.agent[0]), int(self.agent[1]))] if self._record_episode_artifacts else []
@@ -256,6 +265,7 @@ class TransitionCollector:
         return self.state_adapter.build_single_state_tensors(
             self.cum_map,
             self.agent,
+            recent_trajectory_positions=tuple(self._recent_trajectory_positions),
             shared_artifacts=self._current_shared_artifacts,
             target_device=None,
             return_state_meta=True,
@@ -405,6 +415,7 @@ class TransitionCollector:
         else:
             dr, dc = ACTIONS_8[int(action_idx)]
             self.agent = (int(self.agent[0] + dr), int(self.agent[1] + dc))
+            self._recent_trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
             if self._record_episode_artifacts:
                 self._trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
 

@@ -65,6 +65,7 @@ class TrainConfig:
     cols: int = 60
     obs_size: int = 6
     scan_radius: int = 10  # radar sensor radius only
+    trajectory_history_steps: int = 10  # keep the short trajectory horizon aligned with the default scan radius
     obstacle_ratio: float = 0.20
 
     max_accessible_blocks: int = 16
@@ -518,6 +519,7 @@ def build_system(cfg: TrainConfig):
             enable_timing=bool(cfg.enable_shared_semantic_timing),
         ),
         advantage_state=AdvantageStateConfig(
+            trajectory_history_steps=int(cfg.trajectory_history_steps),
             enable_timing=bool(cfg.enable_advantage_state_timing),
         ),
         value_state=ValueStateConfig(
@@ -555,6 +557,7 @@ def build_system(cfg: TrainConfig):
         obstacle_ratio=float(cfg.obstacle_ratio),
         max_episode_steps=int(cfg.max_episode_steps),
         coverage_stop_threshold=float(cfg.coverage_stop_threshold),
+        trajectory_history_steps=int(cfg.trajectory_history_steps),
         reward_info_scale=float(cfg.reward_info_scale),
         reward_obstacle_weight=float(cfg.reward_obstacle_weight),
         reward_info_norm=cfg.reward_info_norm,

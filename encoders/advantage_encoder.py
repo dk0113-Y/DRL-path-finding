@@ -41,9 +41,9 @@ class AdvantageCanvasEncoder(nn.Module):
 
     The same semantic canvas is shared across all actions, but each action reads
     it through its own directional spatial template and landing-cell view. The
-    canvas now includes a cumulative revisit-pressure channel in addition to the
-    occupancy/frontier geometry channels, but the encoder architecture itself
-    stays unchanged.
+    canvas now includes both cumulative revisit pressure and a short-horizon
+    trajectory-decay channel in addition to the occupancy/frontier geometry
+    channels, but the encoder architecture itself stays unchanged.
     """
 
     def __init__(self, cfg: Optional[AdvantageEncoderConfig] = None):
@@ -151,5 +151,6 @@ class AdvantageCanvasEncoder(nn.Module):
             "advantage_canvas_frontier_mean": canvas[:, 3].mean(dim=(1, 2)),
             "advantage_canvas_frontier_block_area_mean": canvas[:, 4].mean(dim=(1, 2)),
             "advantage_canvas_visit_pressure_mean": canvas[:, 5].mean(dim=(1, 2)),
+            "advantage_canvas_trajectory_mean": canvas[:, 6].mean(dim=(1, 2)),
         }
         return action_state, aux

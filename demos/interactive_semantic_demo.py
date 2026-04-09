@@ -38,7 +38,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import font_manager
 from matplotlib.colors import BoundaryNorm, ListedColormap
-from matplotlib.patches import Circle, Rectangle
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Patch, Rectangle
 
 from env.agent_version import LocalObservationModel
 from env.block_random_g import RandomMapGenerator
@@ -361,9 +362,13 @@ class InteractiveSemanticDemo:
         if self.figure is not None:
             return
         self.figure, axs = plt.subplot_mosaic(
-            [["true", "belief"], ["semantic", "local"]],
-            figsize=(16, 11),
+            [
+                ["true", "true_info", "belief", "belief_info"],
+                ["semantic", "semantic_info", "local", "local_info"],
+            ],
+            figsize=(22, 11.5),
             constrained_layout=True,
+            gridspec_kw={"width_ratios": [1.55, 0.82, 1.55, 0.82]},
         )
         self.axes = dict(axs)
         manager = getattr(self.figure.canvas, "manager", None)
@@ -424,6 +429,184 @@ class InteractiveSemanticDemo:
         ax.set_xticks([])
         ax.set_yticks([])
 
+    @staticmethod
+    def _format_info_axis(ax) -> None:
+        ax.clear()
+        ax.set_facecolor("#fbfcfd")
+        ax.set_xlim(0.0, 1.0)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    def _draw_info_panel(
+        self,
+        ax,
+        *,
+        title: str,
+        lines: list[str],
+        legend_handles: Optional[list[object]] = None,
+    ) -> None:
+        self._format_info_axis(ax)
+        ax.text(
+            0.0,
+            0.99,
+            title,
+            ha="left",
+            va="top",
+            fontsize=10,
+            fontweight="bold",
+            color="#102a43",
+            wrap=True,
+        )
+        if lines:
+            ax.text(
+                0.0,
+                0.91,
+                "\n".join(lines),
+                ha="left",
+                va="top",
+                fontsize=9,
+                color="#334e68",
+                linespacing=1.35,
+                wrap=True,
+            )
+        if legend_handles:
+            ax.legend(
+                handles=legend_handles,
+                loc="lower left",
+                bbox_to_anchor=(0.0, 0.02),
+                borderaxespad=0.0,
+                frameon=False,
+                fontsize=8.5,
+                handlelength=1.6,
+                handletextpad=0.6,
+                labelspacing=0.55,
+            )
+
+    def _build_true_panel_legend_handles(self) -> list[object]:
+        return [
+            Patch(facecolor="#f7f6f2", edgecolor="#cbd2d9", label="空闲真值栅格"),
+            Patch(facecolor="#15181d", edgecolor="#15181d", label="障碍真值栅格"),
+            Patch(facecolor="#1eb8d6", edgecolor="#1eb8d6", alpha=0.32, label="当前雷达足迹"),
+            Line2D([0], [0], marker="x", linestyle="none", color="#226f54", markeredgewidth=2.0, markersize=8, label="起点"),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                color="#f2542d",
+                markeredgecolor="white",
+                markeredgewidth=1.2,
+                markersize=8,
+                label="当前智能体",
+            ),
+            Line2D([0], [0], color="#d84f35", linewidth=1.6, label="历史轨迹"),
+        ]
+
+    def _build_belief_panel_legend_handles(self) -> list[object]:
+        return [
+            Patch(facecolor="#5f6770", edgecolor="#5f6770", label="未知栅格"),
+            Patch(facecolor="#f5f6f7", edgecolor="#cbd2d9", label="已知空闲"),
+            Patch(facecolor="#1c232b", edgecolor="#1c232b", label="已知障碍"),
+            Patch(facecolor="#f5ba29", edgecolor="#d18b00", alpha=0.62, label="前沿栅格"),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                linestyle="none",
+                color="#2a9d8f",
+                markerfacecolor="white",
+                markeredgewidth=1.4,
+                markersize=8,
+                label="合法动作目标",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                linestyle="none",
+                color="#b23a48",
+                markerfacecolor="none",
+                markeredgewidth=1.4,
+                markersize=8,
+                label="非法动作目标",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                color="#f2542d",
+                markeredgecolor="white",
+                markeredgewidth=1.2,
+                markersize=8,
+                label="当前智能体",
+            ),
+        ]
+
+    def _build_semantic_panel_legend_handles(self) -> list[object]:
+        block_rgb = _rgb_from_cmap(BLOCK_CMAP, 0)
+        entry_rgb = _mix_color(block_rgb, _rgb_from_cmap(ENTRY_CMAP, 0), 0.35)
+        support_rgb = _mix_color(entry_rgb, np.ones(3, dtype=np.float32), 0.24)
+        frontier_rgb = _mix_color(entry_rgb, np.zeros(3, dtype=np.float32), 0.08)
+        return [
+            Patch(facecolor=block_rgb, edgecolor=block_rgb, alpha=0.36, label="UnknownBlock"),
+            Patch(facecolor=support_rgb, edgecolor=support_rgb, alpha=0.34, label="SupportGeometry"),
+            Patch(facecolor=frontier_rgb, edgecolor=frontier_rgb, alpha=0.94, label="FrontierCluster"),
+            Rectangle((0.0, 0.0), 1.0, 1.0, fill=False, edgecolor=entry_rgb, linestyle=":", linewidth=1.2, label="Support local box"),
+            Rectangle((0.0, 0.0), 1.0, 1.0, fill=False, edgecolor="#0f4c5c", linestyle="--", linewidth=1.8, label="Analysis box"),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                color="#f2542d",
+                markeredgecolor="white",
+                markeredgewidth=1.2,
+                markersize=8,
+                label="当前智能体",
+            ),
+        ]
+
+    def _build_local_panel_legend_handles(self) -> list[object]:
+        return [
+            Patch(facecolor="#5f6770", edgecolor="#5f6770", label="未知栅格"),
+            Patch(facecolor="#f5f6f7", edgecolor="#cbd2d9", label="可见空闲"),
+            Patch(facecolor="#1c232b", edgecolor="#1c232b", label="可见障碍"),
+            Line2D([0], [0], color="#0f4c5c", linestyle="--", linewidth=1.6, label="雷达扫描范围"),
+            Line2D(
+                [0],
+                [0],
+                marker="$W$",
+                linestyle="none",
+                color="#2a9d8f",
+                markersize=11,
+                label="合法动作按键",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="$W$",
+                linestyle="none",
+                color="#8d99ae",
+                markersize=11,
+                label="非法动作按键",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                color="#f2542d",
+                markeredgecolor="white",
+                markeredgewidth=1.2,
+                markersize=8,
+                label="当前智能体",
+            ),
+        ]
+
     def _trajectory_xy_world(self) -> tuple[np.ndarray, np.ndarray]:
         if len(self.trajectory_world) <= 0:
             return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.float32)
@@ -444,16 +627,20 @@ class InteractiveSemanticDemo:
         c1 = float(np.max(cols)) + 0.5
         return r0, r1, c0, c1
 
-    def _draw_true_map_panel(self, ax) -> None:
+    def _draw_true_map_panel(self, ax, info_ax) -> None:
         assert self.true_grid is not None
         assert self.agent_state is not None
         assert self.start_state is not None
 
         ax.clear()
         if not self.config.show_true_map:
-            ax.text(0.5, 0.5, "真值地图面板已隐藏", ha="center", va="center", transform=ax.transAxes)
-            ax.set_xticks([])
-            ax.set_yticks([])
+            self._format_axis(ax, self.true_grid.shape, title="真值地图（True Map）")
+            self._draw_info_panel(
+                info_ax,
+                title="说明 / 图例",
+                lines=["真值地图面板已隐藏。"],
+                legend_handles=None,
+            )
             return
 
         ax.imshow(self.true_grid, cmap=TRUE_MAP_CMAP, norm=TRUE_MAP_NORM, origin="upper", interpolation="nearest")
@@ -488,19 +675,15 @@ class InteractiveSemanticDemo:
 
         visible_text = f"当前可见：{int(len(self.visible_world_rows))}/{int(self.sensor.theoretical_visible_cell_count)}"
         pose_text = f"智能体（世界坐标）：({int(self.agent_state[0])}, {int(self.agent_state[1])})"
-        ax.text(
-            0.01,
-            0.99,
-            f"{pose_text}\n{visible_text}",
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#fffffff2", edgecolor="#999999"),
+        self._draw_info_panel(
+            info_ax,
+            title="说明 / 图例",
+            lines=[pose_text, visible_text],
+            legend_handles=self._build_true_panel_legend_handles(),
         )
         self._format_axis(ax, self.true_grid.shape, title="真值地图（True Map）")
 
-    def _draw_belief_panel(self, ax) -> None:
+    def _draw_belief_panel(self, ax, info_ax) -> None:
         assert self.cum_map is not None
 
         ax.clear()
@@ -571,19 +754,15 @@ class InteractiveSemanticDemo:
                 f"前沿栅格数：{int(np.count_nonzero(frontier_mask))}",
             ]
         )
-        ax.text(
-            0.01,
-            0.99,
-            belief_text,
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#fffffff2", edgecolor="#999999"),
+        self._draw_info_panel(
+            info_ax,
+            title="说明 / 图例",
+            lines=belief_text.splitlines(),
+            legend_handles=self._build_belief_panel_legend_handles(),
         )
         self._format_axis(ax, belief_map.shape, title="累计 Belief 地图（Cumulative Belief Map）")
 
-    def _draw_semantic_panel(self, ax) -> None:
+    def _draw_semantic_panel(self, ax, info_ax) -> None:
         assert self.cum_map is not None
         assert self.semantic_payload is not None
 
@@ -647,13 +826,18 @@ class InteractiveSemanticDemo:
                             _rgb_from_cmap(ENTRY_CMAP, int(frontier_slot)),
                             0.35,
                         )
-                        support_rgba[support_rows, support_cols, :3] = entry_rgb
+                        support_rgb = _mix_color(entry_rgb, np.ones(3, dtype=np.float32), 0.24)
+                        frontier_rgb = _mix_color(entry_rgb, np.zeros(3, dtype=np.float32), 0.08)
+                        support_rgba[support_rows, support_cols, :3] = support_rgb
                         support_rgba[support_rows, support_cols, 3] = np.maximum(
                             support_rgba[support_rows, support_cols, 3],
-                            0.46,
+                            0.34,
                         )
-                        frontier_rgba[frontier_rows, frontier_cols, :3] = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-                        frontier_rgba[frontier_rows, frontier_cols, 3] = 1.0
+                        frontier_rgba[frontier_rows, frontier_cols, :3] = frontier_rgb
+                        frontier_rgba[frontier_rows, frontier_cols, 3] = np.maximum(
+                            frontier_rgba[frontier_rows, frontier_cols, 3],
+                            0.94,
+                        )
                         support_boxes.append(
                             (
                                 float(support_box["c0"]) - 0.5,
@@ -730,18 +914,6 @@ class InteractiveSemanticDemo:
                         ),
                         zorder=10,
                     )
-        else:
-            ax.text(
-                0.5,
-                0.5,
-                "语义叠加已隐藏（按 'p' 切换）",
-                ha="center",
-                va="center",
-                fontsize=11,
-                transform=ax.transAxes,
-                bbox=dict(boxstyle="round,pad=0.35", facecolor="#fffffff2", edgecolor="#999999"),
-                zorder=10,
-            )
 
         if self.show_trajectory and len(self.trajectory_array) > 1:
             traj_x, traj_y = self._trajectory_xy_array()
@@ -768,26 +940,37 @@ class InteractiveSemanticDemo:
                 _safe_metric_text("局部前沿块面积均值", float(self.metrics.get("local_frontier_block_area_mean", 0.0))),
             ]
         )
-        ax.text(
-            0.01,
-            0.99,
-            semantic_text,
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#fffffff2", edgecolor="#999999"),
+        semantic_lines = [
+            (
+                f"显示状态：语义{'开' if self.show_semantics else '关'} | "
+                f"块{'开' if self.show_blocks else '关'} | "
+                f"前沿{'开' if self.show_frontiers else '关'} | "
+                f"编号{'开' if self.show_entry_labels else '关'}"
+            )
+        ]
+        if not self.show_semantics:
+            semantic_lines.append("语义叠加已隐藏（按 'p' 切换）。")
+        semantic_lines.extend(semantic_text.splitlines())
+        self._draw_info_panel(
+            info_ax,
+            title="说明 / 图例",
+            lines=semantic_lines,
+            legend_handles=self._build_semantic_panel_legend_handles(),
         )
         self._format_axis(ax, belief_map.shape, title="共享语义可视化（Shared Semantic Visualization）")
 
-    def _draw_local_panel(self, ax) -> None:
+    def _draw_local_panel(self, ax, info_ax) -> None:
         assert self.local_snap is not None
 
         ax.clear()
         if not self.config.show_local_observation:
-            ax.text(0.5, 0.5, "局部观测面板已隐藏", ha="center", va="center", transform=ax.transAxes)
-            ax.set_xticks([])
-            ax.set_yticks([])
+            self._format_axis(ax, self.local_snap.shape, title="局部观测 / 雷达足迹（Local Observation / Radar Footprint）")
+            self._draw_info_panel(
+                info_ax,
+                title="说明 / 图例",
+                lines=["局部观测面板已隐藏。"],
+                legend_handles=None,
+            )
             return
 
         ax.imshow(self.local_snap, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
@@ -840,15 +1023,11 @@ class InteractiveSemanticDemo:
                 "智能体周围动作按键",
             ]
         )
-        ax.text(
-            0.01,
-            0.99,
-            local_text,
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="#fffffff2", edgecolor="#999999"),
+        self._draw_info_panel(
+            info_ax,
+            title="说明 / 图例",
+            lines=local_text.splitlines(),
+            legend_handles=self._build_local_panel_legend_handles(),
         )
         self._format_axis(ax, self.local_snap.shape, title="局部观测 / 雷达足迹（Local Observation / Radar Footprint）")
 
@@ -875,10 +1054,10 @@ class InteractiveSemanticDemo:
     def render(self) -> None:
         if self.figure is None:
             return
-        self._draw_true_map_panel(self.axes["true"])
-        self._draw_belief_panel(self.axes["belief"])
-        self._draw_semantic_panel(self.axes["semantic"])
-        self._draw_local_panel(self.axes["local"])
+        self._draw_true_map_panel(self.axes["true"], self.axes["true_info"])
+        self._draw_belief_panel(self.axes["belief"], self.axes["belief_info"])
+        self._draw_semantic_panel(self.axes["semantic"], self.axes["semantic_info"])
+        self._draw_local_panel(self.axes["local"], self.axes["local_info"])
         self._update_suptitle()
         self.figure.canvas.draw_idle()
 

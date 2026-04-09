@@ -41,6 +41,7 @@ class EvaluatorConfig:
 
     max_episode_steps: int = 300
     coverage_stop_threshold: float = 0.98
+    trajectory_history_steps: int = 10
 
     reward_info_scale: float = 10.0
     reward_obstacle_weight: float = 0.25
@@ -105,6 +106,7 @@ class GreedyEvaluator:
             obstacle_ratio=cfg.obstacle_ratio,
             max_episode_steps=cfg.max_episode_steps,
             coverage_stop_threshold=cfg.coverage_stop_threshold,
+            trajectory_history_steps=cfg.trajectory_history_steps,
             reward_info_scale=cfg.reward_info_scale,
             reward_obstacle_weight=cfg.reward_obstacle_weight,
             reward_info_norm=cfg.reward_info_norm,
@@ -222,10 +224,11 @@ class GreedyEvaluator:
             random.setstate(py_state)
             np.random.set_state(np_state)
 
-    def _build_state_tensors(self, cum_map, agent_state, shared_artifacts):
+    def _build_state_tensors(self, cum_map, agent_state, shared_artifacts, recent_trajectory_positions):
         return self.state_adapter.build_single_state_tensors(
             cum_map,
             agent_state,
+            recent_trajectory_positions=recent_trajectory_positions,
             shared_artifacts=shared_artifacts,
             target_device=None,
             return_state_meta=True,
@@ -288,6 +291,10 @@ class GreedyEvaluator:
             [(int(agent[0]), int(agent[1]))],
             maxlen=self._recent_revisit_window,
         )
+        recent_trajectory_positions: deque[tuple[int, int]] = deque(
+            [(int(agent[0]), int(agent[1]))],
+            maxlen=max(1, int(self.cfg.trajectory_history_steps)) + 1,
+        )
         stall_streak = 0
         trajectory_positions: list[tuple[int, int]] = [(int(agent[0]), int(agent[1]))]
 
@@ -305,6 +312,7 @@ class GreedyEvaluator:
                 cum_map,
                 agent,
                 shared_artifacts=shared_artifacts,
+                recent_trajectory_positions=tuple(recent_trajectory_positions),
             )
             if isinstance(state_meta, dict):
                 episode_semantic_records.append(
@@ -338,6 +346,7 @@ class GreedyEvaluator:
 
             dr, dc = ACTIONS_8[action_idx]
             agent = (int(agent[0] + dr), int(agent[1] + dc))
+            recent_trajectory_positions.append((int(agent[0]), int(agent[1])))
             trajectory_positions.append((int(agent[0]), int(agent[1])))
 
             local_snap = obs_model.observe_fast(agent)

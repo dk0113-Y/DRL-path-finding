@@ -66,7 +66,7 @@ class ExplorationQNetwork(nn.Module):
     Shared-semantic dueling exploration network.
 
     Data flow:
-       advantage_canvas (local occupancy/frontier canvas + revisit pressure)
+       advantage_canvas (local occupancy/frontier canvas + revisit pressure + short trajectory decay)
          -> advantage encoder -> per-action advantage states
        value block-tree (6D block summary + 4D frontier entries) -> value encoder -> state value context
        {value_state, advantage_state} -> dueling head -> Q(s, a)
@@ -333,6 +333,7 @@ class StateTensorAdapter:
         self,
         cum_map,
         agent_state,
+        recent_trajectory_positions: Optional[Sequence[tuple[int, int]]] = None,
         shared_artifacts: Optional[SharedStepArtifacts] = None,
         target_device: Optional[torch.device | str] = None,
         return_state_meta: bool = False,
@@ -345,6 +346,7 @@ class StateTensorAdapter:
             cum_map,
             agent_state,
             shared_artifacts.semantic_snapshot,
+            recent_trajectory_positions=recent_trajectory_positions,
         )
         if self._timing_enabled:
             self.advantage_build_time += time.perf_counter() - t0
