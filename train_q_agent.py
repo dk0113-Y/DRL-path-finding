@@ -937,48 +937,69 @@ def run_training(cfg: TrainConfig) -> None:
         f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
     )
     if bool(cfg.save_train_representative_trajectories):
-        trajectory_plot_paths.extend(
-            save_episode_trajectory_plots(
-                run_dir,
-                train_trace_episodes,
-                prefix="train_postgate_fail",
-                max_episodes=max(1, len(train_trace_episodes)),
-                selection_mode="train_postgate_failures",
-                gate_window=int(cfg.recent_episode_window),
-                coverage_target=float(cfg.coverage_stop_threshold),
+        try:
+            trajectory_plot_paths.extend(
+                save_episode_trajectory_plots(
+                    run_dir,
+                    train_trace_episodes,
+                    prefix="train_postgate_fail",
+                    max_episodes=max(1, len(train_trace_episodes)),
+                    selection_mode="train_postgate_failures",
+                    gate_window=int(cfg.recent_episode_window),
+                    coverage_target=float(cfg.coverage_stop_threshold),
+                )
             )
-        )
+        except Exception as exc:
+            print(
+                "[warning] optional artifact export failed: "
+                f"train representative trajectories "
+                f"({type(exc).__name__}: {exc})"
+            )
     if bool(cfg.save_train_special_trajectories):
-        trajectory_plot_paths.extend(
-            save_train_special_trajectory_plots(
-                run_dir,
-                train_trace_episodes,
-                highcov_timeout_min_coverage=float(cfg.special_highcov_timeout_min_coverage),
-                highcov_timeout_max_plots=int(cfg.special_highcov_timeout_max_plots),
-                long_success_gate_coverage=float(cfg.special_long_success_gate_coverage),
-                long_success_gate_window=int(cfg.special_long_success_gate_window),
-                long_success_min_length=int(cfg.special_long_success_min_length),
-                long_success_percentile=float(cfg.special_long_success_percentile),
-                long_success_max_plots=int(cfg.special_long_success_max_plots),
-                lowcov_gate_coverage=float(cfg.special_lowcov_gate_coverage),
-                lowcov_gate_window=int(cfg.special_lowcov_gate_window),
-                lowcov_absolute_threshold=float(cfg.special_lowcov_absolute_threshold),
-                lowcov_local_drop_margin=float(cfg.special_lowcov_local_drop_margin),
-                lowcov_max_plots=int(cfg.special_lowcov_max_plots),
+        try:
+            trajectory_plot_paths.extend(
+                save_train_special_trajectory_plots(
+                    run_dir,
+                    train_trace_episodes,
+                    highcov_timeout_min_coverage=float(cfg.special_highcov_timeout_min_coverage),
+                    highcov_timeout_max_plots=int(cfg.special_highcov_timeout_max_plots),
+                    long_success_gate_coverage=float(cfg.special_long_success_gate_coverage),
+                    long_success_gate_window=int(cfg.special_long_success_gate_window),
+                    long_success_min_length=int(cfg.special_long_success_min_length),
+                    long_success_percentile=float(cfg.special_long_success_percentile),
+                    long_success_max_plots=int(cfg.special_long_success_max_plots),
+                    lowcov_gate_coverage=float(cfg.special_lowcov_gate_coverage),
+                    lowcov_gate_window=int(cfg.special_lowcov_gate_window),
+                    lowcov_absolute_threshold=float(cfg.special_lowcov_absolute_threshold),
+                    lowcov_local_drop_margin=float(cfg.special_lowcov_local_drop_margin),
+                    lowcov_max_plots=int(cfg.special_lowcov_max_plots),
+                )
             )
-        )
+        except Exception as exc:
+            print(
+                "[warning] optional artifact export failed: "
+                f"train special trajectories "
+                f"({type(exc).__name__}: {exc})"
+            )
     if bool(cfg.save_final_probe_trajectories):
-        trajectory_plot_paths.extend(
-            save_episode_trajectory_plots(
-                run_dir,
-                probe.get("episodes", []),
-                prefix="final_probe",
-                max_episodes=1,
-                selection_mode="lowest_coverage",
-                gate_window=int(cfg.recent_episode_window),
-                coverage_target=float(cfg.coverage_stop_threshold),
+        try:
+            trajectory_plot_paths.extend(
+                save_episode_trajectory_plots(
+                    run_dir,
+                    probe.get("episodes", []),
+                    prefix="final_probe",
+                    max_episodes=1,
+                    selection_mode="lowest_coverage",
+                    gate_window=int(cfg.recent_episode_window),
+                    coverage_target=float(cfg.coverage_stop_threshold),
+                )
             )
-        )
+        except Exception as exc:
+            print(
+                "[warning] optional artifact export failed: "
+                f"final probe trajectories "
+                f"({type(exc).__name__}: {exc})"
+            )
     if bool(cfg.generate_plots_on_finish):
         generated_plots = generate_all_plots(run_dir)
     else:
