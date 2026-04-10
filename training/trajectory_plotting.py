@@ -185,10 +185,17 @@ def _selection_summary_lines(meta: dict[str, object]) -> list[str]:
         "selection_mode",
         "episodes_total",
         "train_episode_count",
+        "candidate_count",
+        "success_episode_count",
+        "timeout_episode_count",
         "gate_start_episode_idx",
         "gate_start_position",
         "gate_coverage",
         "gate_window",
+        "min_coverage",
+        "min_length",
+        "length_percentile",
+        "length_threshold",
         "absolute_low_threshold",
         "local_drop_margin",
         "selection_fallback",
@@ -485,6 +492,185 @@ def _select_train_postgate_failure_episodes(
     }
 
 
+def _select_train_highcov_timeout_episodes(
+    episodes: list[dict],
+    max_episodes: int,
+    *,
+    min_coverage: float = 0.85,
+) -> tuple[list[dict], dict[str, object]]:
+    train_eps = [dict(ep) for ep in episodes if str(ep.get("phase", "train")).strip().lower() == "train"]
+    timeout_eps = [
+        ep
+        for ep in train_eps
+        if str(ep.get("done_reason", "")).strip() == "max_episode_steps"
+        and float(ep.get("final_coverage", 0.0)) >= float(min_coverage)
+    ]
+    timeout_eps.sort(
+        key=lambda ep: (
+            -float(ep.get("final_coverage", 0.0)),
+            -float(ep.get("episode_length", 0.0)),
+            _episode_numeric_idx(ep, 0),
+        )
+    )
+
+    selected: list[dict] = []
+    selected_rows: list[dict[str, object]] = []
+    for rank, ep in enumerate(timeout_eps[: max(0, int(max_episodes))], start=1):
+        item = dict(ep)
+        item["_selection_rank"] = rank
+        selected.append(item)
+        selected_rows.append(
+            {
+                "episode_idx": _episode_numeric_idx(ep, rank),
+                "final_coverage": f"{float(ep.get('final_coverage', 0.0)):.4f}",
+                "baseline_coverage": "",
+                "score": "",
+                "done_reason": str(ep.get("done_reason", "")),
+            }
+        )
+
+    return selected, {
+        "selection_mode": "train_highcov_timeout",
+        "episodes_total": int(len(episodes)),
+        "train_episode_count": int(len(train_eps)),
+        "timeout_episode_count": int(len(timeout_eps)),
+        "min_coverage": float(min_coverage),
+        "selection_fallback": ("no_matching_timeout_episode" if len(timeout_eps) <= 0 else "none"),
+        "selected": selected_rows,
+    }
+
+
+def _select_train_long_success_episodes(
+    episodes: list[dict],
+    max_episodes: int,
+    *,
+    gate_coverage: float = 0.80,
+    gate_window: int = 100,
+    min_length: int = 350,
+    percentile: float = 85.0,
+) -> tuple[list[dict], dict[str, object]]:
+    train_eps = [dict(ep) for ep in episodes if str(ep.get("phase", "train")).strip().lower() == "train"]
+    if len(train_eps) <= 0:
+        return [], {
+            "selection_mode": "train_long_success",
+            "episodes_total": int(len(episodes)),
+            "train_episode_count": 0,
+            "gate_start_position": 0,
+            "gate_start_episode_idx": 0,
+            "gate_coverage": float(gate_coverage),
+            "gate_window": int(gate_window),
+            "min_length": int(min_length),
+            "length_percentile": float(percentile),
+            "length_threshold": int(min_length),
+            "selection_fallback": "no_train_episodes",
+            "selected": [],
+        }
+
+    coverages = [float(ep.get("final_coverage", 0.0)) for ep in train_eps]
+    trailing = _trailing_mean(coverages, window=gate_window)
+    gate_start_pos = None
+    for idx, mean_cov in enumerate(trailing):
+        if (idx + 1) >= int(gate_window) and float(mean_cov) >= float(gate_coverage):
+            gate_start_pos = idx
+            break
+
+    selection_fallback = "none"
+    if gate_start_pos is None:
+        gate_start_pos = 0
+        selection_fallback = "gate_never_reached"
+
+    successful_eps = [
+        dict(train_eps[idx])
+        for idx in range(gate_start_pos, len(train_eps))
+        if int(train_eps[idx].get("success", 0)) == 1
+        or str(train_eps[idx].get("done_reason", "")).strip() == "coverage_reached"
+    ]
+    success_lengths = [float(ep.get("episode_length", 0.0)) for ep in successful_eps]
+    if len(success_lengths) > 0:
+        length_threshold = max(
+            int(min_length),
+            int(math.ceil(float(np.percentile(np.asarray(success_lengths, dtype=np.float32), float(percentile))))),
+        )
+    else:
+        length_threshold = int(min_length)
+
+    candidates = [
+        ep for ep in successful_eps
+        if float(ep.get("episode_length", 0.0)) >= float(length_threshold)
+    ]
+    candidates.sort(
+        key=lambda ep: (
+            -float(ep.get("episode_length", 0.0)),
+            -float(ep.get("final_coverage", 0.0)),
+            _episode_numeric_idx(ep, 0),
+        )
+    )
+
+    selected: list[dict] = []
+    selected_rows: list[dict[str, object]] = []
+    for rank, ep in enumerate(candidates[: max(0, int(max_episodes))], start=1):
+        item = dict(ep)
+        item["_selection_rank"] = rank
+        selected.append(item)
+        selected_rows.append(
+            {
+                "episode_idx": _episode_numeric_idx(ep, rank),
+                "final_coverage": f"{float(ep.get('final_coverage', 0.0)):.4f}",
+                "baseline_coverage": "",
+                "score": f"{float(ep.get('episode_length', 0.0)):.1f}",
+                "done_reason": str(ep.get("done_reason", "")),
+            }
+        )
+
+    gate_episode_idx = _episode_numeric_idx(train_eps[gate_start_pos], gate_start_pos + 1) if len(train_eps) > 0 else 0
+    if len(successful_eps) <= 0:
+        selection_fallback = "no_success_after_gate"
+    elif len(candidates) <= 0:
+        selection_fallback = "no_long_success_above_threshold"
+    return selected, {
+        "selection_mode": "train_long_success",
+        "episodes_total": int(len(episodes)),
+        "train_episode_count": int(len(train_eps)),
+        "success_episode_count": int(len(successful_eps)),
+        "gate_start_position": int(gate_start_pos + 1),
+        "gate_start_episode_idx": int(gate_episode_idx),
+        "gate_coverage": float(gate_coverage),
+        "gate_window": int(gate_window),
+        "min_length": int(min_length),
+        "length_percentile": float(percentile),
+        "length_threshold": int(length_threshold),
+        "selection_fallback": selection_fallback,
+        "selected": selected_rows,
+    }
+
+
+def _select_train_special_low_coverage_episodes(
+    episodes: list[dict],
+    max_episodes: int,
+    *,
+    gate_coverage: float = 0.80,
+    gate_window: int = 100,
+    absolute_threshold: float = 0.75,
+    local_drop_margin: float = 0.12,
+) -> tuple[list[dict], dict[str, object]]:
+    selected, meta = _select_train_low_spike_episodes(
+        episodes,
+        max_episodes=max_episodes,
+        gate_coverage=gate_coverage,
+        gate_window=gate_window,
+        low_percentile=10.0,
+        low_cap=float(absolute_threshold),
+        low_floor=float(absolute_threshold),
+        local_window=max(21, int(gate_window)),
+        local_drop_margin=local_drop_margin,
+        min_episode_gap=12,
+    )
+    meta["selection_mode"] = "train_special_low_coverage"
+    meta["absolute_low_threshold"] = f"{float(absolute_threshold):.4f}"
+    meta["local_drop_margin"] = float(local_drop_margin)
+    return selected, meta
+
+
 def _select_episodes(
     episodes: list[dict],
     *,
@@ -492,6 +678,15 @@ def _select_episodes(
     max_episodes: int,
     gate_window: int = 100,
     coverage_target: float = 0.95,
+    highcov_timeout_min_coverage: float = 0.85,
+    long_success_gate_coverage: float = 0.80,
+    long_success_gate_window: int = 100,
+    long_success_min_length: int = 350,
+    long_success_percentile: float = 85.0,
+    lowcov_gate_coverage: float = 0.80,
+    lowcov_gate_window: int = 100,
+    lowcov_absolute_threshold: float = 0.75,
+    lowcov_local_drop_margin: float = 0.12,
 ) -> tuple[list[dict], dict[str, object]]:
     mode = str(selection_mode).strip().lower()
     if mode == "lowest_coverage":
@@ -504,7 +699,45 @@ def _select_episodes(
             gate_window=gate_window,
             coverage_target=coverage_target,
         )
+    if mode == "train_highcov_timeout":
+        return _select_train_highcov_timeout_episodes(
+            episodes,
+            max_episodes=max_episodes,
+            min_coverage=highcov_timeout_min_coverage,
+        )
+    if mode == "train_long_success":
+        return _select_train_long_success_episodes(
+            episodes,
+            max_episodes=max_episodes,
+            gate_coverage=long_success_gate_coverage,
+            gate_window=long_success_gate_window,
+            min_length=long_success_min_length,
+            percentile=long_success_percentile,
+        )
+    if mode == "train_special_low_coverage":
+        return _select_train_special_low_coverage_episodes(
+            episodes,
+            max_episodes=max_episodes,
+            gate_coverage=lowcov_gate_coverage,
+            gate_window=lowcov_gate_window,
+            absolute_threshold=lowcov_absolute_threshold,
+            local_drop_margin=lowcov_local_drop_margin,
+        )
     return _select_first_episodes(episodes, max_episodes=max_episodes)
+
+
+def _sanitize_token(text: object) -> str:
+    token = str(text).strip().lower()
+    if token == "":
+        return "na"
+    cleaned = []
+    for ch in token:
+        if ch.isalnum():
+            cleaned.append(ch)
+        else:
+            cleaned.append("_")
+    out = "".join(cleaned).strip("_")
+    return out or "na"
 
 
 def save_episode_trajectory_plots(
@@ -515,11 +748,23 @@ def save_episode_trajectory_plots(
     selection_mode: str = "first",
     gate_window: int = 100,
     coverage_target: float = 0.95,
+    output_subdir: str | Path | None = None,
+    highcov_timeout_min_coverage: float = 0.85,
+    long_success_gate_coverage: float = 0.80,
+    long_success_gate_window: int = 100,
+    long_success_min_length: int = 350,
+    long_success_percentile: float = 85.0,
+    lowcov_gate_coverage: float = 0.80,
+    lowcov_gate_window: int = 100,
+    lowcov_absolute_threshold: float = 0.75,
+    lowcov_local_drop_margin: float = 0.12,
 ) -> list[Path]:
     if len(episodes) <= 0 or max_episodes <= 0:
         return []
 
     trajectories_dir = Path(run_dir) / "trajectories"
+    if output_subdir is not None:
+        trajectories_dir = trajectories_dir / Path(output_subdir)
     try:
         trajectories_dir.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
@@ -542,6 +787,15 @@ def save_episode_trajectory_plots(
         max_episodes=max_episodes,
         gate_window=gate_window,
         coverage_target=coverage_target,
+        highcov_timeout_min_coverage=highcov_timeout_min_coverage,
+        long_success_gate_coverage=long_success_gate_coverage,
+        long_success_gate_window=long_success_gate_window,
+        long_success_min_length=long_success_min_length,
+        long_success_percentile=long_success_percentile,
+        lowcov_gate_coverage=lowcov_gate_coverage,
+        lowcov_gate_window=lowcov_gate_window,
+        lowcov_absolute_threshold=lowcov_absolute_threshold,
+        lowcov_local_drop_margin=lowcov_local_drop_margin,
     )
     _write_selection_summary(trajectories_dir, prefix, meta)
 
@@ -671,7 +925,12 @@ def save_episode_trajectory_plots(
 
             ep_label = _episode_file_label(ep, fallback_idx=render_rank)
             coverage = float(ep.get("final_coverage", 0.0))
-            out_path = trajectories_dir / f"{prefix}_{ep_label}_rank{render_rank:02d}_cov{coverage:.3f}_trajectory.png"
+            episode_length = int(ep.get("episode_length", 0))
+            done_reason = _sanitize_token(ep.get("done_reason", ""))
+            out_path = trajectories_dir / (
+                f"{prefix}_{ep_label}_rank{render_rank:02d}_cov{coverage:.3f}"
+                f"_len{episode_length:03d}_{done_reason}_trajectory.png"
+            )
             fig.savefig(out_path, dpi=150)
             generated.append(out_path)
         except Exception as exc:
@@ -681,3 +940,63 @@ def save_episode_trajectory_plots(
                 plt.close(fig)
 
     return generated
+
+
+def save_train_special_trajectory_plots(
+    run_dir: Path,
+    episodes: list[dict],
+    *,
+    highcov_timeout_min_coverage: float = 0.85,
+    highcov_timeout_max_plots: int = 5,
+    long_success_gate_coverage: float = 0.80,
+    long_success_gate_window: int = 100,
+    long_success_min_length: int = 350,
+    long_success_percentile: float = 85.0,
+    long_success_max_plots: int = 5,
+    lowcov_gate_coverage: float = 0.80,
+    lowcov_gate_window: int = 100,
+    lowcov_absolute_threshold: float = 0.75,
+    lowcov_local_drop_margin: float = 0.12,
+    lowcov_max_plots: int = 5,
+) -> list[Path]:
+    outputs: list[Path] = []
+    outputs.extend(
+        save_episode_trajectory_plots(
+            run_dir,
+            episodes,
+            prefix="highcov_timeout",
+            output_subdir=Path("train_special_episodes") / "highcov_timeout",
+            max_episodes=max(0, int(highcov_timeout_max_plots)),
+            selection_mode="train_highcov_timeout",
+            highcov_timeout_min_coverage=highcov_timeout_min_coverage,
+        )
+    )
+    outputs.extend(
+        save_episode_trajectory_plots(
+            run_dir,
+            episodes,
+            prefix="long_success",
+            output_subdir=Path("train_special_episodes") / "long_success",
+            max_episodes=max(0, int(long_success_max_plots)),
+            selection_mode="train_long_success",
+            long_success_gate_coverage=long_success_gate_coverage,
+            long_success_gate_window=long_success_gate_window,
+            long_success_min_length=long_success_min_length,
+            long_success_percentile=long_success_percentile,
+        )
+    )
+    outputs.extend(
+        save_episode_trajectory_plots(
+            run_dir,
+            episodes,
+            prefix="low_coverage",
+            output_subdir=Path("train_special_episodes") / "low_coverage",
+            max_episodes=max(0, int(lowcov_max_plots)),
+            selection_mode="train_special_low_coverage",
+            lowcov_gate_coverage=lowcov_gate_coverage,
+            lowcov_gate_window=lowcov_gate_window,
+            lowcov_absolute_threshold=lowcov_absolute_threshold,
+            lowcov_local_drop_margin=lowcov_local_drop_margin,
+        )
+    )
+    return outputs

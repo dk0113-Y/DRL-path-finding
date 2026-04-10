@@ -25,7 +25,7 @@ from training.logger import CSVMetricLogger
 from training.plotting import generate_all_plots
 from training.replay_buffer import ReplayBuffer, ReplayBufferConfig
 from training.rewarding import REWARD_BREAKDOWN_FIELDS, REWARD_EVENT_SUMMARY_FIELDS
-from training.trajectory_plotting import save_episode_trajectory_plots
+from training.trajectory_plotting import save_episode_trajectory_plots, save_train_special_trajectory_plots
 
 EVAL_SEMANTIC_METRIC_NAMES = SEMANTIC_EPISODE_FIELDS
 
@@ -47,6 +47,7 @@ class TrainConfig:
     train_print_interval: int = 2_000  # Stdout throttling only; separated from CSV logging and algorithm behavior.
     save_eval_trajectories: bool = False  # Plot-saving side overhead only; evaluation logic and metrics are unchanged.
     save_train_representative_trajectories: bool = False  # Train-failure trajectory dumping is optional wall-clock overhead.
+    save_train_special_trajectories: bool = False  # Optional train-side special-case trajectory export for post-run analysis.
     save_final_probe_trajectories: bool = False  # Final probe plotting is optional wall-clock overhead only.
     generate_plots_on_finish: bool = False  # End-of-run plotting is optional wall-clock overhead only.
     enable_collector_timing: bool = False  # Profiling only; collector timing does not change rollout/reward semantics.
@@ -69,7 +70,7 @@ class TrainConfig:
     obstacle_ratio: float = 0.20
 
     max_accessible_blocks: int = 16
-    max_entries_per_block: int = 6
+    max_entries_per_block: int = 8
 
     total_env_steps: int = 300_000
     warmup_steps: int = 4_000
@@ -116,6 +117,19 @@ class TrainConfig:
     reward_stall_penalty: float = 0.12
     reward_turn_penalty_scale: float = 0.0
     reward_timeout_penalty: float = 8.0
+
+    special_highcov_timeout_min_coverage: float = 0.85
+    special_highcov_timeout_max_plots: int = 5
+    special_long_success_gate_coverage: float = 0.80
+    special_long_success_gate_window: int = 100
+    special_long_success_min_length: int = 350
+    special_long_success_percentile: float = 85.0
+    special_long_success_max_plots: int = 5
+    special_lowcov_gate_coverage: float = 0.80
+    special_lowcov_gate_window: int = 100
+    special_lowcov_absolute_threshold: float = 0.75
+    special_lowcov_local_drop_margin: float = 0.12
+    special_lowcov_max_plots: int = 5
 
     output_root: str = "outputs"
     run_name: str = "ddqn_explore_vscode_stage5"
@@ -578,7 +592,9 @@ def build_system(cfg: TrainConfig):
         inference_amp_dtype=amp_dtype,
         debug_check_incremental_frontier=bool(cfg.debug_check_incremental_frontier),
         prefer_batch_replay_add=bool(cfg.prefer_batch_replay_add),
-        record_episode_artifacts=bool(cfg.save_train_representative_trajectories),
+        record_episode_artifacts=bool(
+            cfg.save_train_representative_trajectories or cfg.save_train_special_trajectories
+        ),
     )
     collector = TransitionCollector(collector_cfg, online_net, state_adapter, replay)
 
@@ -661,7 +677,7 @@ def run_training(cfg: TrainConfig) -> None:
             recent_eps.append(row)
             if (
                 phase == "train"
-                and bool(cfg.save_train_representative_trajectories)
+                and bool(cfg.save_train_representative_trajectories or cfg.save_train_special_trajectories)
                 and (ep.get("trajectory_positions") is not None)
                 and (ep.get("true_grid") is not None)
             ):
@@ -932,6 +948,25 @@ def run_training(cfg: TrainConfig) -> None:
                 coverage_target=float(cfg.coverage_stop_threshold),
             )
         )
+    if bool(cfg.save_train_special_trajectories):
+        trajectory_plot_paths.extend(
+            save_train_special_trajectory_plots(
+                run_dir,
+                train_trace_episodes,
+                highcov_timeout_min_coverage=float(cfg.special_highcov_timeout_min_coverage),
+                highcov_timeout_max_plots=int(cfg.special_highcov_timeout_max_plots),
+                long_success_gate_coverage=float(cfg.special_long_success_gate_coverage),
+                long_success_gate_window=int(cfg.special_long_success_gate_window),
+                long_success_min_length=int(cfg.special_long_success_min_length),
+                long_success_percentile=float(cfg.special_long_success_percentile),
+                long_success_max_plots=int(cfg.special_long_success_max_plots),
+                lowcov_gate_coverage=float(cfg.special_lowcov_gate_coverage),
+                lowcov_gate_window=int(cfg.special_lowcov_gate_window),
+                lowcov_absolute_threshold=float(cfg.special_lowcov_absolute_threshold),
+                lowcov_local_drop_margin=float(cfg.special_lowcov_local_drop_margin),
+                lowcov_max_plots=int(cfg.special_lowcov_max_plots),
+            )
+        )
     if bool(cfg.save_final_probe_trajectories):
         trajectory_plot_paths.extend(
             save_episode_trajectory_plots(
@@ -1106,6 +1141,12 @@ def parse_args() -> TrainConfig:
         help="Save all post-gate failed train episodes with trajectory/belief overlays.",
     )
     p.add_argument(
+        "--save-train-special-trajectories",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Save highcov-timeout, long-success, and low-coverage special train episodes into separate folders.",
+    )
+    p.add_argument(
         "--save-final-probe-trajectories",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -1256,7 +1297,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--obs-size", type=int, default=6)
     p.add_argument("--scan-radius", type=int, default=10)
     p.add_argument("--max-accessible-blocks", type=int, default=16)
-    p.add_argument("--max-entries-per-block", type=int, default=6)
+    p.add_argument("--max-entries-per-block", type=int, default=8)
     p.add_argument("--obstacle-ratio", type=float, default=0.20)
     p.add_argument("--reward-info-scale", type=float, default=3.0, help="weighted information gain scale")
     p.add_argument(
@@ -1292,6 +1333,18 @@ def parse_args() -> TrainConfig:
         help="light large-turn penalty scale; default 0.0 keeps the current baseline unchanged",
     )
     p.add_argument("--reward-timeout-penalty", type=float, default=8.0, help="timeout penalty")
+    p.add_argument("--special-highcov-timeout-min-coverage", type=float, default=0.85)
+    p.add_argument("--special-highcov-timeout-max-plots", type=int, default=5)
+    p.add_argument("--special-long-success-gate-coverage", type=float, default=0.80)
+    p.add_argument("--special-long-success-gate-window", type=int, default=100)
+    p.add_argument("--special-long-success-min-length", type=int, default=350)
+    p.add_argument("--special-long-success-percentile", type=float, default=85.0)
+    p.add_argument("--special-long-success-max-plots", type=int, default=5)
+    p.add_argument("--special-lowcov-gate-coverage", type=float, default=0.80)
+    p.add_argument("--special-lowcov-gate-window", type=int, default=100)
+    p.add_argument("--special-lowcov-absolute-threshold", type=float, default=0.75)
+    p.add_argument("--special-lowcov-local-drop-margin", type=float, default=0.12)
+    p.add_argument("--special-lowcov-max-plots", type=int, default=5)
 
     p.add_argument("--output-root", type=str, default="outputs")
     p.add_argument("--run-name", type=str, default="ddqn_explore_vscode_stage5")
@@ -1348,6 +1401,7 @@ def parse_args() -> TrainConfig:
             train_print_interval=max(0, args.train_print_interval),
             save_eval_trajectories=args.save_eval_trajectories,
             save_train_representative_trajectories=args.save_train_representative_trajectories,
+            save_train_special_trajectories=args.save_train_special_trajectories,
             save_final_probe_trajectories=args.save_final_probe_trajectories,
             generate_plots_on_finish=args.generate_plots_on_finish,
             enable_collector_timing=enable_collector_timing,
@@ -1402,6 +1456,18 @@ def parse_args() -> TrainConfig:
             reward_stall_penalty=args.reward_stall_penalty,
             reward_turn_penalty_scale=args.reward_turn_penalty_scale,
             reward_timeout_penalty=args.reward_timeout_penalty,
+            special_highcov_timeout_min_coverage=args.special_highcov_timeout_min_coverage,
+            special_highcov_timeout_max_plots=max(0, args.special_highcov_timeout_max_plots),
+            special_long_success_gate_coverage=args.special_long_success_gate_coverage,
+            special_long_success_gate_window=max(1, args.special_long_success_gate_window),
+            special_long_success_min_length=max(1, args.special_long_success_min_length),
+            special_long_success_percentile=args.special_long_success_percentile,
+            special_long_success_max_plots=max(0, args.special_long_success_max_plots),
+            special_lowcov_gate_coverage=args.special_lowcov_gate_coverage,
+            special_lowcov_gate_window=max(1, args.special_lowcov_gate_window),
+            special_lowcov_absolute_threshold=args.special_lowcov_absolute_threshold,
+            special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
+            special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
             output_root=args.output_root,
             run_name=args.run_name,
         )
@@ -1421,6 +1487,7 @@ def parse_args() -> TrainConfig:
         train_print_interval=max(0, args.train_print_interval),
         save_eval_trajectories=args.save_eval_trajectories,
         save_train_representative_trajectories=args.save_train_representative_trajectories,
+        save_train_special_trajectories=args.save_train_special_trajectories,
         save_final_probe_trajectories=args.save_final_probe_trajectories,
         generate_plots_on_finish=args.generate_plots_on_finish,
         enable_collector_timing=enable_collector_timing,
@@ -1476,6 +1543,18 @@ def parse_args() -> TrainConfig:
         reward_stall_penalty=args.reward_stall_penalty,
         reward_turn_penalty_scale=args.reward_turn_penalty_scale,
         reward_timeout_penalty=args.reward_timeout_penalty,
+        special_highcov_timeout_min_coverage=args.special_highcov_timeout_min_coverage,
+        special_highcov_timeout_max_plots=max(0, args.special_highcov_timeout_max_plots),
+        special_long_success_gate_coverage=args.special_long_success_gate_coverage,
+        special_long_success_gate_window=max(1, args.special_long_success_gate_window),
+        special_long_success_min_length=max(1, args.special_long_success_min_length),
+        special_long_success_percentile=args.special_long_success_percentile,
+        special_long_success_max_plots=max(0, args.special_long_success_max_plots),
+        special_lowcov_gate_coverage=args.special_lowcov_gate_coverage,
+        special_lowcov_gate_window=max(1, args.special_lowcov_gate_window),
+        special_lowcov_absolute_threshold=args.special_lowcov_absolute_threshold,
+        special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
+        special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
         output_root=args.output_root,
         run_name=args.run_name,
     )
@@ -1543,6 +1622,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         train_print_interval=2000,
         save_eval_trajectories=False,
         save_train_representative_trajectories=False,
+        save_train_special_trajectories=False,
         save_final_probe_trajectories=False,
         generate_plots_on_finish=False,
         enable_collector_timing=enable_profiling,
@@ -1562,7 +1642,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         scan_radius=10,
         obstacle_ratio=0.20,
         max_accessible_blocks=16,
-        max_entries_per_block=6,
+        max_entries_per_block=8,
         total_env_steps=300_000,
         warmup_steps=4_000,
         collect_steps_per_iter=16,
@@ -1600,6 +1680,18 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         reward_stall_penalty=0.12,
         reward_turn_penalty_scale=0.0,
         reward_timeout_penalty=8.0,
+        special_highcov_timeout_min_coverage=0.85,
+        special_highcov_timeout_max_plots=5,
+        special_long_success_gate_coverage=0.80,
+        special_long_success_gate_window=100,
+        special_long_success_min_length=350,
+        special_long_success_percentile=85.0,
+        special_long_success_max_plots=5,
+        special_lowcov_gate_coverage=0.80,
+        special_lowcov_gate_window=100,
+        special_lowcov_absolute_threshold=0.75,
+        special_lowcov_local_drop_margin=0.12,
+        special_lowcov_max_plots=5,
     )
 
 

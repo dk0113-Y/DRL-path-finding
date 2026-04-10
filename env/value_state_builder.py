@@ -43,7 +43,7 @@ VALUE_ENTRY_FEATURE_COUNT = len(VALUE_ENTRY_FEATURES)
 @dataclass(frozen=True)
 class ValueStateConfig:
     max_accessible_blocks: int = 16
-    max_entries_per_block: int = 6
+    max_entries_per_block: int = 8
     enable_timing: bool = False
 
 
