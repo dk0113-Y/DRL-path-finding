@@ -51,19 +51,9 @@ TRAIN_SEMANTIC_SUMMARY_PANELS = (
         "series": (("recent_accessible_block_count", "accessible blocks"),),
     },
     {
-        "title": "Accessible unknown area (recent)",
-        "y_label": "cells",
-        "series": (("recent_total_accessible_unknown_area", "unknown area"),),
-    },
-    {
         "title": "Frontier cluster count (recent)",
         "y_label": "clusters",
         "series": (("recent_total_frontier_cluster_count", "frontier clusters"),),
-    },
-    {
-        "title": "Mean block area (recent)",
-        "y_label": "cells",
-        "series": (("recent_mean_block_area", "mean block area"),),
     },
     {
         "title": "Local frontier coverage (recent)",
@@ -71,9 +61,59 @@ TRAIN_SEMANTIC_SUMMARY_PANELS = (
         "series": (("recent_local_frontier_coverage", "local frontier coverage"),),
     },
     {
-        "title": "Local frontier block-area mean (recent)",
-        "y_label": "area",
-        "series": (("recent_local_frontier_block_area_mean", "local frontier block-area mean"),),
+        "title": "Value blocks before cap (recent)",
+        "y_label": "blocks",
+        "series": (("recent_value_total_block_count_before_cap", "value blocks before cap"),),
+    },
+    {
+        "title": "Value packed blocks (recent)",
+        "y_label": "blocks",
+        "series": (("recent_value_packed_block_count", "value packed blocks"),),
+    },
+    {
+        "title": "Value truncated blocks (recent)",
+        "y_label": "blocks",
+        "series": (("recent_value_truncated_block_count", "value truncated blocks"),),
+    },
+    {
+        "title": "Value block-cap hit rate (recent)",
+        "y_label": "rate",
+        "series": (("recent_value_block_cap_hit_flag", "value block-cap hit rate"),),
+    },
+    {
+        "title": "Value entries before cap (recent)",
+        "y_label": "entries",
+        "series": (("recent_value_total_entry_count_before_cap", "value entries before cap"),),
+    },
+    {
+        "title": "Value packed entries (recent)",
+        "y_label": "entries",
+        "series": (("recent_value_packed_entry_count", "value packed entries"),),
+    },
+    {
+        "title": "Value truncated entries (recent)",
+        "y_label": "entries",
+        "series": (("recent_value_truncated_entry_count", "value truncated entries"),),
+    },
+    {
+        "title": "Value entry-cap-hit blocks (recent)",
+        "y_label": "blocks",
+        "series": (("recent_value_entry_cap_hit_block_count", "value entry-cap-hit blocks"),),
+    },
+    {
+        "title": "Value entry-cap hit rate (recent)",
+        "y_label": "rate",
+        "series": (("recent_value_entry_cap_hit_flag", "value entry-cap hit rate"),),
+    },
+    {
+        "title": "Max frontier clusters per block (recent)",
+        "y_label": "clusters",
+        "series": (("recent_value_max_frontier_clusters_per_block", "max clusters per block"),),
+    },
+    {
+        "title": "Mean frontier clusters per block (recent)",
+        "y_label": "clusters",
+        "series": (("recent_value_mean_frontier_clusters_per_block", "mean clusters per block"),),
     },
 )
 TRAIN_REWARD_BREAKDOWN_PANELS = (
@@ -133,19 +173,9 @@ EVAL_SEMANTIC_SUMMARY_PANELS = (
         "series": (("eval_mean_accessible_block_count", "accessible blocks"),),
     },
     {
-        "title": "Accessible unknown area",
-        "y_label": "cells",
-        "series": (("eval_mean_total_accessible_unknown_area", "unknown area"),),
-    },
-    {
         "title": "Frontier cluster count",
         "y_label": "clusters",
         "series": (("eval_mean_total_frontier_cluster_count", "frontier clusters"),),
-    },
-    {
-        "title": "Mean block area",
-        "y_label": "cells",
-        "series": (("eval_mean_mean_block_area", "mean block area"),),
     },
     {
         "title": "Local frontier coverage",
@@ -153,9 +183,59 @@ EVAL_SEMANTIC_SUMMARY_PANELS = (
         "series": (("eval_mean_local_frontier_coverage", "local frontier coverage"),),
     },
     {
-        "title": "Local frontier block-area mean",
-        "y_label": "area",
-        "series": (("eval_mean_local_frontier_block_area_mean", "local frontier block-area mean"),),
+        "title": "Value blocks before cap",
+        "y_label": "blocks",
+        "series": (("eval_mean_value_total_block_count_before_cap", "value blocks before cap"),),
+    },
+    {
+        "title": "Value packed blocks",
+        "y_label": "blocks",
+        "series": (("eval_mean_value_packed_block_count", "value packed blocks"),),
+    },
+    {
+        "title": "Value truncated blocks",
+        "y_label": "blocks",
+        "series": (("eval_mean_value_truncated_block_count", "value truncated blocks"),),
+    },
+    {
+        "title": "Value block-cap hit rate",
+        "y_label": "rate",
+        "series": (("eval_mean_value_block_cap_hit_flag", "value block-cap hit rate"),),
+    },
+    {
+        "title": "Value entries before cap",
+        "y_label": "entries",
+        "series": (("eval_mean_value_total_entry_count_before_cap", "value entries before cap"),),
+    },
+    {
+        "title": "Value packed entries",
+        "y_label": "entries",
+        "series": (("eval_mean_value_packed_entry_count", "value packed entries"),),
+    },
+    {
+        "title": "Value truncated entries",
+        "y_label": "entries",
+        "series": (("eval_mean_value_truncated_entry_count", "value truncated entries"),),
+    },
+    {
+        "title": "Value entry-cap-hit blocks",
+        "y_label": "blocks",
+        "series": (("eval_mean_value_entry_cap_hit_block_count", "value entry-cap-hit blocks"),),
+    },
+    {
+        "title": "Value entry-cap hit rate",
+        "y_label": "rate",
+        "series": (("eval_mean_value_entry_cap_hit_flag", "value entry-cap hit rate"),),
+    },
+    {
+        "title": "Max frontier clusters per block",
+        "y_label": "clusters",
+        "series": (("eval_mean_value_max_frontier_clusters_per_block", "max clusters per block"),),
+    },
+    {
+        "title": "Mean frontier clusters per block",
+        "y_label": "clusters",
+        "series": (("eval_mean_value_mean_frontier_clusters_per_block", "mean clusters per block"),),
     },
 )
 EVAL_REWARD_BREAKDOWN_PANELS = (
@@ -224,7 +304,7 @@ _DASHBOARD_SPECS = (
         "filename": "train_semantic_summary.png",
         "title": "Train semantic summary",
         "panels": TRAIN_SEMANTIC_SUMMARY_PANELS,
-        "ncols": 2,
+        "ncols": 4,
     },
     {
         "csv_name": _TRAIN_EPISODES_CSV,
@@ -252,7 +332,7 @@ _DASHBOARD_SPECS = (
         "filename": "eval_semantic_summary.png",
         "title": "Eval semantic summary",
         "panels": EVAL_SEMANTIC_SUMMARY_PANELS,
-        "ncols": 2,
+        "ncols": 4,
     },
     {
         "csv_name": _EVAL_METRICS_CSV,

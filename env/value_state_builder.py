@@ -23,6 +23,19 @@ VALUE_ENTRY_FEATURES = (
     "entry_width_ratio",
     "support_obstacle_density",
 )
+VALUE_DIAGNOSTIC_FIELDS = (
+    "value_total_block_count_before_cap",
+    "value_packed_block_count",
+    "value_truncated_block_count",
+    "value_block_cap_hit_flag",
+    "value_total_entry_count_before_cap",
+    "value_packed_entry_count",
+    "value_truncated_entry_count",
+    "value_entry_cap_hit_block_count",
+    "value_entry_cap_hit_flag",
+    "value_max_frontier_clusters_per_block",
+    "value_mean_frontier_clusters_per_block",
+)
 VALUE_BLOCK_FEATURE_COUNT = len(VALUE_BLOCK_FEATURES)
 VALUE_ENTRY_FEATURE_COUNT = len(VALUE_ENTRY_FEATURES)
 
@@ -55,7 +68,7 @@ class ValueStateBuilder:
     def build(
         self,
         semantic_snapshot: SharedSemanticSnapshot,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, float]]:
         t0 = time.perf_counter() if self._timing_enabled else 0.0
         max_blocks = int(self.config.max_accessible_blocks)
         max_entries = int(self.config.max_entries_per_block)
@@ -64,7 +77,50 @@ class ValueStateBuilder:
         block_mask = np.zeros((max_blocks,), dtype=bool)
         entry_mask = np.zeros((max_blocks, max_entries), dtype=bool)
 
-        blocks = list(semantic_snapshot.accessible_blocks[:max_blocks])
+        accessible_blocks = list(semantic_snapshot.accessible_blocks)
+        total_block_count = int(len(accessible_blocks))
+        packed_block_count = int(min(total_block_count, max_blocks))
+        truncated_block_count = int(max(0, total_block_count - max_blocks))
+        block_cap_hit_flag = float(truncated_block_count > 0)
+
+        frontier_cluster_counts = [int(block.frontier_cluster_count) for block in accessible_blocks]
+        total_entry_count_before_cap = int(sum(frontier_cluster_counts))
+        max_frontier_clusters_per_block = int(max(frontier_cluster_counts)) if len(frontier_cluster_counts) > 0 else 0
+        mean_frontier_clusters_per_block = (
+            float(total_entry_count_before_cap) / float(total_block_count)
+            if total_block_count > 0 else 0.0
+        )
+
+        packed_entry_count = 0
+        truncated_entry_count = 0
+        entry_cap_hit_block_count = 0
+        for block_idx, cluster_count in enumerate(frontier_cluster_counts):
+            if block_idx < max_blocks:
+                packed_entry_count += int(min(cluster_count, max_entries))
+                truncated_entry_count += int(max(0, cluster_count - max_entries))
+                if int(cluster_count) > max_entries:
+                    entry_cap_hit_block_count += 1
+            else:
+                # Clusters under blocks dropped by the block cap are also lost before the
+                # value branch sees them, so they count toward total entry truncation.
+                truncated_entry_count += int(cluster_count)
+        entry_cap_hit_flag = float(entry_cap_hit_block_count > 0)
+
+        value_meta = {
+            "value_total_block_count_before_cap": float(total_block_count),
+            "value_packed_block_count": float(packed_block_count),
+            "value_truncated_block_count": float(truncated_block_count),
+            "value_block_cap_hit_flag": float(block_cap_hit_flag),
+            "value_total_entry_count_before_cap": float(total_entry_count_before_cap),
+            "value_packed_entry_count": float(packed_entry_count),
+            "value_truncated_entry_count": float(truncated_entry_count),
+            "value_entry_cap_hit_block_count": float(entry_cap_hit_block_count),
+            "value_entry_cap_hit_flag": float(entry_cap_hit_flag),
+            "value_max_frontier_clusters_per_block": float(max_frontier_clusters_per_block),
+            "value_mean_frontier_clusters_per_block": float(mean_frontier_clusters_per_block),
+        }
+
+        blocks = accessible_blocks[:max_blocks]
         total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
         box_h, box_w = semantic_snapshot.analysis_box.shape
         delta_r_scale = float(max(1, box_h))
@@ -91,7 +147,7 @@ class ValueStateBuilder:
 
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0
-        return block_features, entry_features, block_mask, entry_mask
+        return block_features, entry_features, block_mask, entry_mask, value_meta
 
     def get_timing_stats(self) -> dict[str, float]:
         return {"build_time": float(self.build_time)}

@@ -17,6 +17,7 @@ from env.core_cummap import CumulativeBeliefMap
 from env.core_radar import RadarSensor
 from env.grid_topology import ACTIONS_8, GridTopology
 from env.shared_semantic_layer import build_semantic_visualization_payload
+from env.value_state_builder import VALUE_DIAGNOSTIC_FIELDS
 from training.rewarding import (
     REWARD_EVENT_SUMMARY_FIELDS,
     add_reward_breakdown,
@@ -40,6 +41,7 @@ SEMANTIC_EPISODE_FIELDS = (
     "mean_block_area",
     "local_frontier_coverage",
     "local_frontier_block_area_mean",
+    *VALUE_DIAGNOSTIC_FIELDS,
 )
 
 
@@ -56,6 +58,8 @@ def summarize_semantic_records(records: list[dict[str, float]]) -> dict[str, flo
     if len(records) <= 0:
         return {field: float("nan") for field in SEMANTIC_EPISODE_FIELDS}
 
+    # Episode-level semantic/value-cap diagnostics use per-step means so they
+    # stay directly comparable with recent_* train summaries and eval_mean_* logs.
     return {
         field: _nanmean_or_nan([float(item.get(field, float("nan"))) for item in records])
         for field in SEMANTIC_EPISODE_FIELDS

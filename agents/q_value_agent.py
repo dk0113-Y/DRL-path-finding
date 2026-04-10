@@ -352,7 +352,7 @@ class StateTensorAdapter:
             self.advantage_build_time += time.perf_counter() - t0
 
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        block_np, entry_np, block_mask_np, entry_mask_np = self.value_builder.build(
+        block_np, entry_np, block_mask_np, entry_mask_np, value_meta = self.value_builder.build(
             shared_artifacts.semantic_snapshot,
         )
         if self._timing_enabled:
@@ -375,7 +375,7 @@ class StateTensorAdapter:
         }
 
         semantic_meta = dict(shared_artifacts.semantic_snapshot.metrics())
-        state_meta = {**semantic_meta, **local_meta}
+        state_meta = {**semantic_meta, **local_meta, **value_meta}
         if target_device is not None and self._resolve_device(target_device).type != "cpu":
             state_batch = self.move_state_batch(state_batch, target_device=target_device)
 
