@@ -13,8 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.tuning.decision_rules import ComparisonOutcome, compare_to_baseline
-from scripts.tuning.recipes import get_recipe
+from scripts.tuning.decision_rules import ComparisonOutcome, compare_candidate_to_reference
+from scripts.tuning.recipes import TrialPlan, get_recipe
 from scripts.tuning.result_reader import COMPLETE_STATUSES, RunResult, find_latest_run_dir, read_run_result
 from scripts.tuning.scheduler_core import SessionLogger, TrialExecution, build_train_command, execute_trial
 
@@ -85,11 +85,15 @@ def _metrics_lines(title: str, metrics: dict[str, Any], keys: list[str]) -> list
 
 def _trial_markdown(record: dict[str, Any]) -> str:
     result = record.get("result") or {}
+    reference = record.get("comparison_reference") or {}
     lines = [
         f"# {record['trial_id']}",
         "",
         f"- Status: {record['status']}",
         f"- Reason: {record['status_reason']}",
+        f"- Branch position: {record.get('branch_position') or 'n/a'}",
+        f"- Decision note: {record.get('decision_note') or 'n/a'}",
+        f"- Comparison reference: {reference.get('label') or 'n/a'}",
         f"- Run dir: {record.get('run_dir') or 'n/a'}",
         f"- Return code: {_format_value(record.get('return_code'))}",
         f"- Params: turn={record['params']['reward_turn_penalty_scale']}, revisit={record['params']['reward_revisit_penalty']}, entry={record['params']['max_entries_per_block']}",
@@ -190,6 +194,7 @@ def _session_markdown(summary: dict[str, Any]) -> str:
         f"- Baseline run dir: {baseline['run_dir']}",
         f"- Final recommendation: {summary['final_recommendation']['source']}",
         f"- Recommendation reason: {summary['final_recommendation']['reason']}",
+        f"- Recommendation basis: {summary['final_recommendation'].get('recommendation_basis', 'n/a')}",
         "",
         "## Baseline Final Probe",
         "",
@@ -211,16 +216,20 @@ def _session_markdown(summary: dict[str, Any]) -> str:
 
     if summary.get("planned_commands"):
         lines.extend(["## Planned Commands", ""])
-        for label, command in summary["planned_commands"].items():
-            lines.append(f"- {label}: {command}")
+        for label, plan in summary["planned_commands"].items():
+            lines.append(
+                f"- {label}: {plan['command']} | compare_to={plan['compare_to']} | branch={plan['branch_position']}"
+            )
         lines.append("")
 
     if summary.get("trials"):
         lines.extend(["## Trials", ""])
         for record in summary["trials"]:
+            reference_label = ((record.get("comparison_reference") or {}).get("label")) or "n/a"
             lines.append(
                 f"- {record['trial_id']}: {record['status']} / "
-                f"{(record.get('comparison') or {}).get('verdict', 'n/a')}"
+                f"{(record.get('comparison') or {}).get('verdict', 'n/a')} / "
+                f"reference={reference_label} / branch={record.get('branch_position') or 'n/a'}"
             )
         lines.append("")
     return "\n".join(lines).strip() + "\n"
@@ -228,18 +237,23 @@ def _session_markdown(summary: dict[str, Any]) -> str:
 
 def _build_trial_record(
     execution: TrialExecution,
+    trial_plan: TrialPlan,
+    reference_info: dict[str, Any],
     comparison: ComparisonOutcome | None,
     entry_cap: int,
 ) -> dict[str, Any]:
     return {
         "trial_id": execution.trial_id,
         "note": execution.trial_spec.note,
+        "branch_position": trial_plan.branch_position,
+        "decision_note": trial_plan.decision_note,
         "params": {
             "reward_turn_penalty_scale": execution.trial_spec.turn_penalty_scale,
             "reward_revisit_penalty": execution.trial_spec.revisit_penalty,
             "max_entries_per_block": entry_cap,
             "run_name": execution.trial_spec.run_name(entry_cap),
         },
+        "comparison_reference": reference_info,
         "command": execution.command,
         "started_at": execution.started_at,
         "ended_at": execution.ended_at,
@@ -265,14 +279,9 @@ def _planned_commands(
     args: argparse.Namespace,
     output_root: Path,
     recipe: Any,
-) -> dict[str, str]:
-    commands: dict[str, str] = {}
-    step_specs = {
-        "step_1": recipe.initial_trial(),
-        "if_better_or_slightly_better": recipe.next_trial("better"),
-        "if_not_better": recipe.next_trial("not_better"),
-    }
-    for label, spec in step_specs.items():
+) -> dict[str, dict[str, str]]:
+    commands: dict[str, dict[str, str]] = {}
+    for label, plan in recipe.possible_trial_plans(args.entry_cap).items():
         command = build_train_command(
             python_executable=args.python_executable,
             train_script=args.train_script,
@@ -282,17 +291,65 @@ def _planned_commands(
             total_env_steps=args.total_env_steps,
             entry_cap=args.entry_cap,
             generate_plots_on_finish=args.generate_plots_on_finish,
-            trial_spec=spec,
-            run_name=spec.run_name(args.entry_cap),
+            trial_spec=plan.trial_spec,
+            run_name=plan.trial_spec.run_name(args.entry_cap),
         )
-        commands[label] = subprocess.list2cmdline(command)
+        commands[label] = {
+            "command": subprocess.list2cmdline(command),
+            "compare_to": plan.compare_to,
+            "branch_position": plan.branch_position,
+            "decision_note": plan.decision_note,
+        }
     return commands
+
+
+def _default_recommendation(baseline_reference: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "source": "baseline",
+        "parameters": baseline_reference,
+        "comparison_reference": "baseline",
+        "reason": reason,
+        "verdict": "baseline",
+        "recommendation_basis": "decision_tree_internal_comparisons",
+    }
+
+
+def _resolve_reference_context(
+    reference_label: str,
+    *,
+    baseline_result: RunResult,
+    baseline_reference: dict[str, Any],
+    baseline_run_dir: Path,
+    trial_records: list[dict[str, Any]],
+) -> tuple[Any, dict[str, Any]]:
+    if reference_label == "baseline":
+        return baseline_result, {
+            "label": "baseline",
+            "source_type": "baseline",
+            "run_dir": str(baseline_run_dir),
+            "params": baseline_reference,
+        }
+
+    for record in trial_records:
+        if record.get("trial_id") != reference_label:
+            continue
+        if not record.get("result"):
+            raise RuntimeError(f"Reference trial {reference_label} has no readable result payload.")
+        return record["result"], {
+            "label": reference_label,
+            "source_type": "trial",
+            "run_dir": record.get("run_dir"),
+            "params": record.get("params"),
+        }
+
+    raise RuntimeError(f"Reference '{reference_label}' is not available in the executed trial history.")
 
 
 def main() -> int:
     args = parse_args()
     output_root = _resolve_repo_path(args.output_root, base_dir=REPO_ROOT)
     recipe = get_recipe(args.recipe)
+    baseline_reference = recipe.baseline_reference(args.entry_cap)
     session_name = args.session_name or f"scheduler_{args.recipe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     session_dir = output_root / "scheduler_runs" / session_name
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -321,24 +378,20 @@ def main() -> int:
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "recipe": args.recipe,
         "dry_run": args.dry_run,
-        "decision_tree": recipe.branch_preview(),
+        "decision_tree": recipe.branch_preview(args.entry_cap),
+        "max_new_trials": recipe.max_new_trials(),
         "baseline": {
             "source_type": baseline_source_type,
             "run_dir": str(baseline_run_dir),
+            "reference_parameters": baseline_reference,
             "result": baseline_result.to_dict(),
         },
         "planned_commands": planned_commands,
         "trials": [],
-        "final_recommendation": {
-            "source": "baseline",
-            "parameters": {
-                "reward_turn_penalty_scale": 0.03,
-                "reward_revisit_penalty": 0.12,
-                "max_entries_per_block": args.entry_cap,
-            },
-            "reason": "Dry run or no successful trials yet.",
-            "verdict": "baseline",
-        },
+        "final_recommendation": _default_recommendation(
+            baseline_reference,
+            "Dry run or no successful trials yet.",
+        ),
     }
 
     if args.dry_run:
@@ -348,98 +401,85 @@ def main() -> int:
         return 0
 
     trial_records: list[dict[str, Any]] = []
-    first_execution = execute_trial(
-        repo_root=REPO_ROOT,
-        session_logger=session_logger,
-        session_dir=session_dir,
-        python_executable=args.python_executable,
-        train_script=args.train_script,
-        output_root=output_root,
-        device=args.device,
-        seed=args.seed,
-        total_env_steps=args.total_env_steps,
-        entry_cap=args.entry_cap,
-        generate_plots_on_finish=args.generate_plots_on_finish,
-        trial_spec=recipe.initial_trial(),
-        trial_index=1,
-        dry_run=False,
-    )
-
-    first_comparison: ComparisonOutcome | None = None
-    if first_execution.result and first_execution.status in COMPLETE_STATUSES:
-        first_comparison = compare_to_baseline(first_execution.result, baseline_result)
+    next_plan = recipe.initial_trial_plan(args.entry_cap)
+    failed_trial = False
+    while next_plan is not None and len(trial_records) < recipe.max_new_trials():
+        trial_index = len(trial_records) + 1
         session_logger.write(
-            f"{first_execution.trial_id} comparison verdict: {first_comparison.verdict}"
+            f"Planned trial_{trial_index:02d}: compare_to={next_plan.compare_to}, "
+            f"branch={next_plan.branch_position}"
+        )
+        reference_summary, reference_info = _resolve_reference_context(
+            next_plan.compare_to,
+            baseline_result=baseline_result,
+            baseline_reference=baseline_reference,
+            baseline_run_dir=baseline_run_dir,
+            trial_records=trial_records,
+        )
+        execution = execute_trial(
+            repo_root=REPO_ROOT,
+            session_logger=session_logger,
+            session_dir=session_dir,
+            python_executable=args.python_executable,
+            train_script=args.train_script,
+            output_root=output_root,
+            device=args.device,
+            seed=args.seed,
+            total_env_steps=args.total_env_steps,
+            entry_cap=args.entry_cap,
+            generate_plots_on_finish=args.generate_plots_on_finish,
+            trial_spec=next_plan.trial_spec,
+            trial_index=trial_index,
+            dry_run=False,
         )
 
-    first_record = _build_trial_record(first_execution, first_comparison, args.entry_cap)
-    trial_records.append(first_record)
-    _write_trial_summary(session_dir, first_record)
+        comparison: ComparisonOutcome | None = None
+        if execution.result and execution.status in COMPLETE_STATUSES:
+            comparison = compare_candidate_to_reference(execution.result, reference_summary)
+            session_logger.write(
+                f"{execution.trial_id} comparison verdict vs {reference_info['label']}: {comparison.verdict}"
+            )
 
-    if first_execution.status not in COMPLETE_STATUSES:
-        session_logger.write("Stopping after trial_01 because core artifacts were incomplete.")
-        summary["trials"] = trial_records
-        summary["final_recommendation"] = {
-            "source": "baseline",
-            "parameters": {
-                "reward_turn_penalty_scale": 0.03,
-                "reward_revisit_penalty": 0.12,
-                "max_entries_per_block": args.entry_cap,
-            },
-            "reason": "trial_01 failed to produce complete core artifacts.",
-            "verdict": "baseline",
-        }
-        _json_dump(session_dir / "session_summary.json", summary)
-        (session_dir / "session_summary.md").write_text(_session_markdown(summary), encoding="utf-8")
-        return 1
-
-    next_trial_spec = recipe.next_trial((first_comparison or ComparisonOutcome("not_better", [], {})).verdict)
-    session_logger.write(
-        f"Decision branch after trial_01: {(first_comparison or ComparisonOutcome('not_better', [], {})).verdict}"
-    )
-
-    second_execution = execute_trial(
-        repo_root=REPO_ROOT,
-        session_logger=session_logger,
-        session_dir=session_dir,
-        python_executable=args.python_executable,
-        train_script=args.train_script,
-        output_root=output_root,
-        device=args.device,
-        seed=args.seed,
-        total_env_steps=args.total_env_steps,
-        entry_cap=args.entry_cap,
-        generate_plots_on_finish=args.generate_plots_on_finish,
-        trial_spec=next_trial_spec,
-        trial_index=2,
-        dry_run=False,
-    )
-
-    second_comparison: ComparisonOutcome | None = None
-    if second_execution.result and second_execution.status in COMPLETE_STATUSES:
-        second_comparison = compare_to_baseline(second_execution.result, baseline_result)
-        session_logger.write(
-            f"{second_execution.trial_id} comparison verdict: {second_comparison.verdict}"
+        record = _build_trial_record(
+            execution,
+            next_plan,
+            reference_info,
+            comparison,
+            args.entry_cap,
         )
+        trial_records.append(record)
+        _write_trial_summary(session_dir, record)
 
-    second_record = _build_trial_record(second_execution, second_comparison, args.entry_cap)
-    trial_records.append(second_record)
-    _write_trial_summary(session_dir, second_record)
+        if execution.status not in COMPLETE_STATUSES:
+            session_logger.write(
+                f"Stopping after {execution.trial_id} because core artifacts were incomplete."
+            )
+            failed_trial = True
+            break
+
+        next_plan = recipe.next_trial_plan(args.entry_cap, trial_records)
 
     summary["trials"] = trial_records
-    summary["final_recommendation"] = recipe.finalize_recommendation(
-        baseline_result=baseline_result,
-        trial_records=trial_records,
-        entry_cap=args.entry_cap,
-    )
+    if failed_trial:
+        last_trial_id = trial_records[-1]["trial_id"] if trial_records else "trial_00"
+        summary["final_recommendation"] = _default_recommendation(
+            baseline_reference,
+            f"{last_trial_id} failed to produce complete core artifacts.",
+        )
+    else:
+        summary["final_recommendation"] = recipe.finalize_recommendation(
+            baseline_result=baseline_result,
+            trial_records=trial_records,
+            entry_cap=args.entry_cap,
+        )
     _json_dump(session_dir / "session_summary.json", summary)
     (session_dir / "session_summary.md").write_text(_session_markdown(summary), encoding="utf-8")
     session_logger.write(
         "Final recommendation: "
         f"{summary['final_recommendation']['source']} -> {summary['final_recommendation']['parameters']}"
     )
-    if second_execution.status not in COMPLETE_STATUSES:
-        session_logger.write("Stopping with non-zero exit because trial_02 core artifacts were incomplete.")
+    if failed_trial:
+        session_logger.write("Stopping with non-zero exit because a trial had incomplete core artifacts.")
         return 1
     return 0
 

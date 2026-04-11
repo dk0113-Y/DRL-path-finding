@@ -6,6 +6,9 @@ from typing import Any
 from .decision_rules import verdict_rank
 
 
+GOOD_VERDICTS = {"better", "slightly_better"}
+
+
 @dataclass(frozen=True)
 class TrialSpec:
     turn_penalty_scale: float
@@ -25,16 +28,41 @@ class TrialSpec:
         }
 
 
+@dataclass(frozen=True)
+class TrialPlan:
+    trial_spec: TrialSpec
+    compare_to: str
+    branch_position: str
+    decision_note: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trial_spec": self.trial_spec.to_dict(),
+            "compare_to": self.compare_to,
+            "branch_position": self.branch_position,
+            "decision_note": self.decision_note,
+        }
+
+
 class RecipeBase:
     name = "base"
 
-    def initial_trial(self) -> TrialSpec:
+    def baseline_reference(self, entry_cap: int) -> dict[str, Any]:
         raise NotImplementedError
 
-    def next_trial(self, first_verdict: str) -> TrialSpec:
+    def max_new_trials(self) -> int:
         raise NotImplementedError
 
-    def branch_preview(self) -> dict[str, Any]:
+    def initial_trial_plan(self, entry_cap: int) -> TrialPlan:
+        raise NotImplementedError
+
+    def next_trial_plan(self, entry_cap: int, trial_records: list[dict[str, Any]]) -> TrialPlan | None:
+        raise NotImplementedError
+
+    def branch_preview(self, entry_cap: int) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def possible_trial_plans(self, entry_cap: int) -> dict[str, TrialPlan]:
         raise NotImplementedError
 
     def finalize_recommendation(
@@ -43,16 +71,15 @@ class RecipeBase:
         trial_records: list[dict[str, Any]],
         entry_cap: int,
     ) -> dict[str, Any]:
+        baseline_reference = self.baseline_reference(entry_cap)
         best_record: dict[str, Any] | None = None
         best_choice = {
             "source": "baseline",
-            "parameters": {
-                "reward_turn_penalty_scale": 0.03,
-                "reward_revisit_penalty": 0.12,
-                "max_entries_per_block": entry_cap,
-            },
-            "reason": "No executed trial beat the baseline gate.",
+            "parameters": baseline_reference,
+            "comparison_reference": "baseline",
+            "reason": "No executed trial beat the decision-tree comparison gate.",
             "verdict": "baseline",
+            "recommendation_basis": "decision_tree_internal_comparisons",
         }
         best_rank = -1
 
@@ -61,6 +88,7 @@ class RecipeBase:
             rank = verdict_rank(verdict)
             if rank < 1:
                 continue
+            reference_label = ((record.get("comparison_reference") or {}).get("label")) or "baseline"
             if rank > best_rank:
                 best_record = record
                 best_choice = {
@@ -70,8 +98,10 @@ class RecipeBase:
                         "reward_revisit_penalty": record["params"]["reward_revisit_penalty"],
                         "max_entries_per_block": entry_cap,
                     },
-                    "reason": f"{record.get('trial_id')} scored {verdict} against baseline.",
+                    "comparison_reference": reference_label,
+                    "reason": f"{record.get('trial_id')} scored {verdict} against {reference_label}.",
                     "verdict": verdict,
+                    "recommendation_basis": "decision_tree_internal_comparisons",
                 }
                 best_rank = rank
                 continue
@@ -84,11 +114,13 @@ class RecipeBase:
                         "reward_revisit_penalty": record["params"]["reward_revisit_penalty"],
                         "max_entries_per_block": entry_cap,
                     },
+                    "comparison_reference": reference_label,
                     "reason": (
-                        f"{record.get('trial_id')} tied on verdict but had stronger final_probe reward/"
-                        "success/coverage trade-off."
+                        f"{record.get('trial_id')} tied on verdict and had the stronger final_probe "
+                        f"tie-break against current recommendation candidates."
                     ),
                     "verdict": verdict,
+                    "recommendation_basis": "decision_tree_internal_comparisons",
                 }
 
         return best_choice
@@ -123,49 +155,331 @@ class RecipeBase:
                 -repeat_ratio if repeat_ratio is not None else float("-inf"),
             )
 
-        candidate_score = score(candidate_probe)
-        current_score = score(current_probe)
-        return candidate_score > current_score
+        return score(candidate_probe) > score(current_probe)
+
+    def _verdict_for(self, trial_records: list[dict[str, Any]], trial_id: str) -> str:
+        for record in trial_records:
+            if record.get("trial_id") == trial_id:
+                return ((record.get("comparison") or {}).get("verdict")) or "not_better"
+        raise ValueError(f"Missing verdict for {trial_id}")
 
 
 class TurnRevisitTreeV1Recipe(RecipeBase):
     name = "turn_revisit_tree_v1"
 
-    def initial_trial(self) -> TrialSpec:
-        return TrialSpec(
-            turn_penalty_scale=0.07,
-            revisit_penalty=0.10,
-            note="Step 1: stronger turn penalty plus slightly lighter revisit penalty.",
-        )
-
-    def next_trial(self, first_verdict: str) -> TrialSpec:
-        if first_verdict in {"better", "slightly_better"}:
-            return TrialSpec(
-                turn_penalty_scale=0.07,
-                revisit_penalty=0.08,
-                note="Aggressive branch: keep turn=0.07 and relax revisit penalty further.",
-            )
-        return TrialSpec(
-            turn_penalty_scale=0.05,
-            revisit_penalty=0.10,
-            note="Conservative branch: soften turn penalty while keeping revisit=0.10.",
-        )
-
-    def branch_preview(self) -> dict[str, Any]:
+    def baseline_reference(self, entry_cap: int) -> dict[str, Any]:
         return {
-            "baseline_reference": {
-                "reward_turn_penalty_scale": 0.03,
-                "reward_revisit_penalty": 0.12,
+            "reward_turn_penalty_scale": 0.03,
+            "reward_revisit_penalty": 0.12,
+            "max_entries_per_block": entry_cap,
+        }
+
+    def max_new_trials(self) -> int:
+        return 2
+
+    def initial_trial_plan(self, entry_cap: int) -> TrialPlan:
+        return TrialPlan(
+            trial_spec=TrialSpec(
+                turn_penalty_scale=0.07,
+                revisit_penalty=0.10,
+                note="Step 1: stronger turn penalty plus slightly lighter revisit penalty.",
+            ),
+            compare_to="baseline",
+            branch_position="trial_01",
+            decision_note="First probe against baseline reference.",
+        )
+
+    def next_trial_plan(self, entry_cap: int, trial_records: list[dict[str, Any]]) -> TrialPlan | None:
+        if not trial_records:
+            return self.initial_trial_plan(entry_cap)
+        if len(trial_records) >= self.max_new_trials():
+            return None
+
+        first_verdict = self._verdict_for(trial_records, "trial_01")
+        if first_verdict in GOOD_VERDICTS:
+            return TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.07,
+                    revisit_penalty=0.08,
+                    note="Aggressive branch: keep turn=0.07 and relax revisit penalty further.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_02.after_trial_01_good",
+                decision_note="trial_01 cleared the baseline gate, so test revisit=0.08 next.",
+            )
+
+        return TrialPlan(
+            trial_spec=TrialSpec(
+                turn_penalty_scale=0.05,
+                revisit_penalty=0.10,
+                note="Conservative branch: soften turn penalty while keeping revisit=0.10.",
+            ),
+            compare_to="baseline",
+            branch_position="trial_02.after_trial_01_not_better",
+            decision_note="trial_01 did not clear the baseline gate, so soften turn to 0.05.",
+        )
+
+    def branch_preview(self, entry_cap: int) -> dict[str, Any]:
+        return {
+            "baseline_reference": self.baseline_reference(entry_cap),
+            "trial_01": self.initial_trial_plan(entry_cap).to_dict(),
+            "after_trial_01_better_or_slightly_better": {
+                "trial_02": self.possible_trial_plans(entry_cap)["trial_02_if_trial_01_good"].to_dict(),
             },
-            "step_1": self.initial_trial().to_dict(),
-            "if_better_or_slightly_better": self.next_trial("better").to_dict(),
-            "if_not_better": self.next_trial("not_better").to_dict(),
+            "after_trial_01_not_better": {
+                "trial_02": self.possible_trial_plans(entry_cap)["trial_02_if_trial_01_not_better"].to_dict(),
+            },
+        }
+
+    def possible_trial_plans(self, entry_cap: int) -> dict[str, TrialPlan]:
+        return {
+            "trial_01": self.initial_trial_plan(entry_cap),
+            "trial_02_if_trial_01_good": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.07,
+                    revisit_penalty=0.08,
+                    note="Aggressive branch: keep turn=0.07 and relax revisit penalty further.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_02.after_trial_01_good",
+                decision_note="trial_01 cleared the baseline gate, so test revisit=0.08 next.",
+            ),
+            "trial_02_if_trial_01_not_better": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.05,
+                    revisit_penalty=0.10,
+                    note="Conservative branch: soften turn penalty while keeping revisit=0.10.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_02.after_trial_01_not_better",
+                decision_note="trial_01 did not clear the baseline gate, so soften turn to 0.05.",
+            ),
+        }
+
+
+class TurnRevisitTreeV2ThreeStageRecipe(RecipeBase):
+    name = "turn_revisit_tree_v2_three_stage"
+
+    def baseline_reference(self, entry_cap: int) -> dict[str, Any]:
+        return {
+            "reward_turn_penalty_scale": 0.03,
+            "reward_revisit_penalty": 0.12,
+            "max_entries_per_block": entry_cap,
+        }
+
+    def max_new_trials(self) -> int:
+        return 3
+
+    def initial_trial_plan(self, entry_cap: int) -> TrialPlan:
+        return TrialPlan(
+            trial_spec=TrialSpec(
+                turn_penalty_scale=0.07,
+                revisit_penalty=0.10,
+                note="Stage 1: first strong-turn / lighter-revisit probe.",
+            ),
+            compare_to="baseline",
+            branch_position="trial_01",
+            decision_note="First probe against baseline reference.",
+        )
+
+    def next_trial_plan(self, entry_cap: int, trial_records: list[dict[str, Any]]) -> TrialPlan | None:
+        if not trial_records:
+            return self.initial_trial_plan(entry_cap)
+        if len(trial_records) >= self.max_new_trials():
+            return None
+
+        first_verdict = self._verdict_for(trial_records, "trial_01")
+        if len(trial_records) == 1:
+            if first_verdict in GOOD_VERDICTS:
+                return TrialPlan(
+                    trial_spec=TrialSpec(
+                        turn_penalty_scale=0.07,
+                        revisit_penalty=0.08,
+                        note="Stage 2A: keep turn=0.07, lower revisit to 0.08.",
+                    ),
+                    compare_to="trial_01",
+                    branch_position="trial_02.branch_A",
+                    decision_note="trial_01 beat baseline, so compare a lower revisit directly against trial_01.",
+                )
+            return TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.05,
+                    revisit_penalty=0.10,
+                    note="Stage 2B: soften turn to 0.05 while keeping revisit=0.10.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_02.branch_B",
+                decision_note="trial_01 did not beat baseline, so compare a softer turn setting against baseline.",
+            )
+
+        if len(trial_records) == 2:
+            second_verdict = self._verdict_for(trial_records, "trial_02")
+            if first_verdict in GOOD_VERDICTS:
+                if second_verdict in GOOD_VERDICTS:
+                    return TrialPlan(
+                        trial_spec=TrialSpec(
+                            turn_penalty_scale=0.05,
+                            revisit_penalty=0.08,
+                            note="Stage 3A1: keep revisit=0.08 and lower turn to 0.05.",
+                        ),
+                        compare_to="trial_02",
+                        branch_position="trial_03.branch_A1",
+                        decision_note=(
+                            "trial_02 still improved over trial_01, so lower turn against trial_02 "
+                            "to isolate whether revisit=0.08 remains helpful without turn=0.07."
+                        ),
+                    )
+                return TrialPlan(
+                    trial_spec=TrialSpec(
+                        turn_penalty_scale=0.05,
+                        revisit_penalty=0.10,
+                        note="Stage 3A2: lower turn to 0.05 at revisit=0.10.",
+                    ),
+                    compare_to="trial_01",
+                    branch_position="trial_03.branch_A2",
+                    decision_note=(
+                        "trial_02 did not improve over trial_01, so compare turn=0.05 directly against "
+                        "trial_01 to test whether turn=0.07 was too strong."
+                    ),
+                )
+
+            if second_verdict in GOOD_VERDICTS:
+                return TrialPlan(
+                    trial_spec=TrialSpec(
+                        turn_penalty_scale=0.05,
+                        revisit_penalty=0.08,
+                        note="Stage 3B1: keep turn=0.05 and lower revisit to 0.08.",
+                    ),
+                    compare_to="trial_02",
+                    branch_position="trial_03.branch_B1",
+                    decision_note=(
+                        "trial_02 beat baseline, so compare a lower revisit directly against trial_02 "
+                        "to see whether revisit can go lower under turn=0.05."
+                    ),
+                )
+            return TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.03,
+                    revisit_penalty=0.10,
+                    note="Stage 3B2: revert turn to 0.03 and lower revisit to 0.10.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_03.branch_B2",
+                decision_note=(
+                    "trial_02 still did not beat baseline, so compare revisit-only reduction "
+                    "against the baseline turn strength."
+                ),
+            )
+
+        return None
+
+    def branch_preview(self, entry_cap: int) -> dict[str, Any]:
+        plans = self.possible_trial_plans(entry_cap)
+        return {
+            "baseline_reference": self.baseline_reference(entry_cap),
+            "trial_01": plans["trial_01"].to_dict(),
+            "after_trial_01_better_or_slightly_better": {
+                "trial_02": plans["trial_02_branch_A"].to_dict(),
+                "if_trial_02_better_or_slightly_better": {
+                    "trial_03": plans["trial_03_branch_A1"].to_dict(),
+                },
+                "if_trial_02_not_better": {
+                    "trial_03": plans["trial_03_branch_A2"].to_dict(),
+                },
+            },
+            "after_trial_01_not_better": {
+                "trial_02": plans["trial_02_branch_B"].to_dict(),
+                "if_trial_02_better_or_slightly_better": {
+                    "trial_03": plans["trial_03_branch_B1"].to_dict(),
+                },
+                "if_trial_02_not_better": {
+                    "trial_03": plans["trial_03_branch_B2"].to_dict(),
+                },
+            },
+        }
+
+    def possible_trial_plans(self, entry_cap: int) -> dict[str, TrialPlan]:
+        return {
+            "trial_01": self.initial_trial_plan(entry_cap),
+            "trial_02_branch_A": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.07,
+                    revisit_penalty=0.08,
+                    note="Stage 2A: keep turn=0.07, lower revisit to 0.08.",
+                ),
+                compare_to="trial_01",
+                branch_position="trial_02.branch_A",
+                decision_note="trial_01 beat baseline, so compare a lower revisit directly against trial_01.",
+            ),
+            "trial_02_branch_B": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.05,
+                    revisit_penalty=0.10,
+                    note="Stage 2B: soften turn to 0.05 while keeping revisit=0.10.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_02.branch_B",
+                decision_note="trial_01 did not beat baseline, so compare a softer turn setting against baseline.",
+            ),
+            "trial_03_branch_A1": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.05,
+                    revisit_penalty=0.08,
+                    note="Stage 3A1: keep revisit=0.08 and lower turn to 0.05.",
+                ),
+                compare_to="trial_02",
+                branch_position="trial_03.branch_A1",
+                decision_note=(
+                    "trial_02 still improved over trial_01, so lower turn against trial_02 "
+                    "to isolate whether revisit=0.08 remains helpful without turn=0.07."
+                ),
+            ),
+            "trial_03_branch_A2": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.05,
+                    revisit_penalty=0.10,
+                    note="Stage 3A2: lower turn to 0.05 at revisit=0.10.",
+                ),
+                compare_to="trial_01",
+                branch_position="trial_03.branch_A2",
+                decision_note=(
+                    "trial_02 did not improve over trial_01, so compare turn=0.05 directly against "
+                    "trial_01 to test whether turn=0.07 was too strong."
+                ),
+            ),
+            "trial_03_branch_B1": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.05,
+                    revisit_penalty=0.08,
+                    note="Stage 3B1: keep turn=0.05 and lower revisit to 0.08.",
+                ),
+                compare_to="trial_02",
+                branch_position="trial_03.branch_B1",
+                decision_note=(
+                    "trial_02 beat baseline, so compare a lower revisit directly against trial_02 "
+                    "to see whether revisit can go lower under turn=0.05."
+                ),
+            ),
+            "trial_03_branch_B2": TrialPlan(
+                trial_spec=TrialSpec(
+                    turn_penalty_scale=0.03,
+                    revisit_penalty=0.10,
+                    note="Stage 3B2: revert turn to 0.03 and lower revisit to 0.10.",
+                ),
+                compare_to="baseline",
+                branch_position="trial_03.branch_B2",
+                decision_note=(
+                    "trial_02 still did not beat baseline, so compare revisit-only reduction "
+                    "against the baseline turn strength."
+                ),
+            ),
         }
 
 
 def get_recipe(name: str) -> RecipeBase:
     recipes = {
         TurnRevisitTreeV1Recipe.name: TurnRevisitTreeV1Recipe(),
+        TurnRevisitTreeV2ThreeStageRecipe.name: TurnRevisitTreeV2ThreeStageRecipe(),
     }
     try:
         return recipes[name]
