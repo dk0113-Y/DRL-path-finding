@@ -113,9 +113,10 @@ class TrainConfig:
     reward_stall_window: int = 8
     reward_step_penalty: float = 0.02
     reward_terminal_bonus: float = 20.0
-    reward_revisit_penalty: float = 0.12
+    # Current working default reward combo is turn=0.05 / revisit=0.10; historical baselines remain useful for A/B runs.
+    reward_revisit_penalty: float = 0.10
     reward_stall_penalty: float = 0.12
-    reward_turn_penalty_scale: float = 0.0
+    reward_turn_penalty_scale: float = 0.05
     reward_timeout_penalty: float = 8.0
 
     special_highcov_timeout_min_coverage: float = 0.85
@@ -1345,13 +1346,13 @@ def parse_args() -> TrainConfig:
     )
     p.add_argument("--reward-step-penalty", type=float, default=0.02, help="step penalty")
     p.add_argument("--reward-terminal-bonus", type=float, default=20.0, help="terminal success bonus")
-    p.add_argument("--reward-revisit-penalty", type=float, default=0.12, help="revisit penalty")
+    p.add_argument("--reward-revisit-penalty", type=float, default=0.10, help="revisit penalty")
     p.add_argument("--reward-stall-penalty", type=float, default=0.12, help="stall penalty")
     p.add_argument(
         "--reward-turn-penalty-scale",
         type=float,
-        default=0.0,
-        help="light large-turn penalty scale; default 0.0 keeps the current baseline unchanged",
+        default=0.05,
+        help="light large-turn penalty scale; default 0.05 is the current working reward setting",
     )
     p.add_argument("--reward-timeout-penalty", type=float, default=8.0, help="timeout penalty")
     p.add_argument("--special-highcov-timeout-min-coverage", type=float, default=0.85)
@@ -1697,9 +1698,9 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         reward_stall_window=8,
         reward_step_penalty=0.02,
         reward_terminal_bonus=20.0,
-        reward_revisit_penalty=0.12,
+        reward_revisit_penalty=0.10,
         reward_stall_penalty=0.12,
-        reward_turn_penalty_scale=0.0,
+        reward_turn_penalty_scale=0.05,
         reward_timeout_penalty=8.0,
         special_highcov_timeout_min_coverage=0.85,
         special_highcov_timeout_max_plots=5,
