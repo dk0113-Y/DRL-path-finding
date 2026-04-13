@@ -20,6 +20,7 @@ from env.value_state_builder import ValueStateConfig
 from training.checkpointing import CheckpointManager
 from training.collector import CollectorConfig, SEMANTIC_EPISODE_FIELDS, TransitionCollector
 from training.evaluator import GreedyEvaluator
+from training.formal_artifacts import write_formal_run_artifacts
 from training.learner import DDQNLearner, DDQNLearnerConfig
 from training.logger import CSVMetricLogger
 from training.plotting import generate_all_plots
@@ -388,7 +389,7 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
 
 def _run_with_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
     _print_startup_summary(cfg, run_mode=run_mode)
-    run_training(cfg)
+    run_training(cfg, run_mode=run_mode)
 
 
 def _format_timing_line(
@@ -622,7 +623,7 @@ def build_system(cfg: TrainConfig):
     return online_net, target_net, replay, collector, learner, evaluator
 
 
-def run_training(cfg: TrainConfig) -> None:
+def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     run_start_time = time.perf_counter()
     set_seed(int(cfg.seed))
     configure_torch_runtime(cfg)
@@ -1007,6 +1008,26 @@ def run_training(cfg: TrainConfig) -> None:
         generated_plots = []
 
     recent_summary = summarize_recent_episodes(recent_eps)
+    recent_train_row = {
+        "env_steps": int(env_steps),
+        "replay_size": int(len(replay)),
+        "epsilon": float(linear_epsilon(env_steps, cfg)),
+        "loss": float(last_train_metrics["loss"]),
+        "q_mean": float(last_train_metrics["q_mean"]),
+        "target_q_mean": float(last_train_metrics["target_q_mean"]),
+        "td_abs_mean": float(last_train_metrics["td_abs_mean"]),
+        "grad_norm": float(last_train_metrics["grad_norm"]),
+        "learner_steps": int(learner.learn_steps),
+        "recent_mean_reward": float(recent_summary["mean_reward"]),
+        "recent_mean_coverage": float(recent_summary["mean_coverage"]),
+        "recent_success_rate": float(recent_summary["success_rate"]),
+        "recent_mean_episode_length": float(recent_summary["mean_length"]),
+        "recent_mean_repeat_visit_ratio": float(recent_summary["mean_repeat_visit_ratio"]),
+        **{
+            f"recent_{field}": float(recent_summary[field])
+            for field in SEMANTIC_EPISODE_FIELDS
+        },
+    }
     total_runtime_sec = time.perf_counter() - run_start_time
     total_runtime_sec_int = int(round(total_runtime_sec))
     hours, rem = divmod(total_runtime_sec_int, 3600)
@@ -1071,6 +1092,33 @@ def run_training(cfg: TrainConfig) -> None:
         print(f"plots_dir: {run_dir / 'plots'}")
     if len(trajectory_plot_paths) > 0:
         print(f"trajectories_dir: {run_dir / 'trajectories'}")
+    structured_artifacts = write_formal_run_artifacts(
+        run_dir=run_dir,
+        cfg=cfg,
+        run_mode=run_mode,
+        recent_train_row=recent_train_row,
+        last_eval_row=last_eval,
+        best_eval_row=best_eval,
+        final_probe_row=probe_row,
+        best_checkpoint_source=(
+            "checkpoints/best.pt::eval_success_rate_then_eval_mean_coverage"
+            if ckpt.best_path.exists() else "checkpoints/best.pt_missing"
+        ),
+        best_checkpoint_env_steps=int(best_eval["env_steps"]) if best_eval is not None else None,
+        last_checkpoint_env_steps=int(env_steps),
+        final_probe_source=probe_source,
+        total_runtime_sec=float(total_runtime_sec),
+        total_runtime_hms=total_runtime_hms,
+        collector=collector,
+        learner=learner,
+        replay=replay,
+        state_adapter=collector.state_adapter,
+        source_of_truth_repo=str(Path(__file__).resolve().parent),
+    )
+    print(f"metric_snapshot_json: {structured_artifacts['metric_snapshot']}")
+    print(f"benchmark_summary_json: {structured_artifacts['benchmark_summary']}")
+    print(f"config_snapshot_json: {structured_artifacts['config_snapshot']}")
+    print(f"artifact_index_json: {structured_artifacts['artifact_index']}")
     print("=" * 72)
 
 
