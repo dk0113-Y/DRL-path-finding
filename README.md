@@ -15,6 +15,7 @@
   - 再由语义分离的 dueling head 输出 Q 值。
 - 使用 Double DQN + n-step transition 的方式训练。
 - 训练过程中默认记录 CSV 日志、周期 greedy evaluation、保存 `last.pt` / `best.pt`。
+- 正式训练 run 结束后会额外写出结构化 formal artifact，供 exchange/control-plane 直接消费。
 - 训练结束后的离线绘图、轨迹图导出、额外可视化产物属于可选开关，当前默认关闭以降低 wall-clock 开销。
 
 ## 当前主线说明
@@ -125,9 +126,45 @@ python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup
 
 默认运行结果会写到 `outputs/`。其中通常包含：
 
-- `logs/`：训练与评估 CSV
+- `logs/`：训练与评估 CSV，以及 formal structured JSON
 - `checkpoints/`：`last.pt`、`best.pt`
 - `plots/`：离线生成的指标曲线，仅在启用相关开关时生成
 - `trajectories/`：评估轨迹图，仅在启用相关开关时生成
+
+正式训练的 `logs/` 目录当前会额外生成：
+
+- `metric_snapshot.json`
+  - 统一导出 `recent_train`、`last_eval`、`best_eval`、`final_probe`
+  - 包含主指标、次指标、稳定性指标、semantic monitoring 汇总
+- `benchmark_summary.json`
+  - 导出总运行时、运行模式、runtime/timing 开关、可用 timing summary、`env_steps_to_best`
+- `config_snapshot.json`
+  - 导出完整训练配置、git sha、comparability 相关字段、`observed_run_contract`
+- `artifact_index.json`
+  - 列出本 run 实际存在的 csv / checkpoint / structured summary / plots / trajectories
+- `training_summary.txt`
+  - 面向人工复核的轻量文本摘要
+
+当前 `config_snapshot.json` 里的 `observed_run_contract` 至少包含：
+
+- `final_env_steps`
+- `train_steps_header`
+- `eval_metrics_header`
+- `final_probe_header`
+
+这些字段来自真实当前 run 的产物，不依赖历史 backfill。
+
+如果需要对历史 runs 做 formal backfill 与 bootstrap 阈值汇总，可执行：
+
+```bash
+python tools/backfill_formal_run_artifacts.py
+python tools/generate_historical_baseline_summary.py
+```
+
+第二条命令会生成：
+
+- `formal_artifacts/historical_baseline_summary.json`
+
+该文件用于 formal_train 的 bootstrap 阈值与 comparability 校准说明；如果历史 run 仍不足，会显式写出 `insufficient_history_for_calibration=true`。
 
 这些目录属于实验产物，不适合作为源码仓库的默认提交内容，因此已经在 `.gitignore` 中排除。

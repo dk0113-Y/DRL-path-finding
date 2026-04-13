@@ -165,6 +165,18 @@ def _read_csv_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
+def _read_csv_header(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return []
+    return [str(item) for item in header]
+
+
 def _to_scalar(value: Any) -> Any:
     if value is None:
         return None
@@ -342,15 +354,15 @@ def _normalize_eval_like(row: Mapping[str, Any] | None, *, source_name: str) -> 
 
 
 def _build_unified_metric_table(metric_blocks: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    def metric_table(metric_names: Mapping[str, str]) -> dict[str, Any]:
+    def metric_table(metric_names: Mapping[str, str], source_key: str) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for metric_name, direction in metric_names.items():
             payload[metric_name] = {
                 "direction": direction,
-                "recent_train": _to_scalar(metric_blocks["recent_train"]["metrics"].get(metric_name)),
-                "last_eval": _to_scalar(metric_blocks["last_eval"]["metrics"].get(metric_name)),
-                "best_eval": _to_scalar(metric_blocks["best_eval"]["metrics"].get(metric_name)),
-                "final_probe": _to_scalar(metric_blocks["final_probe"]["metrics"].get(metric_name)),
+                "recent_train": _to_scalar(metric_blocks["recent_train"][source_key].get(metric_name)),
+                "last_eval": _to_scalar(metric_blocks["last_eval"][source_key].get(metric_name)),
+                "best_eval": _to_scalar(metric_blocks["best_eval"][source_key].get(metric_name)),
+                "final_probe": _to_scalar(metric_blocks["final_probe"][source_key].get(metric_name)),
             }
         return payload
 
@@ -369,10 +381,42 @@ def _build_unified_metric_table(metric_blocks: Mapping[str, Mapping[str, Any]]) 
         }
 
     return {
-        "primary_metrics": metric_table(PRIMARY_UNIFIED_METRICS),
-        "secondary_metrics": metric_table(SECONDARY_UNIFIED_METRICS),
-        "stability_metrics": metric_table(STABILITY_UNIFIED_METRICS),
+        "primary_metrics": metric_table(PRIMARY_UNIFIED_METRICS, "metrics"),
+        "secondary_metrics": metric_table(SECONDARY_UNIFIED_METRICS, "metrics"),
+        "stability_metrics": metric_table(STABILITY_UNIFIED_METRICS, "reward_events"),
         "semantic_monitoring": semantic_payload,
+    }
+
+
+def build_observed_run_contract(
+    *,
+    run_dir: Path,
+    recent_train_row: Mapping[str, Any] | None = None,
+    last_eval_row: Mapping[str, Any] | None = None,
+    final_probe_row: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    logs_dir = run_dir / "logs"
+    final_env_steps = (
+        _to_scalar((final_probe_row or {}).get("env_steps"))
+        or _to_scalar((last_eval_row or {}).get("env_steps"))
+        or _to_scalar((recent_train_row or {}).get("env_steps"))
+    )
+    if final_env_steps is None:
+        final_probe_rows = _read_csv_rows(logs_dir / "final_probe.csv")
+        eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
+        train_steps_rows = _read_csv_rows(logs_dir / "train_steps.csv")
+        if final_probe_rows:
+            final_env_steps = _to_scalar(final_probe_rows[-1].get("env_steps"))
+        elif eval_rows:
+            final_env_steps = _to_scalar(eval_rows[-1].get("env_steps"))
+        elif train_steps_rows:
+            final_env_steps = _to_scalar(train_steps_rows[-1].get("env_steps"))
+
+    return {
+        "final_env_steps": final_env_steps,
+        "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
+        "eval_metrics_header": _read_csv_header(logs_dir / "eval_metrics.csv"),
+        "final_probe_header": _read_csv_header(logs_dir / "final_probe.csv"),
     }
 
 
@@ -554,6 +598,7 @@ def build_config_snapshot(
     run_dir: Path,
     run_mode: str,
     source_of_truth_repo: str,
+    observed_run_contract: Mapping[str, Any] | None = None,
     baseline_identifier: str = DEFAULT_MAIN_BASELINE_IDENTIFIER,
     insufficient_evidence_flags: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -585,6 +630,7 @@ def build_config_snapshot(
         },
         "comparability": comparability_sections,
         "runtime_only_fields": {field_name: config_dict.get(field_name) for field_name in RUNTIME_ONLY_FIELDS if field_name in config_dict},
+        "observed_run_contract": _json_safe(dict(observed_run_contract or {})),
         "evaluation_contract": {
             "best_checkpoint_rule": {
                 "primary_metric": "eval_success_rate",
@@ -760,11 +806,18 @@ def write_formal_run_artifacts(
         source_of_truth_repo=source_repo,
         insufficient_evidence_flags=flags,
     )
+    observed_run_contract = build_observed_run_contract(
+        run_dir=run_dir,
+        recent_train_row=recent_train_row,
+        last_eval_row=last_eval_row,
+        final_probe_row=final_probe_row,
+    )
     config_snapshot = build_config_snapshot(
         cfg=cfg,
         run_dir=run_dir,
         run_mode=run_mode,
         source_of_truth_repo=source_repo,
+        observed_run_contract=observed_run_contract,
         insufficient_evidence_flags=flags,
     )
 

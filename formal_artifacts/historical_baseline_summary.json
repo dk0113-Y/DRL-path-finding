@@ -3,7 +3,7 @@
   "artifact_type": "historical_baseline_summary",
   "experiment_mode": "formal_train",
   "source_of_truth_repo": "C:\\Users\\Dk\\Desktop\\SCI\\代码1",
-  "generated_at": "2026-04-13T20:18:45+08:00",
+  "generated_at": "2026-04-13T21:10:38+08:00",
   "run_count_total": 19,
   "exact_comparability_run_count": 0,
   "insufficient_history_for_calibration": true,
