@@ -43,6 +43,7 @@ class TrainConfig:
     compile_mode: str = "default"  # torch.compile mode tunes runtime behavior only; it does not change the RL objective.
     enable_cudnn_benchmark: bool = True  # cuDNN autotune affects kernel selection only; it does not change metrics.
     enable_tf32: bool = True  # TF32 backend toggle is a runtime perf setting only; it is not an algorithm switch.
+    strict_reproducibility: bool = False  # Optional runtime-determinism mode; kept non-default because it can reduce throughput.
     enable_channels_last: bool = False  # Tensor-layout toggle only; model math and metrics stay unchanged.
     episode_print_interval: int = 1  # Stdout throttling only; 1 prints every episode without affecting logging/metrics.
     train_print_interval: int = 2_000  # Stdout throttling only; separated from CSV logging and algorithm behavior.
@@ -73,17 +74,25 @@ class TrainConfig:
     max_accessible_blocks: int = 16
     max_entries_per_block: int = 8
 
+    budget_mode: str = "env_steps"
     total_env_steps: int = 300_000
+    total_train_episodes: int = 600
     warmup_steps: int = 4_000
+    warmup_episodes: int = 0
     collect_steps_per_iter: int = 16
     learner_updates_per_iter: int = 2
     train_every_env_steps: int = 16
     log_interval: int = 500
+    log_interval_episodes: int = 10
 
     eval_interval_env_steps: int = 24_000
+    eval_interval_episodes: int = 40
     eval_episodes: int = 12
     recent_episode_window: int = 100
     final_greedy_episodes: int = 16
+    train_print_interval_episodes: int = 20
+    use_fixed_train_episode_seeds: bool = True
+    fixed_train_episode_seed_base: int = 20259323
     use_fixed_eval_seeds: bool = True
     fixed_eval_seed_base: int = 20260323
     fixed_final_probe_seed_base: int = 20261323
@@ -145,6 +154,13 @@ def linear_epsilon(step: int, cfg: TrainConfig) -> float:
     return float(cfg.epsilon_start + ratio * (cfg.epsilon_end - cfg.epsilon_start))
 
 
+def resolve_budget_mode(cfg: TrainConfig) -> str:
+    mode = str(cfg.budget_mode).strip().lower()
+    if mode not in {"env_steps", "episodes"}:
+        raise ValueError(f"Unsupported budget_mode: {cfg.budget_mode!r}; expected 'env_steps' or 'episodes'")
+    return mode
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -155,21 +171,25 @@ def set_seed(seed: int) -> None:
 
 def configure_torch_runtime(cfg: TrainConfig) -> None:
     """Apply performance-only backend toggles without changing training/eval semantics."""
-    if not str(cfg.device).lower().startswith("cuda"):
-        return
-    if not torch.cuda.is_available():
+    strict_mode = bool(cfg.strict_reproducibility)
+    if hasattr(torch, "use_deterministic_algorithms"):
+        torch.use_deterministic_algorithms(strict_mode, warn_only=True)
+    if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "deterministic"):
+        torch.backends.cudnn.deterministic = strict_mode
+
+    if not str(cfg.device).lower().startswith("cuda") or not torch.cuda.is_available():
         return
 
-    torch.backends.cudnn.benchmark = bool(cfg.enable_cudnn_benchmark)
+    torch.backends.cudnn.benchmark = False if strict_mode else bool(cfg.enable_cudnn_benchmark)
 
     if (
         hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul")
         and hasattr(torch.backends.cuda.matmul, "allow_tf32")
     ):
-        torch.backends.cuda.matmul.allow_tf32 = bool(cfg.enable_tf32)
+        torch.backends.cuda.matmul.allow_tf32 = False if strict_mode else bool(cfg.enable_tf32)
 
     if hasattr(torch.backends.cudnn, "allow_tf32"):
-        torch.backends.cudnn.allow_tf32 = bool(cfg.enable_tf32)
+        torch.backends.cudnn.allow_tf32 = False if strict_mode else bool(cfg.enable_tf32)
 
 
 class _CompileFallbackWrapper(torch.nn.Module):
@@ -359,6 +379,7 @@ def _describe_profiling_mode(cfg: TrainConfig, run_mode: str) -> str:
 
 
 def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
+    budget_mode = resolve_budget_mode(cfg)
     timing_flags = _timing_flag_dict(cfg)
     profiling_enabled = _timing_summary_enabled(cfg)
     timing_flag_text = " ".join(f"{key}={value}" for key, value in timing_flags.items())
@@ -368,8 +389,11 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"run_mode={run_mode} "
         f"device={cfg.device} "
         f"profiling_enabled={profiling_enabled} "
+        f"budget_mode={budget_mode} "
         f"train_amp={bool(cfg.enable_amp)} "
         f"torch_compile={bool(cfg.enable_torch_compile)} "
+        f"strict_reproducibility={bool(cfg.strict_reproducibility)} "
+        f"fixed_train_episode_seeds={bool(cfg.use_fixed_train_episode_seeds)} "
         f"inference_amp={bool(cfg.enable_inference_amp)} "
         f"amp_dtype={cfg.amp_dtype} "
         f"channels_last={bool(cfg.enable_channels_last)} "
@@ -594,6 +618,8 @@ def build_system(cfg: TrainConfig):
         inference_amp_dtype=amp_dtype,
         debug_check_incremental_frontier=bool(cfg.debug_check_incremental_frontier),
         prefer_batch_replay_add=bool(cfg.prefer_batch_replay_add),
+        use_fixed_train_episode_seeds=bool(cfg.use_fixed_train_episode_seeds),
+        fixed_train_episode_seed_base=int(cfg.fixed_train_episode_seed_base),
         record_episode_artifacts=bool(
             cfg.save_train_representative_trajectories or cfg.save_train_special_trajectories
         ),
@@ -630,12 +656,15 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     run_dir = create_run_dir(cfg)
     logger = CSVMetricLogger(run_dir)
     ckpt = CheckpointManager(run_dir)
+    budget_mode = resolve_budget_mode(cfg)
 
     online_net, _, replay, collector, learner, evaluator = build_system(cfg)
 
     recent_eps: deque[dict] = deque(maxlen=int(max(1, cfg.recent_episode_window)))
     last_eval: dict | None = None
     best_eval: dict | None = None
+    warmup_phase_episodes = 0
+    train_phase_episodes = 0
     last_train_metrics = {
         "loss": float("nan"),
         "q_mean": float("nan"),
@@ -647,12 +676,30 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     train_trace_episodes: list[dict] = []
     episode_print_interval = int(max(0, cfg.episode_print_interval))
 
+    def completed_train_episodes() -> int:
+        return int(train_phase_episodes)
+
     def handle_episodes(episodes: list[dict], phase: str, epsilon: float) -> None:
+        nonlocal warmup_phase_episodes, train_phase_episodes
         for ep in episodes:
+            if phase == "warmup":
+                warmup_phase_episodes += 1
+                phase_episode_idx = int(warmup_phase_episodes)
+            else:
+                train_phase_episodes += 1
+                phase_episode_idx = int(train_phase_episodes)
             row = {
                 "phase": phase,
+                "budget_mode": budget_mode,
                 "env_steps": int(ep["env_steps"]),
                 "episode_idx": int(ep["episode_idx"]),
+                "train_episode_idx": int(ep.get("train_episode_idx", ep["episode_idx"])),
+                "phase_episode_idx": phase_episode_idx,
+                "completed_train_episodes": int(train_phase_episodes),
+                "episode_seed": (
+                    None if ep.get("episode_seed") is None else int(ep["episode_seed"])
+                ),
+                "map_fingerprint": str(ep.get("map_fingerprint") or ""),
                 "epsilon": float(epsilon),
                 "episode_reward": float(ep["episode_reward"]),
                 "episode_length": int(ep["episode_length"]),
@@ -686,11 +733,14 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
                 trace_ep = dict(ep)
                 trace_ep["phase"] = phase
                 trace_ep["epsilon"] = float(epsilon)
+                trace_ep["phase_episode_idx"] = phase_episode_idx
+                trace_ep["completed_train_episodes"] = int(train_phase_episodes)
                 train_trace_episodes.append(trace_ep)
             if episode_print_interval > 0 and int(row["episode_idx"]) % episode_print_interval == 0:
                 print(
                     "[episode] "
-                    f"phase={phase} idx={row['episode_idx']} env={row['env_steps']} "
+                    f"phase={phase} idx={row['episode_idx']} phase_idx={row['phase_episode_idx']} "
+                    f"env={row['env_steps']} seed={row['episode_seed']} "
                     f"reward={row['episode_reward']:.4f} len={row['episode_length']} "
                     f"cov={row['final_coverage']:.4f} succ={row['success']} "
                     f"repeat={row['repeat_visit_ratio']:.4f} reason={row['done_reason']}"
@@ -707,7 +757,11 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         )
         row = {
             "tag": tag,
+            "budget_mode": budget_mode,
             "env_steps": int(env_steps),
+            "episode_idx": int(collector.total_episodes),
+            "train_episode_idx": int(collector.total_episodes),
+            "completed_train_episodes": int(train_phase_episodes),
             "learner_steps": int(learner.learn_steps),
             "eval_episodes": int(em["eval_episodes"]),
             "eval_mean_reward": float(em["eval_mean_reward"]),
@@ -748,6 +802,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             online_net,
             learner,
             env_steps=int(env_steps),
+            train_episode_idx=int(train_phase_episodes),
             eval_metrics=row,
             train_config=cfg,
         )
@@ -759,6 +814,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         print(
             "[eval] "
             f"tag={tag} env_steps={row['env_steps']} episodes={row['eval_episodes']} "
+            f"train_eps={row['completed_train_episodes']} "
             f"mean_reward={row['eval_mean_reward']:.4f} mean_cov={row['eval_mean_coverage']:.4f} "
             f"success_rate={row['eval_success_rate']:.4f} mean_len={row['eval_mean_episode_length']:.2f} "
             f"blocks={row['eval_mean_accessible_block_count']:.2f} "
@@ -768,121 +824,230 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         )
         return row, is_best
 
-    warmup = min(int(cfg.warmup_steps), int(cfg.total_env_steps))
     timing_log_interval = int(max(0, cfg.timing_log_interval))
     timing_summary_enabled = _timing_summary_enabled(cfg)
-    if warmup > 0:
-        warm_stats = collector.collect_steps(warmup, epsilon=1.0, random_only=True)
-        handle_episodes(warm_stats.get("episodes", []), phase="warmup", epsilon=1.0)
+    if budget_mode == "episodes":
+        warmup_episodes = int(max(0, cfg.warmup_episodes))
+        if warmup_episodes > 0:
+            warm_stats = collector.collect_steps(
+                max(1, warmup_episodes * int(cfg.max_episode_steps)),
+                epsilon=1.0,
+                random_only=True,
+                stop_after_episodes=warmup_episodes,
+            )
+            handle_episodes(warm_stats.get("episodes", []), phase="warmup", epsilon=1.0)
+        env_steps = int(collector.total_env_steps)
+        total_train_episodes = int(max(1, cfg.total_train_episodes))
+        eval_interval_episodes = int(max(0, cfg.eval_interval_episodes))
+        next_eval_episode = (
+            eval_interval_episodes if eval_interval_episodes > 0 else total_train_episodes + 1
+        )
+        log_interval_episodes = int(max(0, cfg.log_interval_episodes))
+        next_log_episode = (
+            (((completed_train_episodes() // log_interval_episodes) + 1) * log_interval_episodes)
+            if log_interval_episodes > 0 else total_train_episodes + 1
+        )
+        train_print_interval_episodes = int(max(0, cfg.train_print_interval_episodes))
+        next_train_print_episode = (
+            (((completed_train_episodes() // train_print_interval_episodes) + 1) * train_print_interval_episodes)
+            if train_print_interval_episodes > 0 else total_train_episodes + 1
+        )
+        eval_interval_env_steps = 0
+        next_eval_step = total_train_episodes + 1
+        log_interval = int(cfg.log_interval)
+        next_log_step = int(cfg.total_env_steps) + 1
+        train_print_interval = int(max(0, cfg.train_print_interval))
+        next_train_print_step = int(cfg.total_env_steps) + 1
+    else:
+        warmup = min(int(cfg.warmup_steps), int(cfg.total_env_steps))
+        if warmup > 0:
+            warm_stats = collector.collect_steps(warmup, epsilon=1.0, random_only=True)
+            handle_episodes(warm_stats.get("episodes", []), phase="warmup", epsilon=1.0)
+        env_steps = int(collector.total_env_steps)
+        total_train_episodes = int(max(1, cfg.total_train_episodes))
+        eval_interval_env_steps = int(max(0, cfg.eval_interval_env_steps))
+        next_eval_step = (
+            eval_interval_env_steps if eval_interval_env_steps > 0 else int(cfg.total_env_steps) + 1
+        )
+        log_interval = int(cfg.log_interval)
+        next_log_step = (
+            (((env_steps // log_interval) + 1) * log_interval)
+            if log_interval > 0 else int(cfg.total_env_steps) + 1
+        )
+        train_print_interval = int(max(0, cfg.train_print_interval))
+        next_train_print_step = (
+            (((env_steps // train_print_interval) + 1) * train_print_interval)
+            if train_print_interval > 0 else int(cfg.total_env_steps) + 1
+        )
+        eval_interval_episodes = 0
+        next_eval_episode = total_train_episodes + 1
+        log_interval_episodes = 0
+        next_log_episode = total_train_episodes + 1
+        train_print_interval_episodes = 0
+        next_train_print_episode = total_train_episodes + 1
 
-    env_steps = warmup
     last_train_env_step = int(env_steps)
-
-    eval_interval = int(max(0, cfg.eval_interval_env_steps))
-    next_eval_step = eval_interval if eval_interval > 0 else int(cfg.total_env_steps) + 1
-    log_interval = int(cfg.log_interval)
-    next_log_step = (
-        (((env_steps//log_interval) + 1) * log_interval) if log_interval > 0 else int(cfg.total_env_steps) +
-        1
-    )
     next_timing_log_step = (
         timing_log_interval if timing_log_interval > 0 else int(cfg.total_env_steps) + 1
     )
-    train_print_interval = int(max(0, cfg.train_print_interval))
-    next_train_print_step = (
-        (((env_steps//train_print_interval) + 1) *
-         train_print_interval) if train_print_interval > 0 else int(cfg.total_env_steps) + 1
-    )
+
+    def emit_train_snapshot(eps: float, *, should_log: bool, should_print_train: bool) -> None:
+        rec = summarize_recent_episodes(recent_eps)
+        step_row = {
+            "budget_mode": budget_mode,
+            "env_steps": int(env_steps),
+            "episode_idx": int(collector.total_episodes),
+            "train_episode_idx": int(collector.total_episodes),
+            "completed_train_episodes": int(train_phase_episodes),
+            "replay_size": int(len(replay)),
+            "epsilon": float(eps),
+            "loss": float(last_train_metrics["loss"]),
+            "q_mean": float(last_train_metrics["q_mean"]),
+            "target_q_mean": float(last_train_metrics["target_q_mean"]),
+            "td_abs_mean": float(last_train_metrics["td_abs_mean"]),
+            "grad_norm": float(last_train_metrics["grad_norm"]),
+            "learner_steps": int(learner.learn_steps),
+            "recent_mean_reward": float(rec["mean_reward"]),
+            "recent_mean_coverage": float(rec["mean_coverage"]),
+            "recent_success_rate": float(rec["success_rate"]),
+            "recent_mean_episode_length": float(rec["mean_length"]),
+            "recent_mean_repeat_visit_ratio": float(rec["mean_repeat_visit_ratio"]),
+            **{
+                f"recent_{field}": float(rec[field])
+                for field in SEMANTIC_EPISODE_FIELDS
+            },
+        }
+        if should_log:
+            logger.log_train_step(step_row)
+        if should_print_train:
+            print(
+                "[train] "
+                f"budget={budget_mode} env_steps={step_row['env_steps']} "
+                f"train_eps={step_row['completed_train_episodes']} replay={step_row['replay_size']} "
+                f"eps={step_row['epsilon']:.4f} loss={step_row['loss']:.5f} "
+                f"q_mean={step_row['q_mean']:.5f} target_q_mean={step_row['target_q_mean']:.5f} "
+                f"td_abs_mean={step_row['td_abs_mean']:.5f} grad_norm={step_row['grad_norm']:.5f} "
+                f"learner_steps={step_row['learner_steps']} "
+                f"recent_reward={step_row['recent_mean_reward']:.4f} "
+                f"recent_cov={step_row['recent_mean_coverage']:.4f} "
+                f"recent_succ={step_row['recent_success_rate']:.4f} "
+                f"recent_blocks={step_row['recent_accessible_block_count']:.2f}"
+            )
 
     if timing_summary_enabled and timing_log_interval > 0:
         while env_steps >= next_timing_log_step:
             _print_timing_summary(env_steps, collector, learner, replay, collector.state_adapter)
             next_timing_log_step += timing_log_interval
 
-    while eval_interval > 0 and env_steps >= next_eval_step:
-        run_eval(env_steps=env_steps, tag="periodic")
-        next_eval_step += eval_interval
+    if budget_mode == "episodes":
+        while eval_interval_episodes > 0 and completed_train_episodes() >= next_eval_episode:
+            run_eval(env_steps=env_steps, tag="periodic")
+            next_eval_episode += eval_interval_episodes
 
-    while env_steps < int(cfg.total_env_steps):
-        eps = linear_epsilon(env_steps, cfg)
-        collect_n = min(int(cfg.collect_steps_per_iter), int(cfg.total_env_steps) - env_steps)
-        cstats = collector.collect_steps(collect_n, epsilon=eps)
-        env_steps += int(cstats["env_steps"])
-        handle_episodes(cstats.get("episodes", []), phase="train", epsilon=eps)
+        while completed_train_episodes() < total_train_episodes:
+            eps = linear_epsilon(env_steps, cfg)
+            remaining_episodes = max(1, total_train_episodes - completed_train_episodes())
+            cstats = collector.collect_steps(
+                int(max(1, cfg.collect_steps_per_iter)),
+                epsilon=eps,
+                stop_after_episodes=remaining_episodes,
+            )
+            env_steps += int(cstats["env_steps"])
+            handle_episodes(cstats.get("episodes", []), phase="train", epsilon=eps)
 
-        train_interval = int(max(1, cfg.train_every_env_steps))
-        if (
-            (env_steps - last_train_env_step) >= train_interval and len(replay) >= int(cfg.min_replay_size)
-        ):
-            for _ in range(int(cfg.learner_updates_per_iter)):
-                if len(replay) < int(cfg.min_replay_size):
-                    break
-                lstats = learner.train_step(replay)
-                if lstats is not None:
-                    for metric_name in last_train_metrics:
-                        if metric_name in lstats:
-                            last_train_metrics[metric_name] = float(lstats[metric_name])
-            last_train_env_step = int(env_steps)
+            train_interval = int(max(1, cfg.train_every_env_steps))
+            if (
+                (env_steps - last_train_env_step) >= train_interval
+                and len(replay) >= int(cfg.min_replay_size)
+            ):
+                for _ in range(int(cfg.learner_updates_per_iter)):
+                    if len(replay) < int(cfg.min_replay_size):
+                        break
+                    lstats = learner.train_step(replay)
+                    if lstats is not None:
+                        for metric_name in last_train_metrics:
+                            if metric_name in lstats:
+                                last_train_metrics[metric_name] = float(lstats[metric_name])
+                last_train_env_step = int(env_steps)
 
-        if timing_summary_enabled and timing_log_interval > 0:
-            while env_steps >= next_timing_log_step:
-                _print_timing_summary(env_steps, collector, learner, replay, collector.state_adapter)
-                next_timing_log_step += timing_log_interval
+            if timing_summary_enabled and timing_log_interval > 0:
+                while env_steps >= next_timing_log_step:
+                    _print_timing_summary(env_steps, collector, learner, replay, collector.state_adapter)
+                    next_timing_log_step += timing_log_interval
 
-        if eval_interval > 0:
-            while env_steps >= next_eval_step:
-                run_eval(env_steps=env_steps, tag="periodic")
-                next_eval_step += eval_interval
+            if eval_interval_episodes > 0:
+                while completed_train_episodes() >= next_eval_episode:
+                    run_eval(env_steps=env_steps, tag="periodic")
+                    next_eval_episode += eval_interval_episodes
 
-        should_log = (env_steps == int(cfg.total_env_steps))
-        if log_interval > 0 and env_steps >= next_log_step:
-            should_log = True
-            while env_steps >= next_log_step:
-                next_log_step += log_interval
+            should_log = (completed_train_episodes() == total_train_episodes)
+            if log_interval_episodes > 0 and completed_train_episodes() >= next_log_episode:
+                should_log = True
+                while completed_train_episodes() >= next_log_episode:
+                    next_log_episode += log_interval_episodes
 
-        should_print_train = False
-        if train_print_interval > 0 and env_steps >= next_train_print_step:
-            should_print_train = True
-            while env_steps >= next_train_print_step:
-                next_train_print_step += train_print_interval
+            should_print_train = False
+            if (
+                train_print_interval_episodes > 0
+                and completed_train_episodes() >= next_train_print_episode
+            ):
+                should_print_train = True
+                while completed_train_episodes() >= next_train_print_episode:
+                    next_train_print_episode += train_print_interval_episodes
 
-        if should_log or should_print_train:
-            rec = summarize_recent_episodes(recent_eps)
-            step_row = {
-                "env_steps": int(env_steps),
-                "replay_size": int(len(replay)),
-                "epsilon": float(eps),
-                "loss": float(last_train_metrics["loss"]),
-                "q_mean": float(last_train_metrics["q_mean"]),
-                "target_q_mean": float(last_train_metrics["target_q_mean"]),
-                "td_abs_mean": float(last_train_metrics["td_abs_mean"]),
-                "grad_norm": float(last_train_metrics["grad_norm"]),
-                "learner_steps": int(learner.learn_steps),
-                "recent_mean_reward": float(rec["mean_reward"]),
-                "recent_mean_coverage": float(rec["mean_coverage"]),
-                "recent_success_rate": float(rec["success_rate"]),
-                "recent_mean_episode_length": float(rec["mean_length"]),
-                "recent_mean_repeat_visit_ratio": float(rec["mean_repeat_visit_ratio"]),
-                **{
-                    f"recent_{field}": float(rec[field])
-                    for field in SEMANTIC_EPISODE_FIELDS
-                },
-            }
-            if should_log:
-                logger.log_train_step(step_row)
-            if should_print_train:
-                print(
-                    "[train] "
-                    f"env_steps={step_row['env_steps']} replay={step_row['replay_size']} "
-                    f"eps={step_row['epsilon']:.4f} loss={step_row['loss']:.5f} "
-                    f"q_mean={step_row['q_mean']:.5f} target_q_mean={step_row['target_q_mean']:.5f} "
-                    f"td_abs_mean={step_row['td_abs_mean']:.5f} grad_norm={step_row['grad_norm']:.5f} "
-                    f"learner_steps={step_row['learner_steps']} "
-                    f"recent_reward={step_row['recent_mean_reward']:.4f} "
-                    f"recent_cov={step_row['recent_mean_coverage']:.4f} "
-                    f"recent_succ={step_row['recent_success_rate']:.4f} "
-                    f"recent_blocks={step_row['recent_accessible_block_count']:.2f}"
-                )
+            if should_log or should_print_train:
+                emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
+    else:
+        while eval_interval_env_steps > 0 and env_steps >= next_eval_step:
+            run_eval(env_steps=env_steps, tag="periodic")
+            next_eval_step += eval_interval_env_steps
+
+        while env_steps < int(cfg.total_env_steps):
+            eps = linear_epsilon(env_steps, cfg)
+            collect_n = min(int(cfg.collect_steps_per_iter), int(cfg.total_env_steps) - env_steps)
+            cstats = collector.collect_steps(collect_n, epsilon=eps)
+            env_steps += int(cstats["env_steps"])
+            handle_episodes(cstats.get("episodes", []), phase="train", epsilon=eps)
+
+            train_interval = int(max(1, cfg.train_every_env_steps))
+            if (
+                (env_steps - last_train_env_step) >= train_interval
+                and len(replay) >= int(cfg.min_replay_size)
+            ):
+                for _ in range(int(cfg.learner_updates_per_iter)):
+                    if len(replay) < int(cfg.min_replay_size):
+                        break
+                    lstats = learner.train_step(replay)
+                    if lstats is not None:
+                        for metric_name in last_train_metrics:
+                            if metric_name in lstats:
+                                last_train_metrics[metric_name] = float(lstats[metric_name])
+                last_train_env_step = int(env_steps)
+
+            if timing_summary_enabled and timing_log_interval > 0:
+                while env_steps >= next_timing_log_step:
+                    _print_timing_summary(env_steps, collector, learner, replay, collector.state_adapter)
+                    next_timing_log_step += timing_log_interval
+
+            if eval_interval_env_steps > 0:
+                while env_steps >= next_eval_step:
+                    run_eval(env_steps=env_steps, tag="periodic")
+                    next_eval_step += eval_interval_env_steps
+
+            should_log = (env_steps == int(cfg.total_env_steps))
+            if log_interval > 0 and env_steps >= next_log_step:
+                should_log = True
+                while env_steps >= next_log_step:
+                    next_log_step += log_interval
+
+            should_print_train = False
+            if train_print_interval > 0 and env_steps >= next_train_print_step:
+                should_print_train = True
+                while env_steps >= next_train_print_step:
+                    next_train_print_step += train_print_interval
+
+            if should_log or should_print_train:
+                emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
 
     if last_eval is None or int(last_eval["env_steps"]) != int(env_steps):
         run_eval(env_steps=env_steps, tag="final")
@@ -891,6 +1056,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         online_net,
         learner,
         env_steps=int(env_steps),
+        train_episode_idx=int(train_phase_episodes),
         eval_metrics=last_eval,
         train_config=cfg,
     )
@@ -909,7 +1075,11 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     )
     probe_row = {
         "tag": "final_probe",
+        "budget_mode": budget_mode,
         "env_steps": int(env_steps),
+        "episode_idx": int(collector.total_episodes),
+        "train_episode_idx": int(collector.total_episodes),
+        "completed_train_episodes": int(train_phase_episodes),
         "learner_steps": int(learner.learn_steps),
         "eval_episodes": int(probe["eval_episodes"]),
         "eval_mean_reward": float(probe["eval_mean_reward"]),
@@ -934,6 +1104,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     print(
         "[final_probe] "
         f"source={probe_source} env_steps={probe_row['env_steps']} episodes={probe_row['eval_episodes']} "
+        f"train_eps={int(train_phase_episodes)} "
         f"mean_reward={probe_row['eval_mean_reward']:.4f} mean_cov={probe_row['eval_mean_coverage']:.4f} "
         f"success_rate={probe_row['eval_success_rate']:.4f} mean_len={probe_row['eval_mean_episode_length']:.2f} "
         f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
@@ -1009,7 +1180,11 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
     recent_summary = summarize_recent_episodes(recent_eps)
     recent_train_row = {
+        "budget_mode": budget_mode,
         "env_steps": int(env_steps),
+        "episode_idx": int(collector.total_episodes),
+        "train_episode_idx": int(collector.total_episodes),
+        "completed_train_episodes": int(train_phase_episodes),
         "replay_size": int(len(replay)),
         "epsilon": float(linear_epsilon(env_steps, cfg)),
         "loss": float(last_train_metrics["loss"]),
@@ -1037,7 +1212,9 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     print("=" * 72)
     print("Training Summary")
     print(f"run_dir: {run_dir}")
+    print(f"budget_mode: {budget_mode}")
     print(f"final_env_steps: {env_steps}")
+    print(f"completed_train_episodes: {int(train_phase_episodes)}")
     print(f"total_runtime_sec: {total_runtime_sec:.2f}")
     print(f"total_runtime_hms: {total_runtime_hms}")
     print(
@@ -1105,7 +1282,13 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             if ckpt.best_path.exists() else "checkpoints/best.pt_missing"
         ),
         best_checkpoint_env_steps=int(best_eval["env_steps"]) if best_eval is not None else None,
+        best_checkpoint_train_episode_idx=(
+            int(best_eval["completed_train_episodes"])
+            if best_eval is not None and best_eval.get("completed_train_episodes") is not None
+            else None
+        ),
         last_checkpoint_env_steps=int(env_steps),
+        last_checkpoint_train_episode_idx=int(train_phase_episodes),
         final_probe_source=probe_source,
         total_runtime_sec=float(total_runtime_sec),
         total_runtime_hms=total_runtime_hms,
@@ -1176,6 +1359,15 @@ def parse_args() -> TrainConfig:
         default=True,
         help=
         "Performance-side overhead toggle only; controls TF32 backends without changing algorithm logic.",
+    )
+    p.add_argument(
+        "--strict-reproducibility",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Optional runtime determinism mode: disables cuDNN benchmark / TF32 on CUDA and enables "
+            "deterministic algorithm guards where supported. This does not replace fixed episode seeds."
+        ),
     )
     p.add_argument(
         "--enable-channels-last",
@@ -1321,8 +1513,11 @@ def parse_args() -> TrainConfig:
         ),
     )
 
+    p.add_argument("--budget-mode", type=str, choices=("env_steps", "episodes"), default="env_steps")
     p.add_argument("--total-env-steps", type=int, default=300_000)
+    p.add_argument("--total-train-episodes", type=int, default=600)
     p.add_argument("--warmup-steps", type=int, default=4_000)
+    p.add_argument("--warmup-episodes", type=int, default=0)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--min-replay-size", type=int, default=4_000)
     p.add_argument("--replay-capacity", type=int, default=100_000)
@@ -1339,9 +1534,22 @@ def parse_args() -> TrainConfig:
     p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
 
     p.add_argument("--eval-interval-env-steps", type=int, default=24_000)
+    p.add_argument("--eval-interval-episodes", type=int, default=40)
     p.add_argument("--eval-episodes", type=int, default=12)
     p.add_argument("--recent-episode-window", type=int, default=100)
     p.add_argument("--final-greedy-episodes", type=int, default=16)
+    p.add_argument(
+        "--use-fixed-train-episode-seeds",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Bind each train episode index to an explicit seed so repeated runs see the same map stream.",
+    )
+    p.add_argument(
+        "--fixed-train-episode-seed-base",
+        type=int,
+        default=20259323,
+        help="Base seed for the train-episode map sequence when fixed train episode seeds are enabled.",
+    )
     p.add_argument(
         "--use-fixed-eval-seeds",
         action=argparse.BooleanOptionalAction,
@@ -1362,6 +1570,8 @@ def parse_args() -> TrainConfig:
     )
 
     p.add_argument("--log-interval", type=int, default=500)
+    p.add_argument("--log-interval-episodes", type=int, default=10)
+    p.add_argument("--train-print-interval-episodes", type=int, default=20)
     p.add_argument("--rows", type=int, default=40)
     p.add_argument("--cols", type=int, default=60)
     p.add_argument("--obs-size", type=int, default=6)
@@ -1446,6 +1656,7 @@ def parse_args() -> TrainConfig:
     enable_torch_compile = bool(args.enable_torch_compile)
     enable_cudnn_benchmark = bool(args.enable_cudnn_benchmark)
     enable_tf32 = bool(args.enable_tf32)
+    strict_reproducibility = bool(args.strict_reproducibility)
     enable_channels_last = bool(args.enable_channels_last)
     if bool(args.fast_cuda):
         enable_amp = True
@@ -1466,6 +1677,7 @@ def parse_args() -> TrainConfig:
             compile_mode=args.compile_mode,
             enable_cudnn_benchmark=enable_cudnn_benchmark,
             enable_tf32=enable_tf32,
+            strict_reproducibility=strict_reproducibility,
             enable_channels_last=enable_channels_last,
             episode_print_interval=max(0, args.episode_print_interval),
             train_print_interval=max(0, args.train_print_interval),
@@ -1491,8 +1703,11 @@ def parse_args() -> TrainConfig:
             scan_radius=args.scan_radius,
             max_accessible_blocks=max(1, args.max_accessible_blocks),
             max_entries_per_block=max(1, args.max_entries_per_block),
+            budget_mode=str(args.budget_mode),
             total_env_steps=180,
+            total_train_episodes=max(1, args.total_train_episodes),
             warmup_steps=40,
+            warmup_episodes=max(0, args.warmup_episodes),
             collect_steps_per_iter=max(1, args.collect_steps_per_iter),
             learner_updates_per_iter=max(1, args.learner_updates_per_iter),
             train_every_env_steps=max(1, args.train_every_env_steps),
@@ -1507,13 +1722,18 @@ def parse_args() -> TrainConfig:
             epsilon_end=args.epsilon_end,
             epsilon_decay_steps=max(1, args.epsilon_decay_steps),
             eval_interval_env_steps=60,
+            eval_interval_episodes=max(1, args.eval_interval_episodes),
             eval_episodes=3,
             recent_episode_window=10,
             final_greedy_episodes=1,
+            train_print_interval_episodes=max(0, args.train_print_interval_episodes),
+            use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
+            fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
             use_fixed_eval_seeds=True,
             fixed_eval_seed_base=int(args.fixed_eval_seed_base),
             fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
             log_interval=20,
+            log_interval_episodes=max(0, args.log_interval_episodes),
             max_episode_steps=80,
             reward_info_scale=args.reward_info_scale,
             reward_obstacle_weight=args.reward_obstacle_weight,
@@ -1552,6 +1772,7 @@ def parse_args() -> TrainConfig:
         compile_mode=args.compile_mode,
         enable_cudnn_benchmark=enable_cudnn_benchmark,
         enable_tf32=enable_tf32,
+        strict_reproducibility=strict_reproducibility,
         enable_channels_last=enable_channels_last,
         episode_print_interval=max(0, args.episode_print_interval),
         train_print_interval=max(0, args.train_print_interval),
@@ -1572,8 +1793,11 @@ def parse_args() -> TrainConfig:
         debug_check_incremental_frontier=bool(args.debug_check_incremental_frontier),
         prefer_batch_replay_add=args.prefer_batch_replay_add,
         learner_debug_stats_every=max(1, args.learner_debug_stats_every),
+        budget_mode=str(args.budget_mode),
         total_env_steps=args.total_env_steps,
+        total_train_episodes=max(1, args.total_train_episodes),
         warmup_steps=args.warmup_steps,
+        warmup_episodes=max(0, args.warmup_episodes),
         collect_steps_per_iter=max(1, args.collect_steps_per_iter),
         learner_updates_per_iter=max(1, args.learner_updates_per_iter),
         train_every_env_steps=max(1, args.train_every_env_steps),
@@ -1588,13 +1812,18 @@ def parse_args() -> TrainConfig:
         epsilon_end=args.epsilon_end,
         epsilon_decay_steps=max(1, args.epsilon_decay_steps),
         eval_interval_env_steps=max(0, args.eval_interval_env_steps),
+        eval_interval_episodes=max(1, args.eval_interval_episodes),
         eval_episodes=max(1, args.eval_episodes),
         recent_episode_window=max(1, args.recent_episode_window),
         final_greedy_episodes=max(1, args.final_greedy_episodes),
+        train_print_interval_episodes=max(0, args.train_print_interval_episodes),
+        use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
+        fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
         use_fixed_eval_seeds=bool(args.use_fixed_eval_seeds),
         fixed_eval_seed_base=int(args.fixed_eval_seed_base),
         fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
         log_interval=args.log_interval,
+        log_interval_episodes=max(0, args.log_interval_episodes),
         rows=args.rows,
         cols=args.cols,
         obs_size=args.obs_size,
@@ -1687,6 +1916,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         compile_mode="default",
         enable_cudnn_benchmark=True,
         enable_tf32=True,
+        strict_reproducibility=False,
         enable_channels_last=False,
         episode_print_interval=1,
         train_print_interval=2000,
@@ -1713,8 +1943,11 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         obstacle_ratio=0.20,
         max_accessible_blocks=16,
         max_entries_per_block=8,
+        budget_mode="env_steps",
         total_env_steps=300_000,
+        total_train_episodes=600,
         warmup_steps=4_000,
+        warmup_episodes=0,
         collect_steps_per_iter=16,
         learner_updates_per_iter=2,
         train_every_env_steps=16,
@@ -1730,13 +1963,18 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         epsilon_end=0.05,
         epsilon_decay_steps=240_000,
         eval_interval_env_steps=24_000,
+        eval_interval_episodes=40,
         eval_episodes=12,
         recent_episode_window=100,
         final_greedy_episodes=16,
+        train_print_interval_episodes=20,
+        use_fixed_train_episode_seeds=True,
+        fixed_train_episode_seed_base=20259323,
         use_fixed_eval_seeds=True,
         fixed_eval_seed_base=20260323,
         fixed_final_probe_seed_base=20261323,
         log_interval=500,
+        log_interval_episodes=10,
         max_episode_steps=600,
         coverage_stop_threshold=0.95,
         reward_info_scale=3.0,

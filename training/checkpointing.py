@@ -34,6 +34,7 @@ class CheckpointManager:
         online_net,
         learner,
         env_steps: int,
+        train_episode_idx: int | None = None,
         eval_metrics: Optional[Dict[str, object]] = None,
         train_config=None,
     ) -> Dict[str, object]:
@@ -44,6 +45,8 @@ class CheckpointManager:
             "eval_metrics": eval_metrics,
             "train_config": self._serialize_config(train_config),
         }
+        if train_episode_idx is not None:
+            payload["train_episode_idx"] = int(train_episode_idx)
         if learner is not None and hasattr(learner, "optimizer"):
             payload["optimizer_state_dict"] = learner.optimizer.state_dict()
         return payload
@@ -53,10 +56,18 @@ class CheckpointManager:
         online_net,
         learner,
         env_steps: int,
+        train_episode_idx: int | None = None,
         eval_metrics: Optional[Dict[str, object]] = None,
         train_config=None,
     ) -> Path:
-        payload = self._build_payload(online_net, learner, env_steps, eval_metrics=eval_metrics, train_config=train_config)
+        payload = self._build_payload(
+            online_net,
+            learner,
+            env_steps,
+            train_episode_idx=train_episode_idx,
+            eval_metrics=eval_metrics,
+            train_config=train_config,
+        )
         torch.save(payload, self.last_path)
         return self.last_path
 
@@ -65,6 +76,7 @@ class CheckpointManager:
         online_net,
         learner,
         env_steps: int,
+        train_episode_idx: int | None,
         eval_metrics: Dict[str, object],
         train_config=None,
     ) -> bool:
@@ -80,6 +92,13 @@ class CheckpointManager:
         self.best_success_rate = success
         self.best_mean_coverage = coverage
 
-        payload = self._build_payload(online_net, learner, env_steps, eval_metrics=eval_metrics, train_config=train_config)
+        payload = self._build_payload(
+            online_net,
+            learner,
+            env_steps,
+            train_episode_idx=train_episode_idx,
+            eval_metrics=eval_metrics,
+            train_config=train_config,
+        )
         torch.save(payload, self.best_path)
         return True

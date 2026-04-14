@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import hashlib
 import random
 from typing import Optional, Tuple
 
 import numpy as np
 
 from env.grid_topology import EMPTY, OBSTACLE, GridTopology
+
+
+def compute_map_fingerprint(grid: np.ndarray, start: tuple[int, int]) -> str:
+    arr = np.ascontiguousarray(np.asarray(grid, dtype=np.int8))
+    start_rc = (int(start[0]), int(start[1]))
+    payload = hashlib.sha1()
+    payload.update(str(tuple(arr.shape)).encode("utf-8"))
+    payload.update(b"|")
+    payload.update(arr.tobytes())
+    payload.update(b"|")
+    payload.update(f"{start_rc[0]},{start_rc[1]}".encode("utf-8"))
+    return payload.hexdigest()[:16]
 
 
 class RandomMapGenerator:
@@ -34,7 +47,11 @@ class RandomMapGenerator:
 
         self.map: Optional[np.ndarray] = None
 
-    def generate_map(self) -> Tuple[np.ndarray, Tuple[int, int]]:
+    @staticmethod
+    def _normalize_np_seed(seed: int) -> int:
+        return int(seed) % (2**32)
+
+    def _generate_map_unseeded(self) -> Tuple[np.ndarray, Tuple[int, int]]:
         for _ in range(self.max_generate_tries):
             grid = self._generate_candidate()
             start = self._pick_start(grid)
@@ -50,6 +67,20 @@ class RandomMapGenerator:
 
         self.map = grid
         return grid, start
+
+    def generate_map(self, seed: int | None = None) -> Tuple[np.ndarray, Tuple[int, int]]:
+        if seed is None:
+            return self._generate_map_unseeded()
+
+        python_state = random.getstate()
+        numpy_state = np.random.get_state()
+        try:
+            random.seed(int(seed))
+            np.random.seed(self._normalize_np_seed(int(seed)))
+            return self._generate_map_unseeded()
+        finally:
+            random.setstate(python_state)
+            np.random.set_state(numpy_state)
 
     def _generate_candidate(self) -> np.ndarray:
         grid = np.full((self.rows, self.cols), EMPTY, dtype=np.int8)

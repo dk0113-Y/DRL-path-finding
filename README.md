@@ -94,6 +94,38 @@ python train_q_agent.py --smoke --device cpu
 python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup-steps 4000 --eval-interval-env-steps 24000 --eval-episodes 4 --final-greedy-episodes 1 --timing-log-interval 4000 --episode-print-interval 0 --no-save-eval-trajectories --no-save-train-representative-trajectories --no-save-final-probe-trajectories --no-generate-plots-on-finish
 ```
 
+当前正式支持两种训练 budget 组织方式：
+
+- `budget_mode=env_steps`
+  - 兼容旧主线；训练停止、周期 eval 与 step-level log 仍按 `total_env_steps` / `eval_interval_env_steps` / `log_interval` 组织。
+  - `warmup_steps` 在该模式下继续有效。
+- `budget_mode=episodes`
+  - 训练停止条件改为 `total_train_episodes`。
+  - 周期 eval / 训练 step snapshot / stdout train print 可分别由 `eval_interval_episodes`、`log_interval_episodes`、`train_print_interval_episodes` 控制。
+  - `warmup_episodes` 在该模式下作为正式 warmup 入口；单图内部步数上限仍由 `max_episode_steps` 控制。
+
+训练 episode 现在也支持固定 seed 序列：
+
+- `use_fixed_train_episode_seeds`
+- `fixed_train_episode_seed_base`
+
+当该开关开启时，相同配置下相同 episode 编号会绑定相同地图生成 seed。`logs/train_episodes.csv` 会额外记录：
+
+- `train_episode_idx`
+- `phase_episode_idx`
+- `episode_seed`
+- `map_fingerprint`
+
+其中 `map_fingerprint` 用于直接审计“同编号 episode 是否确实对应同一地图/起点”。
+
+如需进一步压缩运行时数值路径的不确定性，可选开启：
+
+```bash
+python train_q_agent.py --strict-reproducibility
+```
+
+该开关会尽量使用 deterministic runtime guard，并在 CUDA 下关闭 `cudnn_benchmark` 与 TF32。它是可选增强项，不替代固定 train episode seed 序列。
+
 实验性快速 CUDA 路径：
 
 - 可通过 `--fast-cuda` 或 `build_fast_cuda_config()` 启用。
@@ -103,6 +135,12 @@ python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup
 常用可调参数包括：
 
 - `--total-env-steps`
+- `--budget-mode`
+- `--total-train-episodes`
+- `--warmup-episodes`
+- `--eval-interval-episodes`
+- `--use-fixed-train-episode-seeds`
+- `--fixed-train-episode-seed-base`
 - `--batch-size`
 - `--rows` `--cols`
 - `--scan-radius`
@@ -136,8 +174,10 @@ python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup
 - `metric_snapshot.json`
   - 统一导出 `recent_train`、`last_eval`、`best_eval`、`final_probe`
   - 包含主指标、次指标、稳定性指标、semantic monitoring 汇总
+  - 同时记录 best / last checkpoint 对应的 train-episode 索引（如果可得）
 - `benchmark_summary.json`
   - 导出总运行时、运行模式、runtime/timing 开关、可用 timing summary、`env_steps_to_best`
+  - 在 episode-budget 模式下也会导出 `budget_mode`、`train_episodes_to_best`、`total_train_episodes_completed`
 - `config_snapshot.json`
   - 导出完整训练配置、git sha、comparability 相关字段、`observed_run_contract`
 - `artifact_index.json`
@@ -147,7 +187,10 @@ python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup
 
 当前 `config_snapshot.json` 里的 `observed_run_contract` 至少包含：
 
+- `budget_mode`
 - `final_env_steps`
+- `final_train_episode_idx`
+- `train_episodes_header`
 - `train_steps_header`
 - `eval_metrics_header`
 - `final_probe_header`

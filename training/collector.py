@@ -12,7 +12,7 @@ import torch
 
 from agents.q_value_agent import select_greedy_action
 from env.agent_version import LocalObservationModel
-from env.block_random_g import RandomMapGenerator
+from env.block_random_g import RandomMapGenerator, compute_map_fingerprint
 from env.core_cummap import CumulativeBeliefMap
 from env.core_radar import RadarSensor
 from env.grid_topology import ACTIONS_8, GridTopology
@@ -99,6 +99,8 @@ class CollectorConfig:
     prefer_batch_replay_add: bool = True
     record_episode_artifacts: bool = False
     debug_check_incremental_frontier: bool = False
+    use_fixed_train_episode_seeds: bool = True
+    fixed_train_episode_seed_base: int = 20259323
 
 
 class TransitionCollector:
@@ -143,6 +145,8 @@ class TransitionCollector:
             obs_size=cfg.obs_size,
             obstacle_ratio=cfg.obstacle_ratio,
         )
+        self._use_fixed_train_episode_seeds = bool(cfg.use_fixed_train_episode_seeds)
+        self._fixed_train_episode_seed_base = int(cfg.fixed_train_episode_seed_base)
         self.nstep = NStepTransitionBuilder(n_step=cfg.n_step, gamma=cfg.gamma)
 
         self.grid = None
@@ -162,6 +166,9 @@ class TransitionCollector:
         self.episode_steps = 0
         self.total_env_steps = 0
         self.total_episodes = 0
+        self.current_episode_idx = 0
+        self.current_episode_seed: int | None = None
+        self.current_map_fingerprint = ""
         self._episode_reward = 0.0
         self._episode_reward_breakdown = zero_reward_breakdown()
         self._episode_event_summary = zero_reward_event_summary()
@@ -205,8 +212,18 @@ class TransitionCollector:
             return nullcontext()
         return torch.autocast(device_type="cuda", dtype=self._inference_amp_dtype)
 
+    def _episode_seed_for_index(self, episode_idx: int) -> int | None:
+        if not self._use_fixed_train_episode_seeds:
+            return None
+        return int(self._fixed_train_episode_seed_base + max(0, int(episode_idx) - 1))
+
     def reset_episode(self) -> None:
-        self.grid, self.agent = self.generator.generate_map()
+        next_episode_idx = int(self.total_episodes) + 1
+        episode_seed = self._episode_seed_for_index(next_episode_idx)
+        self.grid, self.agent = self.generator.generate_map(seed=episode_seed)
+        self.current_episode_idx = next_episode_idx
+        self.current_episode_seed = episode_seed
+        self.current_map_fingerprint = compute_map_fingerprint(self.grid, self.agent)
         self.free_mask = GridTopology.free_mask(self.grid)
         self.obs_model = LocalObservationModel(self.grid, self.agent, sensor=self.sensor)
         self.local_snap = self.obs_model.local_snap
@@ -248,7 +265,6 @@ class TransitionCollector:
         self._current_state_tensors, self._current_state_meta = self._build_state_tensors()
         if self._timing_enabled:
             self.state_build_time += time.perf_counter() - t0
-        self.total_episodes += 1
 
     def _is_recent_revisit(self, position: tuple[int, int]) -> bool:
         pos = (int(position[0]), int(position[1]))
@@ -289,7 +305,7 @@ class TransitionCollector:
         raise RuntimeError(
             "Incremental frontier cache mismatch in collector: "
             f"context={context} "
-            f"episode_idx={int(self.total_episodes)} "
+            f"episode_idx={int(self.current_episode_idx)} "
             f"episode_step={episode_step} "
             f"total_env_steps={int(self.total_env_steps)} "
             f"mismatch_count={int(stats.mismatch_count)} "
@@ -552,18 +568,28 @@ class TransitionCollector:
             "env_step_time": float(self.env_step_time),
         }
 
-    def collect_steps(self, num_steps: int, epsilon: float, random_only: bool = False) -> Dict[str, object]:
+    def collect_steps(
+        self,
+        num_steps: int,
+        epsilon: float,
+        random_only: bool = False,
+        stop_after_episodes: int | None = None,
+    ) -> Dict[str, object]:
         if num_steps <= 0:
             raise ValueError("num_steps must be > 0")
+        if stop_after_episodes is not None and int(stop_after_episodes) <= 0:
+            raise ValueError("stop_after_episodes must be > 0 when provided")
 
         timing_enabled = self._timing_enabled
         self.online_net.eval()
 
         pushed = 0
         episode_done = 0
+        actual_env_steps = 0
         reward_sum = 0.0
         last_episode_reward = 0.0
         episodes: list[dict] = []
+        target_episode_count = None if stop_after_episodes is None else int(stop_after_episodes)
 
         for _ in range(int(num_steps)):
             current_state = self._current_state_tensors
@@ -580,6 +606,7 @@ class TransitionCollector:
             reward, done, done_reason = self._step_env(action, valid_before=valid_before)
             if timing_enabled:
                 self.env_step_time += time.perf_counter() - t0
+            actual_env_steps += 1
             reward_sum += reward
 
             t0 = time.perf_counter() if timing_enabled else 0.0
@@ -626,9 +653,13 @@ class TransitionCollector:
                 success = bool(done_reason == "coverage_reached")
                 episode_event_summary = dict(self._episode_event_summary)
                 episode_event_summary["timeout_flag"] = float(done_reason == "max_episode_steps")
+                completed_episode_idx = int(self.current_episode_idx)
+                completed_episode_seed = self.current_episode_seed
+                completed_map_fingerprint = str(self.current_map_fingerprint)
                 episodes.append(
                     {
-                        "episode_idx": int(self.total_episodes),
+                        "episode_idx": completed_episode_idx,
+                        "train_episode_idx": completed_episode_idx,
                         "env_steps": int(self.total_env_steps),
                         "episode_reward": float(self._episode_reward),
                         "episode_length": int(self.episode_steps),
@@ -636,19 +667,24 @@ class TransitionCollector:
                         "success": int(success),
                         "repeat_visit_ratio": float(self._repeat_visit_ratio(self.cum_map)),
                         "done_reason": str(done_reason),
+                        "episode_seed": completed_episode_seed,
+                        "map_fingerprint": completed_map_fingerprint,
                         **summarize_semantic_records(self._episode_semantic_records),
                         **{k: float(self._episode_reward_breakdown[k]) for k in self._episode_reward_breakdown},
                         **{k: float(episode_event_summary.get(k, 0.0)) for k in REWARD_EVENT_SUMMARY_FIELDS},
                         **(self._episode_visual_artifacts() if self._record_episode_artifacts else {}),
                     }
                 )
+                self.total_episodes = completed_episode_idx
                 self.reset_episode()
+                if target_episode_count is not None and episode_done >= target_episode_count:
+                    break
             else:
                 self._current_state_tensors = next_state
                 self._current_state_meta = next_state_meta
 
         out = {
-            "env_steps": float(num_steps),
+            "env_steps": float(actual_env_steps),
             "pushed_transitions": float(pushed),
             "episodes_done": float(episode_done),
             "reward_sum": float(reward_sum),

@@ -23,6 +23,7 @@ RUNTIME_ONLY_FIELDS = (
     "compile_mode",
     "enable_cudnn_benchmark",
     "enable_tf32",
+    "strict_reproducibility",
     "enable_channels_last",
     "generate_plots_on_finish",
     "save_eval_trajectories",
@@ -59,14 +60,20 @@ FROZEN_COMPARABILITY_FIELDS = (
     "scan_radius",
     "trajectory_history_steps",
     "obstacle_ratio",
+    "budget_mode",
     "total_env_steps",
+    "total_train_episodes",
     "warmup_steps",
+    "warmup_episodes",
     "collect_steps_per_iter",
     "learner_updates_per_iter",
     "train_every_env_steps",
     "eval_interval_env_steps",
+    "eval_interval_episodes",
     "eval_episodes",
     "final_greedy_episodes",
+    "use_fixed_train_episode_seeds",
+    "fixed_train_episode_seed_base",
     "use_fixed_eval_seeds",
     "fixed_eval_seed_base",
     "fixed_final_probe_seed_base",
@@ -412,8 +419,22 @@ def build_observed_run_contract(
         elif train_steps_rows:
             final_env_steps = _to_scalar(train_steps_rows[-1].get("env_steps"))
 
+    final_train_episode_idx = (
+        _to_scalar((final_probe_row or {}).get("completed_train_episodes"))
+        or _to_scalar((last_eval_row or {}).get("completed_train_episodes"))
+        or _to_scalar((recent_train_row or {}).get("completed_train_episodes"))
+    )
+    observed_budget_mode = (
+        _to_scalar((recent_train_row or {}).get("budget_mode"))
+        or _to_scalar((last_eval_row or {}).get("budget_mode"))
+        or _to_scalar((final_probe_row or {}).get("budget_mode"))
+    )
+
     return {
+        "budget_mode": observed_budget_mode,
         "final_env_steps": final_env_steps,
+        "final_train_episode_idx": final_train_episode_idx,
+        "train_episodes_header": _read_csv_header(logs_dir / "train_episodes.csv"),
         "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
         "eval_metrics_header": _read_csv_header(logs_dir / "eval_metrics.csv"),
         "final_probe_header": _read_csv_header(logs_dir / "final_probe.csv"),
@@ -429,7 +450,9 @@ def build_metric_snapshot(
     final_probe_row: Mapping[str, Any] | None,
     best_checkpoint_source: str,
     best_checkpoint_env_steps: int | None,
+    best_checkpoint_train_episode_idx: int | None,
     last_checkpoint_env_steps: int | None,
+    last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
     source_of_truth_repo: str,
     insufficient_evidence_flags: list[str] | None = None,
@@ -459,7 +482,9 @@ def build_metric_snapshot(
         "final_probe": final_probe,
         "best_checkpoint_source": best_checkpoint_source,
         "best_checkpoint_env_steps": best_checkpoint_env_steps,
+        "best_checkpoint_train_episode_idx": best_checkpoint_train_episode_idx,
         "last_checkpoint_env_steps": last_checkpoint_env_steps,
+        "last_checkpoint_train_episode_idx": last_checkpoint_train_episode_idx,
         "final_probe_source": final_probe_source,
         "unified_metrics": _build_unified_metric_table(metric_blocks),
         "insufficient_evidence_flags": sorted(set(insufficient_evidence_flags or [])),
@@ -526,6 +551,8 @@ def build_benchmark_summary(
     total_runtime_sec: float | None,
     total_runtime_hms: str | None,
     env_steps_to_best: int | None,
+    train_episodes_to_best: int | None,
+    total_train_episodes_completed: int | None,
     collector: Any | None = None,
     learner: Any | None = None,
     replay: Any | None = None,
@@ -561,7 +588,10 @@ def build_benchmark_summary(
         "runtime_performance_switches": runtime_flags,
         "timing_switches": timing_flags,
         "timing_summary": timing_summary,
+        "budget_mode": config_dict.get("budget_mode"),
         "env_steps_to_best": env_steps_to_best,
+        "train_episodes_to_best": train_episodes_to_best,
+        "total_train_episodes_completed": total_train_episodes_completed,
         "insufficient_evidence_flags": sorted(set(flags)),
     }
 
@@ -740,15 +770,19 @@ def build_training_summary_text(
         "Training Summary",
         f"run_dir: {run_dir.resolve()}",
         f"run_mode: {benchmark_summary.get('run_mode')}",
+        f"budget_mode: {benchmark_summary.get('budget_mode')}",
         f"total_runtime_sec: {benchmark_summary.get('total_runtime_sec')}",
         f"total_runtime_hms: {benchmark_summary.get('total_runtime_hms')}",
+        f"total_train_episodes_completed: {benchmark_summary.get('total_train_episodes_completed')}",
         line_for(recent_train, "recent_train"),
         line_for(last_eval, "last_eval"),
         line_for(best_eval, "best_eval"),
         line_for(final_probe, "final_probe"),
         f"best_checkpoint_source: {metric_snapshot.get('best_checkpoint_source')}",
         f"best_checkpoint_env_steps: {metric_snapshot.get('best_checkpoint_env_steps')}",
+        f"best_checkpoint_train_episode_idx: {metric_snapshot.get('best_checkpoint_train_episode_idx')}",
         f"last_checkpoint_env_steps: {metric_snapshot.get('last_checkpoint_env_steps')}",
+        f"last_checkpoint_train_episode_idx: {metric_snapshot.get('last_checkpoint_train_episode_idx')}",
         f"final_probe_source: {metric_snapshot.get('final_probe_source')}",
     ]
     return "\n".join(lines) + "\n"
@@ -765,7 +799,9 @@ def write_formal_run_artifacts(
     final_probe_row: Mapping[str, Any] | None,
     best_checkpoint_source: str,
     best_checkpoint_env_steps: int | None,
+    best_checkpoint_train_episode_idx: int | None,
     last_checkpoint_env_steps: int | None,
+    last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
     total_runtime_sec: float | None,
     total_runtime_hms: str | None,
@@ -787,7 +823,9 @@ def write_formal_run_artifacts(
         final_probe_row=final_probe_row,
         best_checkpoint_source=best_checkpoint_source,
         best_checkpoint_env_steps=best_checkpoint_env_steps,
+        best_checkpoint_train_episode_idx=best_checkpoint_train_episode_idx,
         last_checkpoint_env_steps=last_checkpoint_env_steps,
+        last_checkpoint_train_episode_idx=last_checkpoint_train_episode_idx,
         final_probe_source=final_probe_source,
         source_of_truth_repo=source_repo,
         insufficient_evidence_flags=flags,
@@ -799,6 +837,8 @@ def write_formal_run_artifacts(
         total_runtime_sec=total_runtime_sec,
         total_runtime_hms=total_runtime_hms,
         env_steps_to_best=best_checkpoint_env_steps,
+        train_episodes_to_best=best_checkpoint_train_episode_idx,
+        total_train_episodes_completed=_to_scalar((recent_train_row or {}).get("completed_train_episodes")),
         collector=collector,
         learner=learner,
         replay=replay,
