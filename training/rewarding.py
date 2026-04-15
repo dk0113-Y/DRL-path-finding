@@ -16,7 +16,7 @@ REWARD_EVENT_SUMMARY_FIELDS: tuple[str, ...] = (
     "delta_empty_sum",
     "delta_obstacle_sum",
     "weighted_info_gain_sum",
-    "recent_revisit_count",
+    "recent_revisit_trigger_count",
     "stall_trigger_count",
     "zero_info_step_count",
     "turn_ge_90_count",

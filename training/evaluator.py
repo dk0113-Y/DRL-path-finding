@@ -390,7 +390,7 @@ class GreedyEvaluator:
                     info_norm=self.reward_info_norm,
                 )
             )
-            episode_event_summary["recent_revisit_count"] += float(bool(recent_revisit))
+            episode_event_summary["recent_revisit_trigger_count"] += float(bool(recent_revisit))
             episode_event_summary["stall_trigger_count"] += float(bool(stall_triggered))
             if int(delta_empty) == 0 and int(delta_obstacle) == 0:
                 episode_event_summary["zero_info_step_count"] += 1.0

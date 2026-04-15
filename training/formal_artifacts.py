@@ -26,12 +26,9 @@ RUNTIME_ONLY_FIELDS = (
     "strict_reproducibility",
     "enable_channels_last",
     "generate_plots_on_finish",
-    "save_eval_trajectories",
     "save_train_representative_trajectories",
     "save_train_special_trajectories",
     "save_final_probe_trajectories",
-    "enable_periodic_eval",
-    "enable_diagnostic_best_checkpoint",
 )
 
 TIMING_FLAG_FIELDS = (
@@ -114,7 +111,7 @@ REWARD_EVENT_FIELDS = (
     "delta_empty_sum",
     "delta_obstacle_sum",
     "weighted_info_gain_sum",
-    "recent_revisit_count",
+    "recent_revisit_trigger_count",
     "stall_trigger_count",
     "zero_info_step_count",
     "turn_ge_90_count",
@@ -139,7 +136,7 @@ STABILITY_UNIFIED_METRICS = {
     "timeout_flag": "lower_is_better",
     "stall_trigger_count": "lower_is_better",
     "zero_info_step_count": "lower_is_better",
-    "recent_revisit_count": "lower_is_better",
+    "recent_revisit_trigger_count": "lower_is_better",
 }
 
 RECENT_CORE_FIELD_MAP = {
@@ -156,6 +153,28 @@ EVAL_CORE_FIELD_MAP = {
     "success_rate": "eval_success_rate",
     "episode_length": "eval_mean_episode_length",
     "repeat_visit_ratio": "eval_mean_repeat_visit_ratio",
+}
+
+TRAIN_FINAL_CONSISTENCY_TOLERANCES = {
+    "reward": 20.0,
+    "coverage": 0.05,
+    "success_rate": 0.10,
+    "episode_length": 50.0,
+    "repeat_visit_ratio": 0.08,
+}
+
+TRAIN_FINAL_CONSISTENCY_DIRECTIONS = {
+    "reward": True,
+    "coverage": True,
+    "success_rate": True,
+    "episode_length": False,
+    "repeat_visit_ratio": False,
+}
+
+ROW_ALIAS_FIELDS = {
+    "recent_revisit_count": "recent_revisit_trigger_count",
+    "recent_recent_revisit_count": "recent_recent_revisit_trigger_count",
+    "eval_mean_recent_revisit_count": "eval_mean_recent_revisit_trigger_count",
 }
 
 
@@ -254,27 +273,22 @@ def _git_output(repo_dir: Path, args: list[str]) -> str | None:
     return text or None
 
 
-def _best_eval_score(row: Mapping[str, Any]) -> tuple[float, float]:
-    success = _to_scalar(row.get("eval_success_rate"))
-    coverage = _to_scalar(row.get("eval_mean_coverage"))
-    success_value = float(success) if isinstance(success, (int, float)) else float("-inf")
-    coverage_value = float(coverage) if isinstance(coverage, (int, float)) else float("-inf")
-    return (success_value, coverage_value)
-
-
-def select_best_eval_row(eval_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not eval_rows:
-        return None
-    return max(eval_rows, key=_best_eval_score)
+def _apply_row_aliases(row: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not row:
+        return {}
+    normalized = dict(row)
+    for old_name, new_name in ROW_ALIAS_FIELDS.items():
+        if old_name in normalized and new_name not in normalized:
+            normalized[new_name] = normalized[old_name]
+    return normalized
 
 
 def _extract_fields(row: Mapping[str, Any] | None, field_names: tuple[str, ...], prefix: str) -> dict[str, Any]:
-    row = row or {}
+    normalized = _apply_row_aliases(row)
     extracted: dict[str, Any] = {}
     for field_name in field_names:
         key = f"{prefix}{field_name}"
-        if key in row:
-            extracted[field_name] = _to_scalar(row.get(key))
+        extracted[field_name] = _to_scalar(normalized.get(key))
     return extracted
 
 
@@ -284,9 +298,9 @@ def _extract_dynamic_metric_fields(
     prefix: str,
     reserved_fields: set[str],
 ) -> dict[str, Any]:
-    row = row or {}
+    normalized = _apply_row_aliases(row)
     extra: dict[str, Any] = {}
-    for key, value in row.items():
+    for key, value in normalized.items():
         if not key.startswith(prefix):
             continue
         suffix = key[len(prefix):]
@@ -297,7 +311,9 @@ def _extract_dynamic_metric_fields(
 
 
 def _normalize_recent_train(row: Mapping[str, Any] | None) -> dict[str, Any]:
-    row = row or {}
+    normalized = _apply_row_aliases(row)
+    if not normalized:
+        return {}
     reserved = {
         "mean_reward",
         "mean_coverage",
@@ -309,27 +325,29 @@ def _normalize_recent_train(row: Mapping[str, Any] | None) -> dict[str, Any]:
     reserved.update(REWARD_EVENT_FIELDS)
     return {
         "source": "logs/train_steps.csv",
-        "env_steps": _to_scalar(row.get("env_steps")),
-        "learner_steps": _to_scalar(row.get("learner_steps")),
+        "env_steps": _to_scalar(normalized.get("env_steps")),
+        "learner_steps": _to_scalar(normalized.get("learner_steps")),
         "optimizer_monitoring": {
-            "loss": _to_scalar(row.get("loss")),
-            "q_mean": _to_scalar(row.get("q_mean")),
-            "target_q_mean": _to_scalar(row.get("target_q_mean")),
-            "td_abs_mean": _to_scalar(row.get("td_abs_mean")),
-            "grad_norm": _to_scalar(row.get("grad_norm")),
-            "replay_size": _to_scalar(row.get("replay_size")),
-            "epsilon": _to_scalar(row.get("epsilon")),
+            "loss": _to_scalar(normalized.get("loss")),
+            "q_mean": _to_scalar(normalized.get("q_mean")),
+            "target_q_mean": _to_scalar(normalized.get("target_q_mean")),
+            "td_abs_mean": _to_scalar(normalized.get("td_abs_mean")),
+            "grad_norm": _to_scalar(normalized.get("grad_norm")),
+            "replay_size": _to_scalar(normalized.get("replay_size")),
+            "epsilon": _to_scalar(normalized.get("epsilon")),
         },
-        "metrics": {name: _to_scalar(row.get(field_name)) for name, field_name in RECENT_CORE_FIELD_MAP.items()},
-        "reward_breakdown": _extract_fields(row, REWARD_BREAKDOWN_FIELDS, "recent_"),
-        "reward_events": _extract_fields(row, REWARD_EVENT_FIELDS, "recent_"),
-        "semantic_monitoring": _extract_dynamic_metric_fields(row, prefix="recent_", reserved_fields=reserved),
-        "raw_row": _json_safe(dict(row)),
+        "metrics": {name: _to_scalar(normalized.get(field_name)) for name, field_name in RECENT_CORE_FIELD_MAP.items()},
+        "reward_breakdown": _extract_fields(normalized, REWARD_BREAKDOWN_FIELDS, "recent_"),
+        "reward_events": _extract_fields(normalized, REWARD_EVENT_FIELDS, "recent_"),
+        "semantic_monitoring": _extract_dynamic_metric_fields(normalized, prefix="recent_", reserved_fields=reserved),
+        "raw_row": _json_safe(normalized),
     }
 
 
 def _normalize_eval_like(row: Mapping[str, Any] | None, *, source_name: str) -> dict[str, Any]:
-    row = row or {}
+    normalized = _apply_row_aliases(row)
+    if not normalized:
+        return {}
     raw_reserved = {
         "eval_mean_reward",
         "eval_mean_coverage",
@@ -340,58 +358,283 @@ def _normalize_eval_like(row: Mapping[str, Any] | None, *, source_name: str) -> 
     }
     raw_reserved.update({f"eval_mean_{field_name}" for field_name in REWARD_BREAKDOWN_FIELDS})
     raw_reserved.update({f"eval_mean_{field_name}" for field_name in REWARD_EVENT_FIELDS})
-    row_source = _to_scalar(row.get("source"))
+    row_source = _to_scalar(normalized.get("source"))
     return {
         "source": row_source or source_name,
         "artifact_source": source_name,
-        "tag": _to_scalar(row.get("tag")),
-        "env_steps": _to_scalar(row.get("env_steps")),
-        "learner_steps": _to_scalar(row.get("learner_steps")),
-        "episodes": _to_scalar(row.get("eval_episodes")),
-        "metrics": {name: _to_scalar(row.get(field_name)) for name, field_name in EVAL_CORE_FIELD_MAP.items()},
-        "reward_breakdown": _extract_fields(row, REWARD_BREAKDOWN_FIELDS, "eval_mean_"),
-        "reward_events": _extract_fields(row, REWARD_EVENT_FIELDS, "eval_mean_"),
+        "tag": _to_scalar(normalized.get("tag")),
+        "env_steps": _to_scalar(normalized.get("env_steps")),
+        "learner_steps": _to_scalar(normalized.get("learner_steps")),
+        "episodes": _to_scalar(normalized.get("eval_episodes")),
+        "metrics": {name: _to_scalar(normalized.get(field_name)) for name, field_name in EVAL_CORE_FIELD_MAP.items()},
+        "reward_breakdown": _extract_fields(normalized, REWARD_BREAKDOWN_FIELDS, "eval_mean_"),
+        "reward_events": _extract_fields(normalized, REWARD_EVENT_FIELDS, "eval_mean_"),
         "semantic_monitoring": _extract_dynamic_metric_fields(
-            row,
+            normalized,
             prefix="eval_mean_",
             reserved_fields={field_name.removeprefix("eval_mean_") for field_name in raw_reserved},
         ),
-        "raw_row": _json_safe(dict(row)),
+        "raw_row": _json_safe(normalized),
     }
 
 
+def _best_eval_score(row: Mapping[str, Any]) -> tuple[float, float]:
+    normalized = _apply_row_aliases(row)
+    success = _to_scalar(normalized.get("eval_success_rate"))
+    coverage = _to_scalar(normalized.get("eval_mean_coverage"))
+    success_value = float(success) if isinstance(success, (int, float)) else float("-inf")
+    coverage_value = float(coverage) if isinstance(coverage, (int, float)) else float("-inf")
+    return (success_value, coverage_value)
+
+
+def select_best_eval_row(eval_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not eval_rows:
+        return None
+    return max(eval_rows, key=_best_eval_score)
+
+
+def _metric_from_block(block: Mapping[str, Any], metric_name: str) -> Any:
+    metrics = block.get("metrics", {})
+    if not isinstance(metrics, Mapping):
+        return None
+    return _to_scalar(metrics.get(metric_name))
+
+
+def _reward_event_from_block(block: Mapping[str, Any], metric_name: str) -> Any:
+    reward_events = block.get("reward_events", {})
+    if not isinstance(reward_events, Mapping):
+        return None
+    return _to_scalar(reward_events.get(metric_name))
+
+
 def _build_unified_metric_table(metric_blocks: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    def metric_table(metric_names: Mapping[str, str], source_key: str) -> dict[str, Any]:
+    def metric_table(metric_names: Mapping[str, str], getter) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for metric_name, direction in metric_names.items():
             payload[metric_name] = {
                 "direction": direction,
-                "recent_train": _to_scalar(metric_blocks["recent_train"][source_key].get(metric_name)),
-                "last_eval": _to_scalar(metric_blocks["last_eval"][source_key].get(metric_name)),
-                "best_eval": _to_scalar(metric_blocks["best_eval"][source_key].get(metric_name)),
-                "final_probe": _to_scalar(metric_blocks["final_probe"][source_key].get(metric_name)),
+                "recent_train": getter(metric_blocks["recent_train"], metric_name),
+                "final_probe": getter(metric_blocks["final_probe"], metric_name),
+                "last_eval": getter(metric_blocks["last_eval"], metric_name),
+                "best_eval": getter(metric_blocks["best_eval"], metric_name),
             }
         return payload
 
     semantic_keys: set[str] = set()
     for block in metric_blocks.values():
-        semantic_keys.update(str(key) for key in block.get("semantic_monitoring", {}).keys())
+        semantic_monitoring = block.get("semantic_monitoring", {})
+        if isinstance(semantic_monitoring, Mapping):
+            semantic_keys.update(str(key) for key in semantic_monitoring.keys())
 
     semantic_payload = {}
     for metric_name in sorted(semantic_keys):
         semantic_payload[metric_name] = {
             "direction": "context_dependent_monitoring",
-            "recent_train": _to_scalar(metric_blocks["recent_train"]["semantic_monitoring"].get(metric_name)),
-            "last_eval": _to_scalar(metric_blocks["last_eval"]["semantic_monitoring"].get(metric_name)),
-            "best_eval": _to_scalar(metric_blocks["best_eval"]["semantic_monitoring"].get(metric_name)),
-            "final_probe": _to_scalar(metric_blocks["final_probe"]["semantic_monitoring"].get(metric_name)),
+            "recent_train": _to_scalar(metric_blocks["recent_train"].get("semantic_monitoring", {}).get(metric_name)),
+            "final_probe": _to_scalar(metric_blocks["final_probe"].get("semantic_monitoring", {}).get(metric_name)),
+            "last_eval": _to_scalar(metric_blocks["last_eval"].get("semantic_monitoring", {}).get(metric_name)),
+            "best_eval": _to_scalar(metric_blocks["best_eval"].get("semantic_monitoring", {}).get(metric_name)),
         }
 
     return {
-        "primary_metrics": metric_table(PRIMARY_UNIFIED_METRICS, "metrics"),
-        "secondary_metrics": metric_table(SECONDARY_UNIFIED_METRICS, "metrics"),
-        "stability_metrics": metric_table(STABILITY_UNIFIED_METRICS, "reward_events"),
+        "primary_metrics": metric_table(PRIMARY_UNIFIED_METRICS, lambda block, name: _metric_from_block(block, name)),
+        "secondary_metrics": metric_table(SECONDARY_UNIFIED_METRICS, lambda block, name: _metric_from_block(block, name)),
+        "stability_metrics": metric_table(STABILITY_UNIFIED_METRICS, lambda block, name: _reward_event_from_block(block, name)),
         "semantic_monitoring": semantic_payload,
+    }
+
+
+def _late_stage_window(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    count = max(4, int(math.ceil(len(rows) * 0.25)))
+    return rows[-min(len(rows), count):]
+
+
+def _linear_slope_per_1k_env_steps(rows: list[dict[str, Any]], metric_key: str) -> float | None:
+    points: list[tuple[float, float]] = []
+    for row in rows:
+        normalized = _apply_row_aliases(row)
+        env_steps = _to_scalar(normalized.get("env_steps"))
+        metric_value = _to_scalar(normalized.get(metric_key))
+        if isinstance(env_steps, (int, float)) and isinstance(metric_value, (int, float)):
+            points.append((float(env_steps), float(metric_value)))
+    if len(points) < 2:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    x_mean = statistics.fmean(xs)
+    y_mean = statistics.fmean(ys)
+    denominator = sum((x - x_mean) ** 2 for x in xs)
+    if denominator <= 0.0:
+        return None
+    numerator = sum((x - x_mean) * (y - y_mean) for x, y in points)
+    return float((numerator / denominator) * 1000.0)
+
+
+def _late_stage_variance(rows: list[dict[str, Any]], metric_key: str) -> float | None:
+    values: list[float] = []
+    for row in rows:
+        normalized = _apply_row_aliases(row)
+        metric_value = _to_scalar(normalized.get(metric_key))
+        if isinstance(metric_value, (int, float)):
+            values.append(float(metric_value))
+    if not values:
+        return None
+    if len(values) == 1:
+        return 0.0
+    return float(statistics.pvariance(values))
+
+
+def _threshold_reach_steps(
+    rows: list[dict[str, Any]],
+    *,
+    metric_key: str,
+    threshold: float,
+    higher_is_better: bool,
+) -> int | None:
+    for row in rows:
+        normalized = _apply_row_aliases(row)
+        env_steps = _to_scalar(normalized.get("env_steps"))
+        metric_value = _to_scalar(normalized.get(metric_key))
+        if not isinstance(env_steps, (int, float)) or not isinstance(metric_value, (int, float)):
+            continue
+        meets_threshold = float(metric_value) >= float(threshold) if higher_is_better else float(metric_value) <= float(threshold)
+        if meets_threshold:
+            return int(env_steps)
+    return None
+
+
+def _build_train_final_consistency_summary(
+    recent_train: Mapping[str, Any],
+    final_probe: Mapping[str, Any],
+) -> dict[str, Any]:
+    recent_metrics = recent_train.get("metrics", {}) if isinstance(recent_train, Mapping) else {}
+    final_metrics = final_probe.get("metrics", {}) if isinstance(final_probe, Mapping) else {}
+    details: dict[str, Any] = {}
+    counts = {
+        "aligned": 0,
+        "final_probe_stronger": 0,
+        "final_probe_weaker": 0,
+        "insufficient_evidence": 0,
+    }
+    for metric_name, tolerance in TRAIN_FINAL_CONSISTENCY_TOLERANCES.items():
+        recent_value = _to_scalar(recent_metrics.get(metric_name))
+        final_value = _to_scalar(final_metrics.get(metric_name))
+        if not isinstance(recent_value, (int, float)) or not isinstance(final_value, (int, float)):
+            counts["insufficient_evidence"] += 1
+            details[metric_name] = {
+                "recent_train": recent_value,
+                "final_probe": final_value,
+                "delta": None,
+                "verdict": "insufficient_evidence",
+            }
+            continue
+        delta = float(final_value) - float(recent_value)
+        if abs(delta) <= float(tolerance):
+            verdict = "aligned"
+        else:
+            higher_is_better = TRAIN_FINAL_CONSISTENCY_DIRECTIONS[metric_name]
+            strengthened = delta > 0.0 if higher_is_better else delta < 0.0
+            verdict = "final_probe_stronger" if strengthened else "final_probe_weaker"
+        counts[verdict] += 1
+        details[metric_name] = {
+            "recent_train": float(recent_value),
+            "final_probe": float(final_value),
+            "delta": float(delta),
+            "verdict": verdict,
+        }
+
+    if counts["insufficient_evidence"] == len(TRAIN_FINAL_CONSISTENCY_TOLERANCES):
+        verdict = "insufficient_evidence"
+    elif counts["final_probe_weaker"] >= 2:
+        verdict = "diverges_from_final_probe"
+    elif counts["final_probe_weaker"] == 0 and (counts["aligned"] + counts["final_probe_stronger"]) >= 4:
+        verdict = "supports_final_probe"
+    else:
+        verdict = "mixed"
+
+    notes: list[str] = []
+    weaker_metrics = [name for name, payload in details.items() if payload.get("verdict") == "final_probe_weaker"]
+    stronger_metrics = [name for name, payload in details.items() if payload.get("verdict") == "final_probe_stronger"]
+    if verdict == "supports_final_probe":
+        notes.append("recent_train and final_probe are directionally consistent on the tracked training-quality metrics.")
+    elif verdict == "diverges_from_final_probe":
+        notes.append("recent_train is materially stronger than held-out final_probe on multiple metrics.")
+    elif verdict == "mixed":
+        notes.append("recent_train and final_probe are mixed across the tracked quality metrics.")
+    else:
+        notes.append("recent_train versus final_probe consistency is unavailable because one or more metrics are missing.")
+    if weaker_metrics:
+        notes.append(f"final_probe underperformed recent_train on: {', '.join(sorted(weaker_metrics))}.")
+    if stronger_metrics:
+        notes.append(f"final_probe outperformed recent_train on: {', '.join(sorted(stronger_metrics))}.")
+    return {
+        "verdict": verdict,
+        "details": details,
+        "counts": counts,
+        "notes": notes,
+    }
+
+
+def _build_training_dynamics_summary(
+    *,
+    train_step_rows: list[dict[str, Any]],
+    recent_train: Mapping[str, Any],
+    final_probe: Mapping[str, Any],
+) -> dict[str, Any]:
+    late_stage_rows = _late_stage_window(train_step_rows)
+    consistency_summary = _build_train_final_consistency_summary(recent_train, final_probe)
+    return {
+        "final_window_stats": {
+            "recent_mean_reward": _metric_from_block(recent_train, "reward"),
+            "recent_mean_coverage": _metric_from_block(recent_train, "coverage"),
+            "recent_success_rate": _metric_from_block(recent_train, "success_rate"),
+            "recent_mean_episode_length": _metric_from_block(recent_train, "episode_length"),
+            "recent_mean_repeat_visit_ratio": _metric_from_block(recent_train, "repeat_visit_ratio"),
+        },
+        "growth_rates": {
+            "growth_rate_reward": _linear_slope_per_1k_env_steps(late_stage_rows, "recent_mean_reward"),
+            "growth_rate_coverage": _linear_slope_per_1k_env_steps(late_stage_rows, "recent_mean_coverage"),
+            "growth_rate_success_rate": _linear_slope_per_1k_env_steps(late_stage_rows, "recent_success_rate"),
+            "growth_rate_repeat_visit_ratio": _linear_slope_per_1k_env_steps(late_stage_rows, "recent_mean_repeat_visit_ratio"),
+        },
+        "threshold_reach_steps": {
+            "threshold_reach_steps_success_050": _threshold_reach_steps(
+                train_step_rows,
+                metric_key="recent_success_rate",
+                threshold=0.50,
+                higher_is_better=True,
+            ),
+            "threshold_reach_steps_coverage_090": _threshold_reach_steps(
+                train_step_rows,
+                metric_key="recent_mean_coverage",
+                threshold=0.90,
+                higher_is_better=True,
+            ),
+            "threshold_reach_steps_reward_custom": None,
+        },
+        "late_stage_variance": {
+            "late_stage_variance_reward": _late_stage_variance(late_stage_rows, "recent_mean_reward"),
+            "late_stage_variance_coverage": _late_stage_variance(late_stage_rows, "recent_mean_coverage"),
+            "late_stage_variance_success_rate": _late_stage_variance(late_stage_rows, "recent_success_rate"),
+            "late_stage_variance_repeat_visit_ratio": _late_stage_variance(late_stage_rows, "recent_mean_repeat_visit_ratio"),
+        },
+        "train_final_consistency": consistency_summary,
+        "late_stage_window": {
+            "definition": "last_25_percent_of_train_step_logging_rows_min_4_rows",
+            "row_count": len(late_stage_rows),
+            "fraction_of_logging_points": 0.25 if train_step_rows else None,
+            "start_env_steps": _to_scalar((late_stage_rows[0] if late_stage_rows else {}).get("env_steps")),
+            "end_env_steps": _to_scalar((late_stage_rows[-1] if late_stage_rows else {}).get("env_steps")),
+        },
+        "definitions": {
+            "growth_rate_unit": "least_squares_slope_per_1000_env_steps_over_late_stage_window",
+            "reward_threshold_note": "threshold_reach_steps_reward_custom is intentionally left null in v2 because a stable formal reward threshold has not been fixed.",
+            "late_stage_variance_window": "last_25_percent_of_train_step_logging_rows_min_4_rows",
+            "formal_acceptance_note": "training_dynamics_summary is ranking and diagnostic context only; formal acceptance still uses final_probe of the last checkpoint.",
+        },
+        "notes": consistency_summary.get("notes", []),
     }
 
 
@@ -399,36 +642,20 @@ def build_observed_run_contract(
     *,
     run_dir: Path,
     recent_train_row: Mapping[str, Any] | None = None,
-    last_eval_row: Mapping[str, Any] | None = None,
     final_probe_row: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     logs_dir = run_dir / "logs"
-    final_env_steps = (
-        _to_scalar((final_probe_row or {}).get("env_steps"))
-        or _to_scalar((last_eval_row or {}).get("env_steps"))
-        or _to_scalar((recent_train_row or {}).get("env_steps"))
-    )
+    final_env_steps = _to_scalar((final_probe_row or {}).get("env_steps")) or _to_scalar((recent_train_row or {}).get("env_steps"))
+    final_train_episode_idx = _to_scalar((final_probe_row or {}).get("completed_train_episodes")) or _to_scalar((recent_train_row or {}).get("completed_train_episodes"))
+    observed_budget_mode = _to_scalar((recent_train_row or {}).get("budget_mode")) or _to_scalar((final_probe_row or {}).get("budget_mode"))
+
     if final_env_steps is None:
         final_probe_rows = _read_csv_rows(logs_dir / "final_probe.csv")
-        eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
         train_steps_rows = _read_csv_rows(logs_dir / "train_steps.csv")
         if final_probe_rows:
-            final_env_steps = _to_scalar(final_probe_rows[-1].get("env_steps"))
-        elif eval_rows:
-            final_env_steps = _to_scalar(eval_rows[-1].get("env_steps"))
+            final_env_steps = _to_scalar(_apply_row_aliases(final_probe_rows[-1]).get("env_steps"))
         elif train_steps_rows:
-            final_env_steps = _to_scalar(train_steps_rows[-1].get("env_steps"))
-
-    final_train_episode_idx = (
-        _to_scalar((final_probe_row or {}).get("completed_train_episodes"))
-        or _to_scalar((last_eval_row or {}).get("completed_train_episodes"))
-        or _to_scalar((recent_train_row or {}).get("completed_train_episodes"))
-    )
-    observed_budget_mode = (
-        _to_scalar((recent_train_row or {}).get("budget_mode"))
-        or _to_scalar((last_eval_row or {}).get("budget_mode"))
-        or _to_scalar((final_probe_row or {}).get("budget_mode"))
-    )
+            final_env_steps = _to_scalar(_apply_row_aliases(train_steps_rows[-1]).get("env_steps"))
 
     return {
         "budget_mode": observed_budget_mode,
@@ -445,30 +672,39 @@ def build_metric_snapshot(
     *,
     run_dir: Path,
     recent_train_row: Mapping[str, Any] | None,
-    last_eval_row: Mapping[str, Any] | None,
-    best_eval_row: Mapping[str, Any] | None,
     final_probe_row: Mapping[str, Any] | None,
-    best_checkpoint_source: str,
-    best_checkpoint_env_steps: int | None,
-    best_checkpoint_train_episode_idx: int | None,
     last_checkpoint_env_steps: int | None,
     last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
     source_of_truth_repo: str,
-    periodic_eval_enabled: bool | None = None,
-    diagnostic_best_checkpoint_enabled: bool | None = None,
+    last_eval_row: Mapping[str, Any] | None = None,
+    best_eval_row: Mapping[str, Any] | None = None,
     insufficient_evidence_flags: list[str] | None = None,
 ) -> dict[str, Any]:
+    logs_dir = run_dir / "logs"
+    eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
+    if last_eval_row is None and eval_rows:
+        last_eval_row = eval_rows[-1]
+    if best_eval_row is None and eval_rows:
+        best_eval_row = select_best_eval_row(eval_rows)
+
     recent_train = _normalize_recent_train(recent_train_row)
-    last_eval = _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv")
-    best_eval = _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval")
     final_probe = _normalize_eval_like(final_probe_row, source_name="logs/final_probe.csv")
+    last_eval = _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv") if last_eval_row else {}
+    best_eval = _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval") if best_eval_row else {}
+    train_step_rows = _read_csv_rows(logs_dir / "train_steps.csv")
+    training_dynamics_summary = _build_training_dynamics_summary(
+        train_step_rows=train_step_rows,
+        recent_train=recent_train,
+        final_probe=final_probe,
+    )
+    consistency_summary = training_dynamics_summary.get("train_final_consistency", {})
 
     metric_blocks = {
         "recent_train": recent_train,
+        "final_probe": final_probe,
         "last_eval": last_eval,
         "best_eval": best_eval,
-        "final_probe": final_probe,
     }
 
     return {
@@ -479,12 +715,12 @@ def build_metric_snapshot(
         "run_dir": str(run_dir.resolve()),
         "generated_at": _now_iso(),
         "recent_train": recent_train,
+        "final_probe": final_probe,
+        "training_dynamics_summary": training_dynamics_summary,
+        "train_final_consistency_summary": consistency_summary,
+        "recent_train_support_summary": consistency_summary,
         "last_eval": last_eval,
         "best_eval": best_eval,
-        "final_probe": final_probe,
-        "best_checkpoint_source": best_checkpoint_source,
-        "best_checkpoint_env_steps": best_checkpoint_env_steps,
-        "best_checkpoint_train_episode_idx": best_checkpoint_train_episode_idx,
         "last_checkpoint_env_steps": last_checkpoint_env_steps,
         "last_checkpoint_train_episode_idx": last_checkpoint_train_episode_idx,
         "final_probe_source": final_probe_source,
@@ -494,19 +730,36 @@ def build_metric_snapshot(
             "env_steps": last_checkpoint_env_steps,
             "train_episode_idx": last_checkpoint_train_episode_idx,
             "evaluation_artifact": "logs/final_probe.csv",
+            "role": "formal_acceptance_object",
         },
-        "diagnostic_periodic_eval": {
-            "enabled": periodic_eval_enabled,
-            "csv_file": "logs/eval_metrics.csv",
-            "last_eval_available": bool(last_eval_row),
+        "automatic_tuning_ranking_basis": {
+            "final_network_outcome": [
+                "success_rate",
+                "coverage",
+                "reward",
+                "episode_length",
+                "repeat_visit_ratio",
+            ],
+            "training_dynamics_quality": [
+                "recent_mean_reward",
+                "recent_mean_coverage",
+                "recent_success_rate",
+                "recent_mean_episode_length",
+                "recent_mean_repeat_visit_ratio",
+                "growth_rate",
+                "threshold_reach_steps",
+                "late_stage_variance",
+                "train_final_consistency",
+            ],
         },
-        "diagnostic_best_checkpoint": {
-            "enabled": diagnostic_best_checkpoint_enabled,
-            "checkpoint_path": "checkpoints/best.pt",
-            "selection_source": best_checkpoint_source,
-            "env_steps": best_checkpoint_env_steps,
-            "train_episode_idx": best_checkpoint_train_episode_idx,
-            "available": best_checkpoint_env_steps is not None or best_checkpoint_train_episode_idx is not None,
+        "legacy_diagnostic_context": {
+            "periodic_eval_csv": "logs/eval_metrics.csv",
+            "periodic_eval_available": bool(eval_rows),
+            "last_eval_available": bool(last_eval),
+            "best_eval_available": bool(best_eval),
+            "best_checkpoint_path": "checkpoints/best.pt",
+            "best_checkpoint_exists": (run_dir / "checkpoints" / "best.pt").exists(),
+            "role": "legacy_diagnostic_only",
         },
         "unified_metrics": _build_unified_metric_table(metric_blocks),
         "insufficient_evidence_flags": sorted(set(insufficient_evidence_flags or [])),
@@ -526,12 +779,13 @@ def _structured_timing_stats(component_name: str, stats: Mapping[str, Any] | Non
     total = numeric_stats.get("total_time_sec")
     if total is None:
         total = sum(value for key, value in numeric_stats.items() if key != "total_time_sec")
-    payload = {
-        "component": component_name,
-        "total_time_sec": total,
-        "breakdown_sec": numeric_stats,
-    }
-    return _json_safe(payload)
+    return _json_safe(
+        {
+            "component": component_name,
+            "total_time_sec": total,
+            "breakdown_sec": numeric_stats,
+        }
+    )
 
 
 def _collect_timing_stats(
@@ -572,8 +826,6 @@ def build_benchmark_summary(
     run_mode: str,
     total_runtime_sec: float | None,
     total_runtime_hms: str | None,
-    env_steps_to_best: int | None,
-    train_episodes_to_best: int | None,
     total_train_episodes_completed: int | None,
     collector: Any | None = None,
     learner: Any | None = None,
@@ -611,10 +863,10 @@ def build_benchmark_summary(
         "timing_switches": timing_flags,
         "timing_summary": timing_summary,
         "budget_mode": config_dict.get("budget_mode"),
-        "diagnostic_env_steps_to_best": env_steps_to_best,
-        "diagnostic_train_episodes_to_best": train_episodes_to_best,
-        "env_steps_to_best": env_steps_to_best,
-        "train_episodes_to_best": train_episodes_to_best,
+        "diagnostic_env_steps_to_best": None,
+        "diagnostic_train_episodes_to_best": None,
+        "env_steps_to_best": None,
+        "train_episodes_to_best": None,
         "total_train_episodes_completed": total_train_episodes_completed,
         "insufficient_evidence_flags": sorted(set(flags)),
     }
@@ -686,39 +938,46 @@ def build_config_snapshot(
         "runtime_only_fields": {field_name: config_dict.get(field_name) for field_name in RUNTIME_ONLY_FIELDS if field_name in config_dict},
         "observed_run_contract": _json_safe(dict(observed_run_contract or {})),
         "evaluation_contract": {
-            "best_checkpoint_rule": {
-                "enabled": config_dict.get("enable_diagnostic_best_checkpoint"),
-                "role": "diagnostic_only",
-                "checkpoint_path": "checkpoints/best.pt",
-                "primary_metric": "eval_success_rate",
-                "tie_breaker": "eval_mean_coverage",
-                "source": "training/checkpointing.py",
-            },
             "protocol_revision": "formal_last_checkpoint_v2",
             "formal_final_object": {
                 "checkpoint_path": "checkpoints/last.pt",
-                "acceptance_target": "final_last_network",
+                "acceptance_target": "final_probe_of_last_checkpoint_or_online_last",
                 "role": "formal_acceptance_object",
-            },
-            "recent_train_role": "screening_and_diagnostic_only",
-            "periodic_eval_rule": {
-                "enabled": config_dict.get("enable_periodic_eval"),
-                "role": "diagnostic_only",
-                "csv_file": "logs/eval_metrics.csv",
-                "can_be_disabled": True,
-            },
-            "diagnostic_best_checkpoint_rule": {
-                "enabled": config_dict.get("enable_diagnostic_best_checkpoint"),
-                "role": "diagnostic_only",
-                "checkpoint_path": "checkpoints/best.pt",
-                "primary_metric": "eval_success_rate",
-                "tie_breaker": "eval_mean_coverage",
-                "source": "training/checkpointing.py",
             },
             "final_probe_rule": {
                 "source": "last_checkpoint_if_available_else_online_last",
                 "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_else_runtime_seed_stream",
                 "csv_file": "logs/final_probe.csv",
+            },
+            "recent_train_role": "training_screening_and_ranking_support_only",
+            "automatic_tuning_ranking_basis": {
+                "final_network_outcome": {
+                    "primary": ["success_rate", "coverage", "reward"],
+                    "secondary": ["episode_length", "repeat_visit_ratio"],
+                },
+                "training_dynamics_quality": [
+                    "recent_mean_reward",
+                    "recent_mean_coverage",
+                    "recent_success_rate",
+                    "recent_mean_episode_length",
+                    "recent_mean_repeat_visit_ratio",
+                    "growth_rate",
+                    "threshold_reach_steps",
+                    "late_stage_variance",
+                    "train_final_consistency",
+                ],
+            },
+            "legacy_diagnostic_artifacts": {
+                "periodic_eval": {
+                    "role": "legacy_diagnostic_only",
+                    "csv_file": "logs/eval_metrics.csv",
+                    "included_in_new_main_flow": False,
+                },
+                "best_checkpoint": {
+                    "role": "legacy_diagnostic_only",
+                    "checkpoint_path": "checkpoints/best.pt",
+                    "included_in_new_main_flow": False,
+                },
             },
         },
         "insufficient_evidence_flags": sorted(set(flags)),
@@ -772,12 +1031,12 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
         "csv": [
             _artifact_record(run_dir, "logs/train_steps.csv", required=True, category="csv"),
             _artifact_record(run_dir, "logs/train_episodes.csv", required=True, category="csv"),
-            _artifact_record(run_dir, "logs/eval_metrics.csv", required=False, category="csv"),
             _artifact_record(run_dir, "logs/final_probe.csv", required=True, category="csv"),
+            _artifact_record(run_dir, "logs/eval_metrics.csv", required=False, category="legacy_diagnostic_csv"),
         ],
         "checkpoints": [
-            _artifact_record(run_dir, "checkpoints/best.pt", required=False, category="checkpoint"),
             _artifact_record(run_dir, "checkpoints/last.pt", required=True, category="checkpoint"),
+            _artifact_record(run_dir, "checkpoints/best.pt", required=False, category="legacy_diagnostic_checkpoint"),
         ],
         "structured_summaries": [
             _artifact_record(run_dir, "logs/metric_snapshot.json", required=True, category="structured_summary"),
@@ -800,9 +1059,9 @@ def build_training_summary_text(
     benchmark_summary: Mapping[str, Any],
 ) -> str:
     recent_train = metric_snapshot.get("recent_train", {})
-    last_eval = metric_snapshot.get("last_eval", {})
-    best_eval = metric_snapshot.get("best_eval", {})
     final_probe = metric_snapshot.get("final_probe", {})
+    training_dynamics_summary = metric_snapshot.get("training_dynamics_summary", {})
+    consistency_summary = metric_snapshot.get("train_final_consistency_summary", {})
 
     def line_for(block: Mapping[str, Any], label: str) -> str:
         metrics = block.get("metrics", {})
@@ -824,12 +1083,10 @@ def build_training_summary_text(
         f"total_runtime_hms: {benchmark_summary.get('total_runtime_hms')}",
         f"total_train_episodes_completed: {benchmark_summary.get('total_train_episodes_completed')}",
         line_for(recent_train, "recent_train"),
-        line_for(last_eval, "last_eval_diagnostic"),
-        line_for(best_eval, "best_eval_diagnostic"),
         line_for(final_probe, "final_probe"),
-        f"best_checkpoint_source: {metric_snapshot.get('best_checkpoint_source')}",
-        f"best_checkpoint_env_steps: {metric_snapshot.get('best_checkpoint_env_steps')}",
-        f"best_checkpoint_train_episode_idx: {metric_snapshot.get('best_checkpoint_train_episode_idx')}",
+        f"train_final_consistency_verdict: {consistency_summary.get('verdict')}",
+        f"training_dynamics_final_window: {training_dynamics_summary.get('final_window_stats')}",
+        f"training_dynamics_growth_rates: {training_dynamics_summary.get('growth_rates')}",
         f"last_checkpoint_env_steps: {metric_snapshot.get('last_checkpoint_env_steps')}",
         f"last_checkpoint_train_episode_idx: {metric_snapshot.get('last_checkpoint_train_episode_idx')}",
         f"final_probe_source: {metric_snapshot.get('final_probe_source')}",
@@ -843,44 +1100,35 @@ def write_formal_run_artifacts(
     cfg: Any | None,
     run_mode: str,
     recent_train_row: Mapping[str, Any] | None,
-    last_eval_row: Mapping[str, Any] | None,
-    best_eval_row: Mapping[str, Any] | None,
     final_probe_row: Mapping[str, Any] | None,
-    best_checkpoint_source: str,
-    best_checkpoint_env_steps: int | None,
-    best_checkpoint_train_episode_idx: int | None,
     last_checkpoint_env_steps: int | None,
     last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
     total_runtime_sec: float | None = None,
     total_runtime_hms: str | None = None,
-    periodic_eval_enabled: bool | None = None,
-    diagnostic_best_checkpoint_enabled: bool | None = None,
     collector: Any | None = None,
     learner: Any | None = None,
     replay: Any | None = None,
     state_adapter: Any | None = None,
     source_of_truth_repo: str | None = None,
     extra_insufficient_evidence_flags: list[str] | None = None,
+    last_eval_row: Mapping[str, Any] | None = None,
+    best_eval_row: Mapping[str, Any] | None = None,
 ) -> dict[str, Path]:
     run_dir = run_dir.resolve()
     source_repo = source_of_truth_repo or str(run_dir.parents[1])
     flags = list(extra_insufficient_evidence_flags or [])
+
     metric_snapshot = build_metric_snapshot(
         run_dir=run_dir,
         recent_train_row=recent_train_row,
-        last_eval_row=last_eval_row,
-        best_eval_row=best_eval_row,
         final_probe_row=final_probe_row,
-        best_checkpoint_source=best_checkpoint_source,
-        best_checkpoint_env_steps=best_checkpoint_env_steps,
-        best_checkpoint_train_episode_idx=best_checkpoint_train_episode_idx,
         last_checkpoint_env_steps=last_checkpoint_env_steps,
         last_checkpoint_train_episode_idx=last_checkpoint_train_episode_idx,
         final_probe_source=final_probe_source,
-        periodic_eval_enabled=periodic_eval_enabled,
-        diagnostic_best_checkpoint_enabled=diagnostic_best_checkpoint_enabled,
         source_of_truth_repo=source_repo,
+        last_eval_row=last_eval_row,
+        best_eval_row=best_eval_row,
         insufficient_evidence_flags=flags,
     )
     benchmark_summary = build_benchmark_summary(
@@ -889,8 +1137,6 @@ def write_formal_run_artifacts(
         run_mode=run_mode,
         total_runtime_sec=total_runtime_sec,
         total_runtime_hms=total_runtime_hms,
-        env_steps_to_best=best_checkpoint_env_steps,
-        train_episodes_to_best=best_checkpoint_train_episode_idx,
         total_train_episodes_completed=_to_scalar((recent_train_row or {}).get("completed_train_episodes")),
         collector=collector,
         learner=learner,
@@ -902,7 +1148,6 @@ def write_formal_run_artifacts(
     observed_run_contract = build_observed_run_contract(
         run_dir=run_dir,
         recent_train_row=recent_train_row,
-        last_eval_row=last_eval_row,
         final_probe_row=final_probe_row,
     )
     config_snapshot = build_config_snapshot(
@@ -935,10 +1180,7 @@ def write_formal_run_artifacts(
     structured_summaries = artifact_index.get("structured_summaries", [])
     if isinstance(structured_summaries, list):
         for record in structured_summaries:
-            if (
-                isinstance(record, dict)
-                and record.get("path") == "logs/artifact_index.json"
-            ):
+            if isinstance(record, dict) and record.get("path") == "logs/artifact_index.json":
                 record["exists"] = True
     artifact_index_path = run_dir / "logs" / "artifact_index.json"
     _write_json(artifact_index_path, artifact_index)
@@ -958,21 +1200,19 @@ def build_run_record_from_artifacts(run_dir: Path) -> dict[str, Any] | None:
         return None
 
     train_steps_rows = _read_csv_rows(logs_dir / "train_steps.csv")
-    eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
     final_probe_rows = _read_csv_rows(logs_dir / "final_probe.csv")
+    eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
     if not train_steps_rows or not final_probe_rows:
         return None
 
     recent_train_row = train_steps_rows[-1]
+    final_probe_row = final_probe_rows[-1]
     last_eval_row = eval_rows[-1] if eval_rows else None
     best_eval_row = select_best_eval_row(eval_rows) if eval_rows else None
-    final_probe_row = final_probe_rows[-1]
     checkpoint_dir = run_dir / "checkpoints"
 
     insufficient_flags: list[str] = []
-    config_snapshot = None
-    benchmark_summary = None
-    metric_snapshot = None
+    config_snapshot = benchmark_summary = metric_snapshot = None
     for name in ("config_snapshot.json", "benchmark_summary.json", "metric_snapshot.json"):
         file_path = logs_dir / name
         if not file_path.exists():
@@ -996,9 +1236,9 @@ def build_run_record_from_artifacts(run_dir: Path) -> dict[str, Any] | None:
         "run_id": run_dir.name,
         "run_dir": str(run_dir.resolve()),
         "recent_train": _normalize_recent_train(recent_train_row),
-        "last_eval": _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv"),
-        "best_eval": _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval"),
         "final_probe": _normalize_eval_like(final_probe_row, source_name="logs/final_probe.csv"),
+        "last_eval": _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv") if last_eval_row else {},
+        "best_eval": _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval") if best_eval_row else {},
         "best_checkpoint_exists": (checkpoint_dir / "best.pt").exists(),
         "last_checkpoint_exists": (checkpoint_dir / "last.pt").exists(),
         "plots_present": (run_dir / "plots").exists(),
@@ -1014,13 +1254,17 @@ def build_run_record_from_artifacts(run_dir: Path) -> dict[str, Any] | None:
         comparability = config_snapshot.get("comparability", {})
         record["comparability_group"] = comparability.get("comparability_group")
     else:
-        bootstrap_signature = ((config_snapshot or {}).get("comparability") or {}).get("bootstrap_signature", {})
-        total_env_steps = bootstrap_signature.get("env_steps", _to_scalar(recent_train_row.get("env_steps")))
-        eval_header = bootstrap_signature.get("eval_columns", sorted(eval_rows[-1].keys()) if eval_rows else [])
-        signature_seed = json.dumps({"env_steps": total_env_steps, "eval_header": eval_header}, ensure_ascii=False).encode("utf-8")
+        signature_seed = json.dumps(
+            {
+                "env_steps": _to_scalar(_apply_row_aliases(final_probe_row).get("env_steps")),
+                "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
+                "final_probe_header": _read_csv_header(logs_dir / "final_probe.csv"),
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
         signature_hash = hashlib.sha1(signature_seed).hexdigest()[:12]
         record["comparability_group"] = f"bootstrap_header_signature__{signature_hash}"
-        record["insufficient_evidence_flags"].append("comparability_group_bootstrap_from_csv_header")
+        record["insufficient_evidence_flags"].append("comparability_group_bootstrap_from_csv_headers")
     return _json_safe(record)
 
 
@@ -1062,10 +1306,7 @@ def build_historical_baseline_summary(
     for record in run_records:
         group = str(record.get("comparability_group") or "unknown")
         grouped.setdefault(group, []).append(record)
-        if not any(
-            flag == "comparability_group_bootstrap_from_csv_header"
-            for flag in record.get("insufficient_evidence_flags", [])
-        ):
+        if "comparability_group_bootstrap_from_csv_headers" not in record.get("insufficient_evidence_flags", []):
             exact_group_count += 1
 
     group_summaries = []
@@ -1073,17 +1314,17 @@ def build_historical_baseline_summary(
         success_values = [
             float(record["final_probe"]["metrics"]["success_rate"])
             for record in records
-            if isinstance(record["final_probe"]["metrics"].get("success_rate"), (int, float))
+            if isinstance(record["final_probe"].get("metrics", {}).get("success_rate"), (int, float))
         ]
         coverage_values = [
             float(record["final_probe"]["metrics"]["coverage"])
             for record in records
-            if isinstance(record["final_probe"]["metrics"].get("coverage"), (int, float))
+            if isinstance(record["final_probe"].get("metrics", {}).get("coverage"), (int, float))
         ]
         reward_values = [
             float(record["final_probe"]["metrics"]["reward"])
             for record in records
-            if isinstance(record["final_probe"]["metrics"].get("reward"), (int, float))
+            if isinstance(record["final_probe"].get("metrics", {}).get("reward"), (int, float))
         ]
         runtime_values = [
             float((record.get("benchmark_summary") or {}).get("total_runtime_sec"))
@@ -1095,10 +1336,12 @@ def build_historical_baseline_summary(
                 "comparability_group": group_name,
                 "run_count": len(records),
                 "evidence_status": (
-                    "formal_exact_group" if all(
-                        "comparability_group_bootstrap_from_csv_header" not in record.get("insufficient_evidence_flags", [])
+                    "formal_exact_group"
+                    if all(
+                        "comparability_group_bootstrap_from_csv_headers" not in record.get("insufficient_evidence_flags", [])
                         for record in records
-                    ) else "bootstrap_grouped_from_csv_headers"
+                    )
+                    else "bootstrap_grouped_from_csv_headers"
                 ),
                 "run_ids": [record["run_id"] for record in records],
                 "final_probe_distributions": {
@@ -1113,8 +1356,8 @@ def build_historical_baseline_summary(
     insufficient_history = exact_group_count < 3
     notes = [
         "Historical runs before formal snapshots may lack config_snapshot.json and benchmark_summary.json.",
-        "Bootstrap grouping falls back to final env_steps plus eval CSV header signatures when exact comparability metadata is unavailable.",
-        "Newer formal_train runs may omit diagnostic periodic eval artifacts because final_probe on the last network is the formal acceptance object.",
+        "Bootstrap grouping falls back to final env_steps plus train/final CSV header signatures when exact comparability metadata is unavailable.",
+        "Current formal_train accepts only the last checkpoint via held-out final_probe; periodic eval and best checkpoints are legacy diagnostics only.",
     ]
     if insufficient_history:
         notes.append(

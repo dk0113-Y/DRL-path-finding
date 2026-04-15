@@ -12,7 +12,7 @@ FINAL_PROBE_KEYS = [
     "eval_success_rate",
     "eval_mean_episode_length",
     "eval_mean_repeat_visit_ratio",
-    "eval_mean_recent_revisit_count",
+    "eval_mean_recent_revisit_trigger_count",
     "eval_mean_stall_trigger_count",
     "eval_mean_zero_info_step_count",
     "eval_mean_timeout_flag",
@@ -31,6 +31,7 @@ EVAL_KEYS = [
     "eval_success_rate",
     "eval_mean_episode_length",
     "eval_mean_repeat_visit_ratio",
+    "eval_mean_recent_revisit_trigger_count",
     "eval_mean_timeout_flag",
     "eval_mean_zero_info_step_count",
     "eval_mean_turn_ge_90_count",
@@ -121,7 +122,16 @@ def _has_valid_final_probe(rows: list[dict[str, str]]) -> bool:
 
 def _extract_metrics(row: dict[str, str] | None, keys: list[str]) -> dict[str, Any]:
     row = row or {}
-    return {key: _to_scalar(row.get(key)) for key in keys}
+    alias_map = {
+        "eval_mean_recent_revisit_trigger_count": "eval_mean_recent_revisit_count",
+    }
+    extracted: dict[str, Any] = {}
+    for key in keys:
+        value = row.get(key)
+        if value is None and key in alias_map:
+            value = row.get(alias_map[key])
+        extracted[key] = _to_scalar(value)
+    return extracted
 
 
 def _eval_score(row: dict[str, str]) -> tuple[float, float, float, float]:
@@ -254,18 +264,16 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
 
     has_valid_probe = _has_valid_final_probe(final_probe_rows)
     has_eval = bool(eval_rows)
-    has_checkpoint = best_checkpoint_path.exists() or last_checkpoint_path.exists()
-    artifacts_complete = run_dir.exists() and has_valid_probe and has_eval and has_checkpoint
+    has_last_checkpoint = last_checkpoint_path.exists()
+    artifacts_complete = run_dir.exists() and has_valid_probe and has_last_checkpoint
 
     missing_bits: list[str] = []
     if not run_dir.exists():
         missing_bits.append("run_dir_missing")
     if not has_valid_probe:
         missing_bits.append("final_probe_missing_or_invalid")
-    if not has_eval:
-        missing_bits.append("eval_metrics_missing_or_empty")
-    if not has_checkpoint:
-        missing_bits.append("checkpoint_missing")
+    if not has_last_checkpoint:
+        missing_bits.append("last_checkpoint_missing")
 
     if artifacts_complete:
         status = "completed" if return_code in (None, 0) else "completed_with_postprocess_error"
@@ -286,6 +294,7 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         "train_episodes_row_count": len(train_episode_rows),
         "best_checkpoint_exists": best_checkpoint_path.exists(),
         "last_checkpoint_exists": last_checkpoint_path.exists(),
+        "periodic_eval_available": has_eval,
     }
 
     return RunResult(

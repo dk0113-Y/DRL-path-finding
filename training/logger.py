@@ -6,7 +6,7 @@ from typing import Mapping
 
 
 class CSVMetricLogger:
-    """Append-only CSV logger for train/eval metrics."""
+    """Append-only CSV logger for formal-train metrics."""
 
     def __init__(self, run_dir: Path):
         self.run_dir = Path(run_dir)
@@ -14,7 +14,6 @@ class CSVMetricLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         self.train_episode_csv = self.log_dir / "train_episodes.csv"
-        self.eval_csv = self.log_dir / "eval_metrics.csv"
         self.final_probe_csv = self.log_dir / "final_probe.csv"
         self.train_step_csv = self.log_dir / "train_steps.csv"
 
@@ -29,9 +28,6 @@ class CSVMetricLogger:
 
     def log_train_episode(self, row: Mapping[str, object]) -> None:
         self._append_row(self.train_episode_csv, row)
-
-    def log_eval(self, row: Mapping[str, object]) -> None:
-        self._append_row(self.eval_csv, row)
 
     def log_final_probe(self, row: Mapping[str, object]) -> None:
         self._append_row(self.final_probe_csv, row)

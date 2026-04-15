@@ -141,7 +141,11 @@ TRAIN_REWARD_EVENT_PANELS = (
         "y_label": "gain",
         "series": (("weighted_info_gain_sum", "weighted info gain"),),
     },
-    {"title": "Recent revisit count", "y_label": "count", "series": (("recent_revisit_count", "recent revisit"),)},
+    {
+        "title": "Recent revisit trigger count",
+        "y_label": "count",
+        "series": (("recent_revisit_trigger_count", "recent revisit trigger"),),
+    },
     {"title": "Stall trigger count", "y_label": "count", "series": (("stall_trigger_count", "stall trigger"),)},
     {"title": "Zero-info step count", "y_label": "count", "series": (("zero_info_step_count", "zero-info steps"),)},
     {"title": "Turn >= 90 count", "y_label": "count", "series": (("turn_ge_90_count", "turn >= 90"),)},
@@ -263,7 +267,11 @@ EVAL_REWARD_EVENT_PANELS = (
         "y_label": "gain",
         "series": (("eval_mean_weighted_info_gain_sum", "weighted info gain"),),
     },
-    {"title": "Recent revisit count", "y_label": "count", "series": (("eval_mean_recent_revisit_count", "recent revisit"),)},
+    {
+        "title": "Recent revisit trigger count",
+        "y_label": "count",
+        "series": (("eval_mean_recent_revisit_trigger_count", "recent revisit trigger"),),
+    },
     {"title": "Stall trigger count", "y_label": "count", "series": (("eval_mean_stall_trigger_count", "stall trigger"),)},
     {"title": "Zero-info step count", "y_label": "count", "series": (("eval_mean_zero_info_step_count", "zero-info steps"),)},
     {"title": "Turn >= 90 count", "y_label": "count", "series": (("eval_mean_turn_ge_90_count", "turn >= 90"),)},
@@ -404,7 +412,16 @@ def _try_float(value: object) -> float | None:
 
 
 def _extract_xy(rows: list[dict[str, str]], y_column: str) -> tuple[list[float], list[float], str] | None:
-    if len(rows) <= 0 or y_column not in rows[0]:
+    if len(rows) <= 0:
+        return None
+    resolved_y_column = y_column
+    if resolved_y_column not in rows[0]:
+        alias_map = {
+            "recent_revisit_trigger_count": "recent_revisit_count",
+            "eval_mean_recent_revisit_trigger_count": "eval_mean_recent_revisit_count",
+        }
+        resolved_y_column = alias_map.get(resolved_y_column, resolved_y_column)
+    if resolved_y_column not in rows[0]:
         return None
 
     if "env_steps" in rows[0]:
@@ -417,7 +434,7 @@ def _extract_xy(rows: list[dict[str, str]], y_column: str) -> tuple[list[float],
     xs: list[float] = []
     ys: list[float] = []
     for row_idx, row in enumerate(rows):
-        y = _try_float(row.get(y_column))
+        y = _try_float(row.get(resolved_y_column))
         if y is None or not math.isfinite(y):
             continue
         if x_column == "":

@@ -8,18 +8,13 @@ import torch
 
 
 class CheckpointManager:
-    """Manage the formal last checkpoint plus optional diagnostic best checkpoints."""
+    """Manage the formal last checkpoint for final-probe evaluation."""
 
     def __init__(self, run_dir: Path):
         self.run_dir = Path(run_dir)
         self.ckpt_dir = self.run_dir / "checkpoints"
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
-
         self.last_path = self.ckpt_dir / "last.pt"
-        self.best_path = self.ckpt_dir / "best.pt"
-
-        self.best_success_rate = float("-inf")
-        self.best_mean_coverage = float("-inf")
 
     @staticmethod
     def _serialize_config(cfg) -> object:
@@ -70,54 +65,3 @@ class CheckpointManager:
         )
         torch.save(payload, self.last_path)
         return self.last_path
-
-    def maybe_save_diagnostic_best(
-        self,
-        online_net,
-        learner,
-        env_steps: int,
-        train_episode_idx: int | None,
-        eval_metrics: Dict[str, object],
-        train_config=None,
-    ) -> bool:
-        success = float(eval_metrics.get("eval_success_rate", 0.0))
-        coverage = float(eval_metrics.get("eval_mean_coverage", 0.0))
-
-        better = (success > self.best_success_rate) or (
-            success == self.best_success_rate and coverage > self.best_mean_coverage
-        )
-        if not better:
-            return False
-
-        self.best_success_rate = success
-        self.best_mean_coverage = coverage
-
-        payload = self._build_payload(
-            online_net,
-            learner,
-            env_steps,
-            train_episode_idx=train_episode_idx,
-            eval_metrics=eval_metrics,
-            train_config=train_config,
-        )
-        torch.save(payload, self.best_path)
-        return True
-
-    def maybe_save_best(
-        self,
-        online_net,
-        learner,
-        env_steps: int,
-        train_episode_idx: int | None,
-        eval_metrics: Dict[str, object],
-        train_config=None,
-    ) -> bool:
-        """Backward-compatible alias for the diagnostic-only best checkpoint."""
-        return self.maybe_save_diagnostic_best(
-            online_net,
-            learner,
-            env_steps=env_steps,
-            train_episode_idx=train_episode_idx,
-            eval_metrics=eval_metrics,
-            train_config=train_config,
-        )

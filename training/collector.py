@@ -471,7 +471,7 @@ class TransitionCollector:
                     info_norm=self.reward_info_norm,
                 )
             )
-            event_summary["recent_revisit_count"] += float(bool(recent_revisit))
+            event_summary["recent_revisit_trigger_count"] += float(bool(recent_revisit))
             event_summary["stall_trigger_count"] += float(bool(stall_triggered))
             if int(delta_empty) == 0 and int(delta_obstacle) == 0:
                 event_summary["zero_info_step_count"] += 1.0

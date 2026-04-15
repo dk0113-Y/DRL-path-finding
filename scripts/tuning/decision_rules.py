@@ -36,6 +36,13 @@ def _final_probe_block(summary: Any) -> dict[str, Any]:
 
 def _value(metrics: dict[str, Any], key: str) -> float | None:
     value = metrics.get(key)
+    if value is None:
+        alias_map = {
+            "eval_mean_recent_revisit_trigger_count": "eval_mean_recent_revisit_count",
+        }
+        alias_key = alias_map.get(key)
+        if alias_key is not None:
+            value = metrics.get(alias_key)
     if isinstance(value, bool):
         return float(value)
     if isinstance(value, (int, float)):
@@ -175,9 +182,9 @@ def compare_candidate_to_reference(candidate_summary: Any, reference_summary: An
             _value(candidate, "eval_mean_repeat_visit_ratio"),
             _value(reference, "eval_mean_repeat_visit_ratio"),
         ),
-        "recent_revisit_count_down": _improved_lower_is_better(
-            _value(candidate, "eval_mean_recent_revisit_count"),
-            _value(reference, "eval_mean_recent_revisit_count"),
+        "recent_revisit_trigger_count_down": _improved_lower_is_better(
+            _value(candidate, "eval_mean_recent_revisit_trigger_count"),
+            _value(reference, "eval_mean_recent_revisit_trigger_count"),
         ),
         "zero_info_step_count_down": _improved_lower_is_better(
             _value(candidate, "eval_mean_zero_info_step_count"),
