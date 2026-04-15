@@ -8,7 +8,7 @@ import torch
 
 
 class CheckpointManager:
-    """Manage last/best checkpoints for DDQN training."""
+    """Manage the formal last checkpoint plus optional diagnostic best checkpoints."""
 
     def __init__(self, run_dir: Path):
         self.run_dir = Path(run_dir)
@@ -71,7 +71,7 @@ class CheckpointManager:
         torch.save(payload, self.last_path)
         return self.last_path
 
-    def maybe_save_best(
+    def maybe_save_diagnostic_best(
         self,
         online_net,
         learner,
@@ -102,3 +102,22 @@ class CheckpointManager:
         )
         torch.save(payload, self.best_path)
         return True
+
+    def maybe_save_best(
+        self,
+        online_net,
+        learner,
+        env_steps: int,
+        train_episode_idx: int | None,
+        eval_metrics: Dict[str, object],
+        train_config=None,
+    ) -> bool:
+        """Backward-compatible alias for the diagnostic-only best checkpoint."""
+        return self.maybe_save_diagnostic_best(
+            online_net,
+            learner,
+            env_steps=env_steps,
+            train_episode_idx=train_episode_idx,
+            eval_metrics=eval_metrics,
+            train_config=train_config,
+        )

@@ -64,7 +64,7 @@ ACTION_DIM = len(ACTIONS_8)
 
 
 class GreedyEvaluator:
-    """Periodic greedy evaluation with the same reward mainline as training."""
+    """Greedy evaluation shared by diagnostic periodic eval and the final held-out probe."""
 
     def __init__(self, cfg: EvaluatorConfig, state_adapter, device: str = "cpu"):
         self.cfg = cfg

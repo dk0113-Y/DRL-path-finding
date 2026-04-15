@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "round_id": "round_xxxx",
+  "decision_status": "run_next_round",
+  "target_program": "fake_train.py",
+  "run_args": {
+    "turn_penalty": 0.05,
+    "revisit_penalty": 0.15,
+    "entry_k": 10,
+    "steps": 30,
+    "sleep_sec": 0.1,
+    "seed": 99
+  },
+  "parameter_changes": [
+    {
+      "name": "turn_penalty",
+      "old_value": 0.03,
+      "new_value": 0.05,
+      "delta": 0.02,
+      "reason": "Testing ingestion tools."
+    }
+  ],
+  "codex_analysis_focus": {
+    "compare_targets": [
+      "previous_round_run"
+    ],
+    "required_logs": [
+      "logs/train_steps.csv"
+    ],
+    "required_plots": [
+      "plots/reward_curve.png"
+    ],
+    "questions": [
+      "Did the ingestion work?"
+    ],
+    "expected_output_style": "Table"
+  },
+  "reference_targets": {
+    "best_known_reference": null,
+    "manual_compare_targets": []
+  },
+  "controller_notes": "Smoke test for ingest_gpt_decision.py"
+}

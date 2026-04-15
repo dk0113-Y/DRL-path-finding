@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-SCHEMA_VERSION = "formal_train_artifacts/v1"
+SCHEMA_VERSION = "formal_train_artifacts/v2"
 DEFAULT_MAIN_BASELINE_IDENTIFIER = "4.9_30万轮基线"
 
 RUNTIME_ONLY_FIELDS = (
@@ -30,6 +30,8 @@ RUNTIME_ONLY_FIELDS = (
     "save_train_representative_trajectories",
     "save_train_special_trajectories",
     "save_final_probe_trajectories",
+    "enable_periodic_eval",
+    "enable_diagnostic_best_checkpoint",
 )
 
 TIMING_FLAG_FIELDS = (
@@ -68,14 +70,10 @@ FROZEN_COMPARABILITY_FIELDS = (
     "collect_steps_per_iter",
     "learner_updates_per_iter",
     "train_every_env_steps",
-    "eval_interval_env_steps",
-    "eval_interval_episodes",
-    "eval_episodes",
     "final_greedy_episodes",
     "use_fixed_train_episode_seeds",
     "fixed_train_episode_seed_base",
     "use_fixed_eval_seeds",
-    "fixed_eval_seed_base",
     "fixed_final_probe_seed_base",
     "replay_capacity",
     "batch_size",
@@ -342,8 +340,10 @@ def _normalize_eval_like(row: Mapping[str, Any] | None, *, source_name: str) -> 
     }
     raw_reserved.update({f"eval_mean_{field_name}" for field_name in REWARD_BREAKDOWN_FIELDS})
     raw_reserved.update({f"eval_mean_{field_name}" for field_name in REWARD_EVENT_FIELDS})
+    row_source = _to_scalar(row.get("source"))
     return {
-        "source": source_name,
+        "source": row_source or source_name,
+        "artifact_source": source_name,
         "tag": _to_scalar(row.get("tag")),
         "env_steps": _to_scalar(row.get("env_steps")),
         "learner_steps": _to_scalar(row.get("learner_steps")),
@@ -455,6 +455,8 @@ def build_metric_snapshot(
     last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
     source_of_truth_repo: str,
+    periodic_eval_enabled: bool | None = None,
+    diagnostic_best_checkpoint_enabled: bool | None = None,
     insufficient_evidence_flags: list[str] | None = None,
 ) -> dict[str, Any]:
     recent_train = _normalize_recent_train(recent_train_row)
@@ -486,6 +488,26 @@ def build_metric_snapshot(
         "last_checkpoint_env_steps": last_checkpoint_env_steps,
         "last_checkpoint_train_episode_idx": last_checkpoint_train_episode_idx,
         "final_probe_source": final_probe_source,
+        "formal_final_object": {
+            "checkpoint_path": "checkpoints/last.pt",
+            "network_source": final_probe_source,
+            "env_steps": last_checkpoint_env_steps,
+            "train_episode_idx": last_checkpoint_train_episode_idx,
+            "evaluation_artifact": "logs/final_probe.csv",
+        },
+        "diagnostic_periodic_eval": {
+            "enabled": periodic_eval_enabled,
+            "csv_file": "logs/eval_metrics.csv",
+            "last_eval_available": bool(last_eval_row),
+        },
+        "diagnostic_best_checkpoint": {
+            "enabled": diagnostic_best_checkpoint_enabled,
+            "checkpoint_path": "checkpoints/best.pt",
+            "selection_source": best_checkpoint_source,
+            "env_steps": best_checkpoint_env_steps,
+            "train_episode_idx": best_checkpoint_train_episode_idx,
+            "available": best_checkpoint_env_steps is not None or best_checkpoint_train_episode_idx is not None,
+        },
         "unified_metrics": _build_unified_metric_table(metric_blocks),
         "insufficient_evidence_flags": sorted(set(insufficient_evidence_flags or [])),
     }
@@ -589,6 +611,8 @@ def build_benchmark_summary(
         "timing_switches": timing_flags,
         "timing_summary": timing_summary,
         "budget_mode": config_dict.get("budget_mode"),
+        "diagnostic_env_steps_to_best": env_steps_to_best,
+        "diagnostic_train_episodes_to_best": train_episodes_to_best,
         "env_steps_to_best": env_steps_to_best,
         "train_episodes_to_best": train_episodes_to_best,
         "total_train_episodes_completed": total_train_episodes_completed,
@@ -615,7 +639,7 @@ def _comparability_sections(config_dict: Mapping[str, Any]) -> dict[str, Any]:
     group_seed = json.dumps(_json_safe(frozen_fields), ensure_ascii=False, sort_keys=True).encode("utf-8")
     group_hash = hashlib.sha1(group_seed).hexdigest()[:12]
     return {
-        "comparability_group": f"formal_mainline_v1__{group_hash}",
+        "comparability_group": f"formal_last_probe_v2__{group_hash}",
         "frozen_fields": frozen_fields,
         "allowed_tuning_fields": allowed_tuning,
         "manual_review_fields": manual_review,
@@ -663,12 +687,37 @@ def build_config_snapshot(
         "observed_run_contract": _json_safe(dict(observed_run_contract or {})),
         "evaluation_contract": {
             "best_checkpoint_rule": {
+                "enabled": config_dict.get("enable_diagnostic_best_checkpoint"),
+                "role": "diagnostic_only",
+                "checkpoint_path": "checkpoints/best.pt",
+                "primary_metric": "eval_success_rate",
+                "tie_breaker": "eval_mean_coverage",
+                "source": "training/checkpointing.py",
+            },
+            "protocol_revision": "formal_last_checkpoint_v2",
+            "formal_final_object": {
+                "checkpoint_path": "checkpoints/last.pt",
+                "acceptance_target": "final_last_network",
+                "role": "formal_acceptance_object",
+            },
+            "recent_train_role": "screening_and_diagnostic_only",
+            "periodic_eval_rule": {
+                "enabled": config_dict.get("enable_periodic_eval"),
+                "role": "diagnostic_only",
+                "csv_file": "logs/eval_metrics.csv",
+                "can_be_disabled": True,
+            },
+            "diagnostic_best_checkpoint_rule": {
+                "enabled": config_dict.get("enable_diagnostic_best_checkpoint"),
+                "role": "diagnostic_only",
+                "checkpoint_path": "checkpoints/best.pt",
                 "primary_metric": "eval_success_rate",
                 "tie_breaker": "eval_mean_coverage",
                 "source": "training/checkpointing.py",
             },
             "final_probe_rule": {
-                "source": "best_checkpoint_if_available_else_online_last",
+                "source": "last_checkpoint_if_available_else_online_last",
+                "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_else_runtime_seed_stream",
                 "csv_file": "logs/final_probe.csv",
             },
         },
@@ -723,11 +772,11 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
         "csv": [
             _artifact_record(run_dir, "logs/train_steps.csv", required=True, category="csv"),
             _artifact_record(run_dir, "logs/train_episodes.csv", required=True, category="csv"),
-            _artifact_record(run_dir, "logs/eval_metrics.csv", required=True, category="csv"),
+            _artifact_record(run_dir, "logs/eval_metrics.csv", required=False, category="csv"),
             _artifact_record(run_dir, "logs/final_probe.csv", required=True, category="csv"),
         ],
         "checkpoints": [
-            _artifact_record(run_dir, "checkpoints/best.pt", required=True, category="checkpoint"),
+            _artifact_record(run_dir, "checkpoints/best.pt", required=False, category="checkpoint"),
             _artifact_record(run_dir, "checkpoints/last.pt", required=True, category="checkpoint"),
         ],
         "structured_summaries": [
@@ -775,8 +824,8 @@ def build_training_summary_text(
         f"total_runtime_hms: {benchmark_summary.get('total_runtime_hms')}",
         f"total_train_episodes_completed: {benchmark_summary.get('total_train_episodes_completed')}",
         line_for(recent_train, "recent_train"),
-        line_for(last_eval, "last_eval"),
-        line_for(best_eval, "best_eval"),
+        line_for(last_eval, "last_eval_diagnostic"),
+        line_for(best_eval, "best_eval_diagnostic"),
         line_for(final_probe, "final_probe"),
         f"best_checkpoint_source: {metric_snapshot.get('best_checkpoint_source')}",
         f"best_checkpoint_env_steps: {metric_snapshot.get('best_checkpoint_env_steps')}",
@@ -803,8 +852,10 @@ def write_formal_run_artifacts(
     last_checkpoint_env_steps: int | None,
     last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
-    total_runtime_sec: float | None,
-    total_runtime_hms: str | None,
+    total_runtime_sec: float | None = None,
+    total_runtime_hms: str | None = None,
+    periodic_eval_enabled: bool | None = None,
+    diagnostic_best_checkpoint_enabled: bool | None = None,
     collector: Any | None = None,
     learner: Any | None = None,
     replay: Any | None = None,
@@ -827,6 +878,8 @@ def write_formal_run_artifacts(
         last_checkpoint_env_steps=last_checkpoint_env_steps,
         last_checkpoint_train_episode_idx=last_checkpoint_train_episode_idx,
         final_probe_source=final_probe_source,
+        periodic_eval_enabled=periodic_eval_enabled,
+        diagnostic_best_checkpoint_enabled=diagnostic_best_checkpoint_enabled,
         source_of_truth_repo=source_repo,
         insufficient_evidence_flags=flags,
     )
@@ -907,12 +960,12 @@ def build_run_record_from_artifacts(run_dir: Path) -> dict[str, Any] | None:
     train_steps_rows = _read_csv_rows(logs_dir / "train_steps.csv")
     eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
     final_probe_rows = _read_csv_rows(logs_dir / "final_probe.csv")
-    if not train_steps_rows or not eval_rows or not final_probe_rows:
+    if not train_steps_rows or not final_probe_rows:
         return None
 
     recent_train_row = train_steps_rows[-1]
-    last_eval_row = eval_rows[-1]
-    best_eval_row = select_best_eval_row(eval_rows)
+    last_eval_row = eval_rows[-1] if eval_rows else None
+    best_eval_row = select_best_eval_row(eval_rows) if eval_rows else None
     final_probe_row = final_probe_rows[-1]
     checkpoint_dir = run_dir / "checkpoints"
 
@@ -1061,6 +1114,7 @@ def build_historical_baseline_summary(
     notes = [
         "Historical runs before formal snapshots may lack config_snapshot.json and benchmark_summary.json.",
         "Bootstrap grouping falls back to final env_steps plus eval CSV header signatures when exact comparability metadata is unavailable.",
+        "Newer formal_train runs may omit diagnostic periodic eval artifacts because final_probe on the last network is the formal acceptance object.",
     ]
     if insufficient_history:
         notes.append(

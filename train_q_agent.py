@@ -47,6 +47,8 @@ class TrainConfig:
     enable_channels_last: bool = False  # Tensor-layout toggle only; model math and metrics stay unchanged.
     episode_print_interval: int = 1  # Stdout throttling only; 1 prints every episode without affecting logging/metrics.
     train_print_interval: int = 2_000  # Stdout throttling only; separated from CSV logging and algorithm behavior.
+    enable_periodic_eval: bool = True  # Periodic eval is diagnostic-only; formal acceptance does not depend on it.
+    enable_diagnostic_best_checkpoint: bool = True  # best.pt is retained only as an optional diagnostic artifact.
     save_eval_trajectories: bool = False  # Plot-saving side overhead only; evaluation logic and metrics are unchanged.
     save_train_representative_trajectories: bool = False  # Train-failure trajectory dumping is optional wall-clock overhead.
     save_train_special_trajectories: bool = False  # Optional train-side special-case trajectory export for post-run analysis.
@@ -798,14 +800,16 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
                 )
             )
 
-        is_best = ckpt.maybe_save_best(
-            online_net,
-            learner,
-            env_steps=int(env_steps),
-            train_episode_idx=int(train_phase_episodes),
-            eval_metrics=row,
-            train_config=cfg,
-        )
+        is_best = False
+        if tag == "periodic" and bool(cfg.enable_diagnostic_best_checkpoint):
+            is_best = ckpt.maybe_save_diagnostic_best(
+                online_net,
+                learner,
+                env_steps=int(env_steps),
+                train_episode_idx=int(train_phase_episodes),
+                eval_metrics=row,
+                train_config=cfg,
+            )
 
         last_eval = row
         if is_best:
@@ -820,7 +824,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             f"blocks={row['eval_mean_accessible_block_count']:.2f} "
             f"frontiers={row['eval_mean_total_frontier_cluster_count']:.2f} "
             f"mean_block_area={row['eval_mean_mean_block_area']:.2f} "
-            f"best_saved={int(is_best)}"
+            f"diagnostic_best_saved={int(is_best)}"
         )
         return row, is_best
 
@@ -838,7 +842,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             handle_episodes(warm_stats.get("episodes", []), phase="warmup", epsilon=1.0)
         env_steps = int(collector.total_env_steps)
         total_train_episodes = int(max(1, cfg.total_train_episodes))
-        eval_interval_episodes = int(max(0, cfg.eval_interval_episodes))
+        eval_interval_episodes = int(max(0, cfg.eval_interval_episodes)) if bool(cfg.enable_periodic_eval) else 0
         next_eval_episode = (
             eval_interval_episodes if eval_interval_episodes > 0 else total_train_episodes + 1
         )
@@ -865,7 +869,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             handle_episodes(warm_stats.get("episodes", []), phase="warmup", epsilon=1.0)
         env_steps = int(collector.total_env_steps)
         total_train_episodes = int(max(1, cfg.total_train_episodes))
-        eval_interval_env_steps = int(max(0, cfg.eval_interval_env_steps))
+        eval_interval_env_steps = int(max(0, cfg.eval_interval_env_steps)) if bool(cfg.enable_periodic_eval) else 0
         next_eval_step = (
             eval_interval_env_steps if eval_interval_env_steps > 0 else int(cfg.total_env_steps) + 1
         )
@@ -1049,9 +1053,6 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             if should_log or should_print_train:
                 emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
 
-    if last_eval is None or int(last_eval["env_steps"]) != int(env_steps):
-        run_eval(env_steps=env_steps, tag="final")
-
     last_ckpt_path = ckpt.save_last(
         online_net,
         learner,
@@ -1062,10 +1063,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     )
 
     probe_source = "online_last"
-    if ckpt.best_path.exists():
-        payload = torch.load(ckpt.best_path, map_location=cfg.device, weights_only=False)
+    if last_ckpt_path.exists():
+        payload = torch.load(last_ckpt_path, map_location=cfg.device, weights_only=False)
         online_net.load_state_dict(payload["online_state_dict"])
-        probe_source = "best_checkpoint"
+        probe_source = "last_checkpoint"
 
     final_probe_seed_base = int(cfg.fixed_final_probe_seed_base) if bool(cfg.use_fixed_eval_seeds) else None
     probe = evaluator.evaluate(
@@ -1075,6 +1076,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     )
     probe_row = {
         "tag": "final_probe",
+        "source": probe_source,
         "budget_mode": budget_mode,
         "env_steps": int(env_steps),
         "episode_idx": int(collector.total_episodes),
@@ -1228,7 +1230,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
     if last_eval is not None:
         print(
-            "last_eval: "
+            "last_eval_diagnostic: "
             f"reward={last_eval['eval_mean_reward']:.4f}, "
             f"coverage={last_eval['eval_mean_coverage']:.4f}, "
             f"success={last_eval['eval_success_rate']:.4f}, "
@@ -1242,7 +1244,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
     if best_eval is not None:
         print(
-            "best_eval: "
+            "best_eval_diagnostic: "
             f"reward={float(best_eval['eval_mean_reward']):.4f}, "
             f"coverage={float(best_eval['eval_mean_coverage']):.4f}, "
             f"success={float(best_eval['eval_success_rate']):.4f}, "
@@ -1278,8 +1280,13 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         best_eval_row=best_eval,
         final_probe_row=probe_row,
         best_checkpoint_source=(
-            "checkpoints/best.pt::eval_success_rate_then_eval_mean_coverage"
-            if ckpt.best_path.exists() else "checkpoints/best.pt_missing"
+            "checkpoints/best.pt::diagnostic_only::eval_success_rate_then_eval_mean_coverage"
+            if ckpt.best_path.exists()
+            else (
+                "checkpoints/best.pt::diagnostic_disabled"
+                if not bool(cfg.enable_diagnostic_best_checkpoint)
+                else "checkpoints/best.pt::diagnostic_not_saved"
+            )
         ),
         best_checkpoint_env_steps=int(best_eval["env_steps"]) if best_eval is not None else None,
         best_checkpoint_train_episode_idx=(
@@ -1290,6 +1297,8 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         last_checkpoint_env_steps=int(env_steps),
         last_checkpoint_train_episode_idx=int(train_phase_episodes),
         final_probe_source=probe_source,
+        periodic_eval_enabled=bool(cfg.enable_periodic_eval),
+        diagnostic_best_checkpoint_enabled=bool(cfg.enable_diagnostic_best_checkpoint),
         total_runtime_sec=float(total_runtime_sec),
         total_runtime_hms=total_runtime_hms,
         collector=collector,
@@ -1391,10 +1400,28 @@ def parse_args() -> TrainConfig:
         help="Stdout throttling only; separate from --log-interval and does not affect CSV metrics.",
     )
     p.add_argument(
+        "--enable-periodic-eval",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Enable diagnostic-only periodic eval during training. Formal acceptance still uses only the final "
+            "last-network held-out probe."
+        ),
+    )
+    p.add_argument(
+        "--enable-diagnostic-best-checkpoint",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Retain checkpoints/best.pt as a diagnostic-only artifact chosen from periodic eval. "
+            "It is never used as the default final_probe target."
+        ),
+    )
+    p.add_argument(
         "--save-eval-trajectories",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Plot-saving toggle only; periodic/final eval logic and metrics are unchanged.",
+        help="Plot-saving toggle only for diagnostic periodic eval; formal final-probe logic and metrics are unchanged.",
     )
     p.add_argument(
         "--save-train-representative-trajectories",
@@ -1681,6 +1708,8 @@ def parse_args() -> TrainConfig:
             enable_channels_last=enable_channels_last,
             episode_print_interval=max(0, args.episode_print_interval),
             train_print_interval=max(0, args.train_print_interval),
+            enable_periodic_eval=bool(args.enable_periodic_eval),
+            enable_diagnostic_best_checkpoint=bool(args.enable_diagnostic_best_checkpoint),
             save_eval_trajectories=args.save_eval_trajectories,
             save_train_representative_trajectories=args.save_train_representative_trajectories,
             save_train_special_trajectories=args.save_train_special_trajectories,
@@ -1722,7 +1751,7 @@ def parse_args() -> TrainConfig:
             epsilon_end=args.epsilon_end,
             epsilon_decay_steps=max(1, args.epsilon_decay_steps),
             eval_interval_env_steps=60,
-            eval_interval_episodes=max(1, args.eval_interval_episodes),
+            eval_interval_episodes=max(0, args.eval_interval_episodes),
             eval_episodes=3,
             recent_episode_window=10,
             final_greedy_episodes=1,
@@ -1776,6 +1805,8 @@ def parse_args() -> TrainConfig:
         enable_channels_last=enable_channels_last,
         episode_print_interval=max(0, args.episode_print_interval),
         train_print_interval=max(0, args.train_print_interval),
+        enable_periodic_eval=bool(args.enable_periodic_eval),
+        enable_diagnostic_best_checkpoint=bool(args.enable_diagnostic_best_checkpoint),
         save_eval_trajectories=args.save_eval_trajectories,
         save_train_representative_trajectories=args.save_train_representative_trajectories,
         save_train_special_trajectories=args.save_train_special_trajectories,
@@ -1812,7 +1843,7 @@ def parse_args() -> TrainConfig:
         epsilon_end=args.epsilon_end,
         epsilon_decay_steps=max(1, args.epsilon_decay_steps),
         eval_interval_env_steps=max(0, args.eval_interval_env_steps),
-        eval_interval_episodes=max(1, args.eval_interval_episodes),
+        eval_interval_episodes=max(0, args.eval_interval_episodes),
         eval_episodes=max(1, args.eval_episodes),
         recent_episode_window=max(1, args.recent_episode_window),
         final_greedy_episodes=max(1, args.final_greedy_episodes),
@@ -1920,6 +1951,8 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         enable_channels_last=False,
         episode_print_interval=1,
         train_print_interval=2000,
+        enable_periodic_eval=True,
+        enable_diagnostic_best_checkpoint=True,
         save_eval_trajectories=False,
         save_train_representative_trajectories=False,
         save_train_special_trajectories=False,

@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "round_id": "round_0001",
+  "decision_status": "run_next_round",
+  "target_program": "fake_train.py",
+  "run_args": {
+    "turn_penalty": 0.03,
+    "revisit_penalty": 0.1,
+    "entry_k": 8,
+    "steps": 24,
+    "sleep_sec": 0.35,
+    "seed": 7
+  },
+  "parameter_changes": [
+    {
+      "name": "turn_penalty",
+      "old_value": 0.02,
+      "new_value": 0.03,
+      "delta": 0.01,
+      "reason": "Example placeholder: increase slightly and inspect reward / coverage tradeoff."
+    },
+    {
+      "name": "revisit_penalty",
+      "old_value": 0.08,
+      "new_value": 0.1,
+      "delta": 0.02,
+      "reason": "Example placeholder: check whether revisit suppression improves coverage saturation."
+    }
+  ],
+  "codex_analysis_focus": {
+    "compare_targets": [
+      "previous_round_run",
+      "best_known_reference"
+    ],
+    "required_logs": [
+      "logs/train_steps.csv",
+      "logs/train_episodes.csv",
+      "logs/eval_metrics.csv",
+      "logs/final_probe.csv"
+    ],
+    "required_plots": [
+      "plots/reward_curve.png",
+      "plots/coverage_curve.png",
+      "plots/success_rate_curve.png",
+      "plots/loss_curve.png"
+    ],
+    "questions": [
+      "Which metrics clearly improved, and which ones regressed or plateaued?",
+      "Do the curves suggest the current penalties are too aggressive or too weak?",
+      "What parameter direction should GPT consider for the next round?"
+    ],
+    "expected_output_style": "Write a structured markdown report for GPT using the codex_report.md sections."
+  },
+  "reference_targets": {
+    "best_known_reference": null,
+    "manual_compare_targets": []
+  },
+  "controller_notes": "Replace placeholder compare targets and reasoning before a real round."
+}
