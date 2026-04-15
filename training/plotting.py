@@ -136,10 +136,28 @@ TRAIN_REWARD_EVENT_PANELS = (
         "y_label": "count",
         "series": (("delta_obstacle_sum", "obstacle cells"),),
     },
+    {"title": "Empty info gain", "y_label": "gain", "series": (("empty_info_gain_sum", "empty info gain"),)},
+    {"title": "Obstacle info gain", "y_label": "gain", "series": (("obstacle_info_gain_sum", "obstacle info gain"),)},
+    {
+        "title": "Weighted obstacle info gain",
+        "y_label": "gain",
+        "series": (("weighted_obstacle_info_gain_sum", "weighted obstacle gain"),),
+    },
     {
         "title": "Weighted information gain",
         "y_label": "gain",
         "series": (("weighted_info_gain_sum", "weighted info gain"),),
+    },
+    {"title": "Empty info reward", "y_label": "reward", "series": (("empty_info_reward_sum", "empty info reward"),)},
+    {
+        "title": "Obstacle info reward",
+        "y_label": "reward",
+        "series": (("obstacle_info_reward_sum", "obstacle info reward"),),
+    },
+    {
+        "title": "Obstacle info contribution ratio",
+        "y_label": "ratio",
+        "series": (("obstacle_info_contribution_ratio", "obstacle contribution"),),
     },
     {
         "title": "Recent revisit trigger count",
@@ -262,10 +280,28 @@ EVAL_REWARD_EVENT_PANELS = (
         "y_label": "count",
         "series": (("eval_mean_delta_obstacle_sum", "obstacle cells"),),
     },
+    {"title": "Empty info gain", "y_label": "gain", "series": (("eval_mean_empty_info_gain_sum", "empty info gain"),)},
+    {"title": "Obstacle info gain", "y_label": "gain", "series": (("eval_mean_obstacle_info_gain_sum", "obstacle info gain"),)},
+    {
+        "title": "Weighted obstacle info gain",
+        "y_label": "gain",
+        "series": (("eval_mean_weighted_obstacle_info_gain_sum", "weighted obstacle gain"),),
+    },
     {
         "title": "Weighted information gain",
         "y_label": "gain",
         "series": (("eval_mean_weighted_info_gain_sum", "weighted info gain"),),
+    },
+    {"title": "Empty info reward", "y_label": "reward", "series": (("eval_mean_empty_info_reward_sum", "empty info reward"),)},
+    {
+        "title": "Obstacle info reward",
+        "y_label": "reward",
+        "series": (("eval_mean_obstacle_info_reward_sum", "obstacle info reward"),),
+    },
+    {
+        "title": "Obstacle info contribution ratio",
+        "y_label": "ratio",
+        "series": (("eval_mean_obstacle_info_contribution_ratio", "obstacle contribution"),),
     },
     {
         "title": "Recent revisit trigger count",
@@ -415,12 +451,6 @@ def _extract_xy(rows: list[dict[str, str]], y_column: str) -> tuple[list[float],
     if len(rows) <= 0:
         return None
     resolved_y_column = y_column
-    if resolved_y_column not in rows[0]:
-        alias_map = {
-            "recent_revisit_trigger_count": "recent_revisit_count",
-            "eval_mean_recent_revisit_trigger_count": "eval_mean_recent_revisit_count",
-        }
-        resolved_y_column = alias_map.get(resolved_y_column, resolved_y_column)
     if resolved_y_column not in rows[0]:
         return None
 

@@ -21,12 +21,13 @@ from training.rewarding import (
     REWARD_BREAKDOWN_FIELDS,
     REWARD_EVENT_SUMMARY_FIELDS,
     add_reward_breakdown,
-    resolve_reward_info_norm,
+    finalize_reward_event_summary,
+    fixed_half_perimeter_info_norm,
+    info_gain_components,
     reward_from_breakdown,
     timeout_penalty_breakdown,
     turn_penalty_weight_from_steps,
     valid_step_reward_breakdown,
-    weighted_info_gain,
     zero_reward_breakdown,
     zero_reward_event_summary,
 )
@@ -46,14 +47,16 @@ class EvaluatorConfig:
 
     reward_info_scale: float = 10.0
     reward_obstacle_weight: float = 0.25
-    reward_info_norm: float | None = None
-    reward_recent_revisit_window: int = 15
     reward_stall_window: int = 4
     reward_step_penalty: float = 0.01
     reward_terminal_bonus: float = 0.5
     reward_revisit_penalty: float = 0.05
     reward_stall_penalty: float = 0.02
     reward_turn_penalty_scale: float = 0.0
+    reward_turn_weight_45: float = 0.0
+    reward_turn_weight_90: float = 1.0 / 3.0
+    reward_turn_weight_135: float = 2.0 / 3.0
+    reward_turn_weight_180: float = 1.0
     reward_timeout_penalty: float = 0.5
     enable_inference_amp: bool = False
     inference_amp_dtype: str = "fp16"
@@ -64,7 +67,7 @@ ACTION_DIM = len(ACTIONS_8)
 
 
 class GreedyEvaluator:
-    """Greedy evaluation shared by diagnostic periodic eval and the final held-out probe."""
+    """Greedy held-out evaluator for the final probe on the last checkpoint / online last network."""
 
     def __init__(self, cfg: EvaluatorConfig, state_adapter, device: str = "cpu"):
         self.cfg = cfg
@@ -81,11 +84,9 @@ class GreedyEvaluator:
         self._inference_amp_dtype = self._resolve_amp_dtype(cfg.inference_amp_dtype)
 
         self.sensor = RadarSensor(scan_radius=int(cfg.scan_radius))
-        self.reward_info_norm = resolve_reward_info_norm(
-            cfg.reward_info_norm,
-            self.sensor.theoretical_visible_cell_count,
-        )
-        self._recent_revisit_window = max(1, int(cfg.reward_recent_revisit_window))
+        self.reward_info_norm = fixed_half_perimeter_info_norm(int(cfg.scan_radius))
+        # Keep revisit-penalty horizon aligned with the explicit recent-trajectory branch.
+        self._recent_revisit_horizon = max(1, int(cfg.trajectory_history_steps))
         self._stall_window = max(1, int(cfg.reward_stall_window))
         self.generator = RandomMapGenerator(
             rows=cfg.rows,
@@ -111,14 +112,16 @@ class GreedyEvaluator:
             trajectory_history_steps=cfg.trajectory_history_steps,
             reward_info_scale=cfg.reward_info_scale,
             reward_obstacle_weight=cfg.reward_obstacle_weight,
-            reward_info_norm=cfg.reward_info_norm,
-            reward_recent_revisit_window=cfg.reward_recent_revisit_window,
             reward_stall_window=cfg.reward_stall_window,
             reward_step_penalty=cfg.reward_step_penalty,
             reward_terminal_bonus=cfg.reward_terminal_bonus,
             reward_revisit_penalty=cfg.reward_revisit_penalty,
             reward_stall_penalty=cfg.reward_stall_penalty,
             reward_turn_penalty_scale=cfg.reward_turn_penalty_scale,
+            reward_turn_weight_45=cfg.reward_turn_weight_45,
+            reward_turn_weight_90=cfg.reward_turn_weight_90,
+            reward_turn_weight_135=cfg.reward_turn_weight_135,
+            reward_turn_weight_180=cfg.reward_turn_weight_180,
             reward_timeout_penalty=cfg.reward_timeout_penalty,
             enable_inference_amp=cfg.enable_inference_amp,
             inference_amp_dtype=cfg.inference_amp_dtype,
@@ -292,7 +295,7 @@ class GreedyEvaluator:
         episode_semantic_records: list[dict[str, float]] = []
         recent_positions: deque[tuple[int, int]] = deque(
             [(int(agent[0]), int(agent[1]))],
-            maxlen=self._recent_revisit_window,
+            maxlen=self._recent_revisit_horizon,
         )
         recent_trajectory_positions: deque[tuple[int, int]] = deque(
             [(int(agent[0]), int(agent[1]))],
@@ -349,7 +352,15 @@ class GreedyEvaluator:
                 )
 
             turn_steps = GridTopology.circular_turn_steps(prev_action_idx, action_idx)
-            turn_penalty_weight = float(turn_penalty_weight_from_steps(turn_steps))
+            turn_penalty_weight = float(
+                turn_penalty_weight_from_steps(
+                    turn_steps,
+                    weight_45=float(self.cfg.reward_turn_weight_45),
+                    weight_90=float(self.cfg.reward_turn_weight_90),
+                    weight_135=float(self.cfg.reward_turn_weight_135),
+                    weight_180=float(self.cfg.reward_turn_weight_180),
+                )
+            )
             dr, dc = ACTIONS_8[action_idx]
             agent = (int(agent[0] + dr), int(agent[1] + dc))
             recent_trajectory_positions.append((int(agent[0]), int(agent[1])))
@@ -380,16 +391,21 @@ class GreedyEvaluator:
             else:
                 stall_streak = 0
             stall_triggered = bool(stall_streak >= self._stall_window)
+            info_metrics = info_gain_components(
+                delta_empty=delta_empty,
+                delta_obstacle=delta_obstacle,
+                obstacle_weight=float(self.cfg.reward_obstacle_weight),
+                info_norm=self.reward_info_norm,
+                reward_info_scale=float(self.cfg.reward_info_scale),
+            )
             episode_event_summary["delta_empty_sum"] += float(delta_empty)
             episode_event_summary["delta_obstacle_sum"] += float(delta_obstacle)
-            episode_event_summary["weighted_info_gain_sum"] += float(
-                weighted_info_gain(
-                    delta_empty=delta_empty,
-                    delta_obstacle=delta_obstacle,
-                    obstacle_weight=float(self.cfg.reward_obstacle_weight),
-                    info_norm=self.reward_info_norm,
-                )
-            )
+            episode_event_summary["empty_info_gain_sum"] += float(info_metrics["empty_info_gain_sum"])
+            episode_event_summary["obstacle_info_gain_sum"] += float(info_metrics["obstacle_info_gain_sum"])
+            episode_event_summary["weighted_obstacle_info_gain_sum"] += float(info_metrics["weighted_obstacle_info_gain_sum"])
+            episode_event_summary["weighted_info_gain_sum"] += float(info_metrics["weighted_info_gain_sum"])
+            episode_event_summary["empty_info_reward_sum"] += float(info_metrics["empty_info_reward_sum"])
+            episode_event_summary["obstacle_info_reward_sum"] += float(info_metrics["obstacle_info_reward_sum"])
             episode_event_summary["recent_revisit_trigger_count"] += float(bool(recent_revisit))
             episode_event_summary["stall_trigger_count"] += float(bool(stall_triggered))
             if int(delta_empty) == 0 and int(delta_obstacle) == 0:
@@ -408,7 +424,7 @@ class GreedyEvaluator:
                 self.cfg,
                 delta_empty=delta_empty,
                 delta_obstacle=delta_obstacle,
-                reward_info_norm=self.reward_info_norm,
+                info_norm=self.reward_info_norm,
                 recent_revisit=recent_revisit,
                 stall_triggered=stall_triggered,
                 turn_penalty_weight=turn_penalty_weight,
@@ -441,6 +457,7 @@ class GreedyEvaluator:
             add_reward_breakdown(episode_breakdown, step_breakdown)
 
             if done:
+                episode_event_summary = finalize_reward_event_summary(dict(episode_event_summary))
                 episode_event_summary["timeout_flag"] = float(done_reason == "max_episode_steps")
                 semantic_viz = build_semantic_visualization_payload(shared_artifacts.semantic_snapshot)
                 return {

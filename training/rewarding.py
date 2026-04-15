@@ -15,7 +15,13 @@ REWARD_BREAKDOWN_FIELDS: tuple[str, ...] = (
 REWARD_EVENT_SUMMARY_FIELDS: tuple[str, ...] = (
     "delta_empty_sum",
     "delta_obstacle_sum",
+    "empty_info_gain_sum",
+    "obstacle_info_gain_sum",
+    "weighted_obstacle_info_gain_sum",
     "weighted_info_gain_sum",
+    "empty_info_reward_sum",
+    "obstacle_info_reward_sum",
+    "obstacle_info_contribution_ratio",
     "recent_revisit_trigger_count",
     "stall_trigger_count",
     "zero_info_step_count",
@@ -44,84 +50,43 @@ def reward_from_breakdown(breakdown: dict[str, float]) -> float:
     return float(sum(float(breakdown.get(field, 0.0)) for field in REWARD_BREAKDOWN_FIELDS))
 
 
-def _theoretical_visible_cells_from_scan_radius(scan_radius: int) -> int:
+def fixed_half_perimeter_info_norm(scan_radius: int) -> float:
     r = int(scan_radius)
     if r < 1:
         raise ValueError("scan_radius must be >= 1")
-
-    count = 0
-    rr = r * r
-    for dr in range(-r, r + 1):
-        for dc in range(-r, r + 1):
-            if dr * dr + dc * dc <= rr:
-                count += 1
-
-    if r >= 2:
-        shoulder = (
-            (-r, -1), (-r, 1),
-            (r, -1), (r, 1),
-            (-1, -r), (1, -r),
-            (-1, r), (1, r),
-        )
-        disk_points = {
-            (dr, dc)
-            for dr in range(-r, r + 1)
-            for dc in range(-r, r + 1)
-            if dr * dr + dc * dc <= rr
-        }
-        count += sum(1 for p in shoulder if p not in disk_points)
-
-    return int(count)
+    # Phase-1 reward cleanup fixes information normalization to the scan half-perimeter.
+    return float(math.pi * float(r))
 
 
-def _infer_scan_radius_from_visible_cells(theoretical_visible_cells: int) -> int | None:
-    target = int(theoretical_visible_cells)
-    if target <= 0:
-        return None
-
-    scan_radius = 1
-    while scan_radius <= max(1, target):
-        current = _theoretical_visible_cells_from_scan_radius(scan_radius)
-        if current == target:
-            return scan_radius
-        if current > target:
-            return None
-        scan_radius += 1
-    return None
-
-
-def _resolve_info_norm_denominator(info_norm_override: float | str | None, theoretical_visible_cells: int) -> float:
-    if info_norm_override is None:
-        return max(1.0, float(theoretical_visible_cells) / 2.0)
-
-    if isinstance(info_norm_override, str):
-        mode = info_norm_override.strip().lower()
-        if mode == "":
-            return max(1.0, float(theoretical_visible_cells) / 2.0)
-        if mode in {"half_area", "half_visible_area"}:
-            return max(1.0, float(theoretical_visible_cells) / 2.0)
-        if mode == "half_perimeter":
-            scan_radius = _infer_scan_radius_from_visible_cells(theoretical_visible_cells)
-            if scan_radius is None:
-                raise ValueError(
-                    "Unable to infer scan_radius from theoretical_visible_cells for reward_info_norm='half_perimeter'"
-                )
-            # Perimeter-scale normalization better matches that single-step new information
-            # arrives near the scan boundary rather than scaling with total scan area.
-            return max(1.0, math.pi * float(scan_radius))
-
-        numeric_value = float(mode)
-        if numeric_value > 0.0:
-            return float(numeric_value)
-        raise ValueError(f"reward_info_norm must be positive, got {info_norm_override!r}")
-
-    if float(info_norm_override) > 0.0:
-        return float(info_norm_override)
-    raise ValueError(f"reward_info_norm must be positive, got {info_norm_override!r}")
-
-
-def resolve_reward_info_norm(info_norm_override: float | str | None, theoretical_visible_cells: int) -> float:
-    return _resolve_info_norm_denominator(info_norm_override, theoretical_visible_cells)
+def info_gain_components(
+    *,
+    delta_empty: int,
+    delta_obstacle: int,
+    obstacle_weight: float,
+    info_norm: float,
+    reward_info_scale: float,
+) -> dict[str, float]:
+    denominator = max(1e-6, float(info_norm))
+    empty_info_gain = float(delta_empty) / denominator
+    obstacle_info_gain = float(delta_obstacle) / denominator
+    weighted_obstacle_info_gain = float(obstacle_weight) * obstacle_info_gain
+    weighted_info_gain_total = empty_info_gain + weighted_obstacle_info_gain
+    empty_info_reward = float(reward_info_scale) * empty_info_gain
+    obstacle_info_reward = float(reward_info_scale) * weighted_obstacle_info_gain
+    total_info_reward = empty_info_reward + obstacle_info_reward
+    obstacle_info_contribution_ratio = (
+        float(obstacle_info_reward / total_info_reward) if total_info_reward > 1e-6 else 0.0
+    )
+    return {
+        "empty_info_gain_sum": empty_info_gain,
+        "obstacle_info_gain_sum": obstacle_info_gain,
+        "weighted_obstacle_info_gain_sum": weighted_obstacle_info_gain,
+        "weighted_info_gain_sum": weighted_info_gain_total,
+        "empty_info_reward_sum": empty_info_reward,
+        "obstacle_info_reward_sum": obstacle_info_reward,
+        "info_reward_sum": total_info_reward,
+        "obstacle_info_contribution_ratio": obstacle_info_contribution_ratio,
+    }
 
 
 def weighted_info_gain(
@@ -131,19 +96,46 @@ def weighted_info_gain(
     obstacle_weight: float,
     info_norm: float,
 ) -> float:
-    weighted_delta = float(delta_empty) + (float(obstacle_weight) * float(delta_obstacle))
-    return float(weighted_delta / max(1e-6, float(info_norm)))
+    return float(
+        info_gain_components(
+            delta_empty=delta_empty,
+            delta_obstacle=delta_obstacle,
+            obstacle_weight=obstacle_weight,
+            info_norm=info_norm,
+            reward_info_scale=1.0,
+        )["weighted_info_gain_sum"]
+    )
 
 
-def turn_penalty_weight_from_steps(turn_steps: int) -> float:
+def finalize_reward_event_summary(summary: dict[str, float]) -> dict[str, float]:
+    finalized = {field: float(summary.get(field, 0.0)) for field in REWARD_EVENT_SUMMARY_FIELDS}
+    total_info_reward = float(finalized.get("empty_info_reward_sum", 0.0)) + float(
+        finalized.get("obstacle_info_reward_sum", 0.0)
+    )
+    finalized["obstacle_info_contribution_ratio"] = (
+        float(finalized["obstacle_info_reward_sum"] / total_info_reward) if total_info_reward > 1e-6 else 0.0
+    )
+    return finalized
+
+
+def turn_penalty_weight_from_steps(
+    turn_steps: int,
+    *,
+    weight_45: float,
+    weight_90: float,
+    weight_135: float,
+    weight_180: float,
+) -> float:
     steps = int(turn_steps)
-    if steps <= 1:
+    if steps <= 0:
         return 0.0
+    if steps == 1:
+        return float(weight_45)
     if steps == 2:
-        return 1.0 / 3.0
+        return float(weight_90)
     if steps == 3:
-        return 2.0 / 3.0
-    return 1.0
+        return float(weight_135)
+    return float(weight_180)
 
 
 def valid_step_reward(
@@ -151,7 +143,7 @@ def valid_step_reward(
     *,
     delta_empty: int,
     delta_obstacle: int,
-    reward_info_norm: float,
+    info_norm: float,
     recent_revisit: bool,
     stall_triggered: bool,
     turn_penalty_weight: float = 0.0,
@@ -162,7 +154,7 @@ def valid_step_reward(
             cfg,
             delta_empty=delta_empty,
             delta_obstacle=delta_obstacle,
-            reward_info_norm=reward_info_norm,
+            info_norm=info_norm,
             recent_revisit=recent_revisit,
             stall_triggered=stall_triggered,
             turn_penalty_weight=turn_penalty_weight,
@@ -176,7 +168,7 @@ def valid_step_reward_breakdown(
     *,
     delta_empty: int,
     delta_obstacle: int,
-    reward_info_norm: float,
+    info_norm: float,
     recent_revisit: bool,
     stall_triggered: bool,
     turn_penalty_weight: float = 0.0,
@@ -185,18 +177,19 @@ def valid_step_reward_breakdown(
     # Reward mainline:
     #   weighted information gain
     #   - fixed step cost
-    #   - recent-window revisit penalty
+    #   - recent revisit penalty over the trajectory_history_steps horizon
     #   - stall penalty after consecutive zero-info steps
-    #   - light large-turn efficiency penalty
+    #   - turn penalty = reward_turn_penalty_scale * explicit angle weight
     #   + success bonus
     breakdown = zero_reward_breakdown()
-    info_gain = weighted_info_gain(
+    info_metrics = info_gain_components(
         delta_empty=delta_empty,
         delta_obstacle=delta_obstacle,
         obstacle_weight=float(cfg.reward_obstacle_weight),
-        info_norm=reward_info_norm,
+        info_norm=info_norm,
+        reward_info_scale=float(cfg.reward_info_scale),
     )
-    breakdown["info_reward_sum"] = float(cfg.reward_info_scale * info_gain)
+    breakdown["info_reward_sum"] = float(info_metrics["info_reward_sum"])
     breakdown["step_penalty_sum"] = float(-cfg.reward_step_penalty)
 
     if recent_revisit:

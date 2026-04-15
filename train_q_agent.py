@@ -67,7 +67,7 @@ class TrainConfig:
     cols: int = 60
     obs_size: int = 6
     scan_radius: int = 10  # radar sensor radius only
-    trajectory_history_steps: int = 10  # keep the short trajectory horizon aligned with the default scan radius
+    trajectory_history_steps: int = 10  # shared short horizon for the trajectory branch and recent revisit penalty
     obstacle_ratio: float = 0.20
 
     max_accessible_blocks: int = 16
@@ -113,15 +113,17 @@ class TrainConfig:
 
     reward_info_scale: float = 3.0
     reward_obstacle_weight: float = 0.25
-    reward_info_norm: float | str | None = "half_perimeter"
-    reward_recent_revisit_window: int = 15
     reward_stall_window: int = 8
     reward_step_penalty: float = 0.02
     reward_terminal_bonus: float = 20.0
     # Current working default reward combo is turn=0.05 / revisit=0.10; historical baselines remain useful for A/B runs.
     reward_revisit_penalty: float = 0.10
     reward_stall_penalty: float = 0.12
-    reward_turn_penalty_scale: float = 0.05
+    reward_turn_penalty_scale: float = 0.05  # total turn penalty scale; angle-specific weights are configured below.
+    reward_turn_weight_45: float = 0.0
+    reward_turn_weight_90: float = 1.0 / 3.0
+    reward_turn_weight_135: float = 2.0 / 3.0
+    reward_turn_weight_180: float = 1.0
     reward_timeout_penalty: float = 8.0
 
     special_highcov_timeout_min_coverage: float = 0.85
@@ -256,16 +258,6 @@ def _maybe_to_channels_last(module: torch.nn.Module, cfg: TrainConfig) -> torch.
     if not device_text.startswith("cuda"):
         return module
     return module.to(memory_format=torch.channels_last)
-
-
-def _parse_reward_info_norm_arg(value: str) -> float | str:
-    text = str(value).strip()
-    if text == "":
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return text
 
 
 def create_run_dir(cfg: TrainConfig) -> Path:
@@ -606,14 +598,16 @@ def build_system(cfg: TrainConfig):
         trajectory_history_steps=int(cfg.trajectory_history_steps),
         reward_info_scale=float(cfg.reward_info_scale),
         reward_obstacle_weight=float(cfg.reward_obstacle_weight),
-        reward_info_norm=cfg.reward_info_norm,
-        reward_recent_revisit_window=int(cfg.reward_recent_revisit_window),
         reward_stall_window=int(cfg.reward_stall_window),
         reward_step_penalty=float(cfg.reward_step_penalty),
         reward_terminal_bonus=float(cfg.reward_terminal_bonus),
         reward_revisit_penalty=float(cfg.reward_revisit_penalty),
         reward_stall_penalty=float(cfg.reward_stall_penalty),
         reward_turn_penalty_scale=float(cfg.reward_turn_penalty_scale),
+        reward_turn_weight_45=float(cfg.reward_turn_weight_45),
+        reward_turn_weight_90=float(cfg.reward_turn_weight_90),
+        reward_turn_weight_135=float(cfg.reward_turn_weight_135),
+        reward_turn_weight_180=float(cfg.reward_turn_weight_180),
         reward_timeout_penalty=float(cfg.reward_timeout_penalty),
         n_step=int(cfg.n_step),
         gamma=float(cfg.gamma),
@@ -1434,39 +1428,43 @@ def parse_args() -> TrainConfig:
     p.add_argument("--max-accessible-blocks", type=int, default=16)
     p.add_argument("--max-entries-per-block", type=int, default=8)
     p.add_argument("--obstacle-ratio", type=float, default=0.20)
-    p.add_argument("--reward-info-scale", type=float, default=3.0, help="weighted information gain scale")
     p.add_argument(
-        "--reward-obstacle-weight", type=float, default=0.25, help="obstacle reveal weight in info gain"
+        "--reward-info-scale",
+        type=float,
+        default=3.0,
+        help="weighted information gain scale under the fixed half-perimeter normalization rule",
     )
     p.add_argument(
-        "--reward-info-norm",
-        type=_parse_reward_info_norm_arg,
-        default="half_perimeter",
-        help=
-        "optional info gain normalization override; accepts a positive number or 'half_perimeter'; default uses radar theoretical visible cells / 2",
-    )
-    p.add_argument(
-        "--reward-recent-revisit-window",
-        type=int,
-        default=15,
-        help="recent position window size for revisit penalty",
+        "--reward-obstacle-weight",
+        type=float,
+        default=0.25,
+        help="obstacle reveal weight inside the fixed half-perimeter information gain",
     )
     p.add_argument(
         "--reward-stall-window",
         type=int,
         default=8,
-        help="consecutive zero-info steps before stall penalty starts; larger values allow short backtracks",
+        help="consecutive zero-info steps before stall penalty starts; kept unchanged in phase 1 as the control condition",
     )
     p.add_argument("--reward-step-penalty", type=float, default=0.02, help="step penalty")
     p.add_argument("--reward-terminal-bonus", type=float, default=20.0, help="terminal success bonus")
-    p.add_argument("--reward-revisit-penalty", type=float, default=0.10, help="revisit penalty")
+    p.add_argument(
+        "--reward-revisit-penalty",
+        type=float,
+        default=0.10,
+        help="recent revisit penalty; its horizon is fixed to trajectory_history_steps",
+    )
     p.add_argument("--reward-stall-penalty", type=float, default=0.12, help="stall penalty")
     p.add_argument(
         "--reward-turn-penalty-scale",
         type=float,
         default=0.05,
-        help="light large-turn penalty scale; default 0.05 is the current working reward setting",
+        help="overall turn penalty scale; the final per-step penalty is this scale times the explicit angle weight",
     )
+    p.add_argument("--reward-turn-weight-45", type=float, default=0.0, help="turn-penalty weight for 45-degree turns")
+    p.add_argument("--reward-turn-weight-90", type=float, default=(1.0 / 3.0), help="turn-penalty weight for 90-degree turns")
+    p.add_argument("--reward-turn-weight-135", type=float, default=(2.0 / 3.0), help="turn-penalty weight for 135-degree turns")
+    p.add_argument("--reward-turn-weight-180", type=float, default=1.0, help="turn-penalty weight for 180-degree turns")
     p.add_argument("--reward-timeout-penalty", type=float, default=8.0, help="timeout penalty")
     p.add_argument("--special-highcov-timeout-min-coverage", type=float, default=0.85)
     p.add_argument("--special-highcov-timeout-max-plots", type=int, default=5)
@@ -1587,14 +1585,16 @@ def parse_args() -> TrainConfig:
             max_episode_steps=80,
             reward_info_scale=args.reward_info_scale,
             reward_obstacle_weight=args.reward_obstacle_weight,
-            reward_info_norm=args.reward_info_norm,
-            reward_recent_revisit_window=max(1, args.reward_recent_revisit_window),
             reward_stall_window=max(1, args.reward_stall_window),
             reward_step_penalty=args.reward_step_penalty,
             reward_terminal_bonus=args.reward_terminal_bonus,
             reward_revisit_penalty=args.reward_revisit_penalty,
             reward_stall_penalty=args.reward_stall_penalty,
             reward_turn_penalty_scale=args.reward_turn_penalty_scale,
+            reward_turn_weight_45=args.reward_turn_weight_45,
+            reward_turn_weight_90=args.reward_turn_weight_90,
+            reward_turn_weight_135=args.reward_turn_weight_135,
+            reward_turn_weight_180=args.reward_turn_weight_180,
             reward_timeout_penalty=args.reward_timeout_penalty,
             special_highcov_timeout_min_coverage=args.special_highcov_timeout_min_coverage,
             special_highcov_timeout_max_plots=max(0, args.special_highcov_timeout_max_plots),
@@ -1678,14 +1678,16 @@ def parse_args() -> TrainConfig:
         obstacle_ratio=args.obstacle_ratio,
         reward_info_scale=args.reward_info_scale,
         reward_obstacle_weight=args.reward_obstacle_weight,
-        reward_info_norm=args.reward_info_norm,
-        reward_recent_revisit_window=max(1, args.reward_recent_revisit_window),
         reward_stall_window=max(1, args.reward_stall_window),
         reward_step_penalty=args.reward_step_penalty,
         reward_terminal_bonus=args.reward_terminal_bonus,
         reward_revisit_penalty=args.reward_revisit_penalty,
         reward_stall_penalty=args.reward_stall_penalty,
         reward_turn_penalty_scale=args.reward_turn_penalty_scale,
+        reward_turn_weight_45=args.reward_turn_weight_45,
+        reward_turn_weight_90=args.reward_turn_weight_90,
+        reward_turn_weight_135=args.reward_turn_weight_135,
+        reward_turn_weight_180=args.reward_turn_weight_180,
         reward_timeout_penalty=args.reward_timeout_penalty,
         special_highcov_timeout_min_coverage=args.special_highcov_timeout_min_coverage,
         special_highcov_timeout_max_plots=max(0, args.special_highcov_timeout_max_plots),
@@ -1819,14 +1821,16 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         coverage_stop_threshold=0.95,
         reward_info_scale=3.0,
         reward_obstacle_weight=0.25,
-        reward_info_norm="half_perimeter",
-        reward_recent_revisit_window=15,
         reward_stall_window=8,
         reward_step_penalty=0.02,
         reward_terminal_bonus=20.0,
         reward_revisit_penalty=0.10,
         reward_stall_penalty=0.12,
         reward_turn_penalty_scale=0.05,
+        reward_turn_weight_45=0.0,
+        reward_turn_weight_90=(1.0 / 3.0),
+        reward_turn_weight_135=(2.0 / 3.0),
+        reward_turn_weight_180=1.0,
         reward_timeout_penalty=8.0,
         special_highcov_timeout_min_coverage=0.85,
         special_highcov_timeout_max_plots=5,

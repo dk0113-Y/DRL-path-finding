@@ -45,6 +45,10 @@ TIMING_FLAG_FIELDS = (
 
 ALLOWED_TUNING_FIELDS = (
     "reward_turn_penalty_scale",
+    "reward_turn_weight_45",
+    "reward_turn_weight_90",
+    "reward_turn_weight_135",
+    "reward_turn_weight_180",
     "reward_revisit_penalty",
 )
 
@@ -89,8 +93,6 @@ FROZEN_COMPARABILITY_FIELDS = (
     "coverage_stop_threshold",
     "reward_info_scale",
     "reward_obstacle_weight",
-    "reward_info_norm",
-    "reward_recent_revisit_window",
     "reward_stall_window",
     "reward_step_penalty",
     "reward_terminal_bonus",
@@ -111,7 +113,13 @@ REWARD_BREAKDOWN_FIELDS = (
 REWARD_EVENT_FIELDS = (
     "delta_empty_sum",
     "delta_obstacle_sum",
+    "empty_info_gain_sum",
+    "obstacle_info_gain_sum",
+    "weighted_obstacle_info_gain_sum",
     "weighted_info_gain_sum",
+    "empty_info_reward_sum",
+    "obstacle_info_reward_sum",
+    "obstacle_info_contribution_ratio",
     "recent_revisit_trigger_count",
     "stall_trigger_count",
     "zero_info_step_count",
@@ -952,6 +960,31 @@ def build_config_snapshot(
                 "seed_toggle_field": "use_fixed_eval_seeds",
                 "seed_toggle_note": "legacy field name retained; it now controls final_probe held-out seeding only",
                 "csv_file": "logs/final_probe.csv",
+            },
+            "reward_semantics": {
+                "info_norm_rule": {
+                    "mode": "fixed_half_perimeter",
+                    "formula": "pi * scan_radius",
+                    "derived_info_norm": (
+                        float(math.pi * float(config_dict["scan_radius"]))
+                        if config_dict.get("scan_radius") is not None else None
+                    ),
+                },
+                "recent_revisit_horizon_rule": {
+                    "source_field": "trajectory_history_steps",
+                    "note": "recent revisit penalty horizon is fixed to trajectory_history_steps in phase-1 reward cleanup",
+                },
+                "turn_penalty_rule": {
+                    "total_scale_field": "reward_turn_penalty_scale",
+                    "angle_weight_fields": [
+                        "reward_turn_weight_45",
+                        "reward_turn_weight_90",
+                        "reward_turn_weight_135",
+                        "reward_turn_weight_180",
+                    ],
+                    "per_step_formula": "reward_turn_penalty_scale * selected_turn_weight",
+                },
+                "stall_penalty_status": "retained_in_phase1_control_condition",
             },
             "recent_train_role": "training_screening_and_ranking_support_only",
             "automatic_tuning_ranking_basis": {

@@ -21,12 +21,13 @@ from env.value_state_builder import VALUE_DIAGNOSTIC_FIELDS
 from training.rewarding import (
     REWARD_EVENT_SUMMARY_FIELDS,
     add_reward_breakdown,
-    resolve_reward_info_norm,
+    finalize_reward_event_summary,
+    fixed_half_perimeter_info_norm,
+    info_gain_components,
     reward_from_breakdown,
     timeout_penalty_breakdown,
     turn_penalty_weight_from_steps,
     valid_step_reward_breakdown,
-    weighted_info_gain,
     zero_reward_breakdown,
     zero_reward_event_summary,
 )
@@ -80,14 +81,16 @@ class CollectorConfig:
 
     reward_info_scale: float = 10.0
     reward_obstacle_weight: float = 0.25
-    reward_info_norm: float | None = None
-    reward_recent_revisit_window: int = 15
     reward_stall_window: int = 4
     reward_step_penalty: float = 0.01
     reward_terminal_bonus: float = 0.5
     reward_revisit_penalty: float = 0.05
     reward_stall_penalty: float = 0.02
     reward_turn_penalty_scale: float = 0.0
+    reward_turn_weight_45: float = 0.0
+    reward_turn_weight_90: float = 1.0 / 3.0
+    reward_turn_weight_135: float = 2.0 / 3.0
+    reward_turn_weight_180: float = 1.0
     reward_timeout_penalty: float = 0.5
 
     n_step: int = 3
@@ -132,13 +135,12 @@ class TransitionCollector:
         self._inference_amp_dtype = self._resolve_amp_dtype(cfg.inference_amp_dtype)
 
         self.sensor = RadarSensor(scan_radius=int(cfg.scan_radius))
-        self.reward_info_norm = resolve_reward_info_norm(
-            cfg.reward_info_norm,
-            self.sensor.theoretical_visible_cell_count,
-        )
-        self._recent_revisit_window = max(1, int(cfg.reward_recent_revisit_window))
-        self._stall_window = max(1, int(cfg.reward_stall_window))
         self._trajectory_history_steps = max(1, int(cfg.trajectory_history_steps))
+        self.reward_info_norm = fixed_half_perimeter_info_norm(int(cfg.scan_radius))
+        # The short-horizon revisit penalty now shares the same horizon as the explicit
+        # recent-trajectory branch so both signals operate on one consistent time scale.
+        self._recent_revisit_horizon = self._trajectory_history_steps
+        self._stall_window = max(1, int(cfg.reward_stall_window))
         self.generator = RandomMapGenerator(
             rows=cfg.rows,
             cols=cfg.cols,
@@ -172,7 +174,7 @@ class TransitionCollector:
         self._episode_reward = 0.0
         self._episode_reward_breakdown = zero_reward_breakdown()
         self._episode_event_summary = zero_reward_event_summary()
-        self._recent_positions: deque[tuple[int, int]] = deque(maxlen=self._recent_revisit_window)
+        self._recent_positions: deque[tuple[int, int]] = deque(maxlen=self._recent_revisit_horizon)
         self._recent_trajectory_positions: deque[tuple[int, int]] = deque(
             maxlen=self._trajectory_history_steps + 1
         )
@@ -249,7 +251,7 @@ class TransitionCollector:
         self._episode_event_summary = zero_reward_event_summary()
         self._recent_positions = deque(
             [(int(self.agent[0]), int(self.agent[1]))],
-            maxlen=self._recent_revisit_window,
+            maxlen=self._recent_revisit_horizon,
         )
         self._recent_trajectory_positions = deque(
             [(int(self.agent[0]), int(self.agent[1]))],
@@ -438,7 +440,15 @@ class TransitionCollector:
             )
         else:
             turn_steps = GridTopology.circular_turn_steps(self._prev_action_idx, int(action_idx))
-            turn_penalty_weight = float(turn_penalty_weight_from_steps(turn_steps))
+            turn_penalty_weight = float(
+                turn_penalty_weight_from_steps(
+                    turn_steps,
+                    weight_45=float(self.cfg.reward_turn_weight_45),
+                    weight_90=float(self.cfg.reward_turn_weight_90),
+                    weight_135=float(self.cfg.reward_turn_weight_135),
+                    weight_180=float(self.cfg.reward_turn_weight_180),
+                )
+            )
             dr, dc = ACTIONS_8[int(action_idx)]
             self.agent = (int(self.agent[0] + dr), int(self.agent[1] + dc))
             self._recent_trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
@@ -461,16 +471,21 @@ class TransitionCollector:
             recent_revisit = self._is_recent_revisit(self.agent)
             stall_triggered = self._update_stall_streak(delta_empty, delta_obstacle)
             event_summary = self._episode_event_summary
+            info_metrics = info_gain_components(
+                delta_empty=delta_empty,
+                delta_obstacle=delta_obstacle,
+                obstacle_weight=float(self.cfg.reward_obstacle_weight),
+                info_norm=self.reward_info_norm,
+                reward_info_scale=float(self.cfg.reward_info_scale),
+            )
             event_summary["delta_empty_sum"] += float(delta_empty)
             event_summary["delta_obstacle_sum"] += float(delta_obstacle)
-            event_summary["weighted_info_gain_sum"] += float(
-                weighted_info_gain(
-                    delta_empty=delta_empty,
-                    delta_obstacle=delta_obstacle,
-                    obstacle_weight=float(self.cfg.reward_obstacle_weight),
-                    info_norm=self.reward_info_norm,
-                )
-            )
+            event_summary["empty_info_gain_sum"] += float(info_metrics["empty_info_gain_sum"])
+            event_summary["obstacle_info_gain_sum"] += float(info_metrics["obstacle_info_gain_sum"])
+            event_summary["weighted_obstacle_info_gain_sum"] += float(info_metrics["weighted_obstacle_info_gain_sum"])
+            event_summary["weighted_info_gain_sum"] += float(info_metrics["weighted_info_gain_sum"])
+            event_summary["empty_info_reward_sum"] += float(info_metrics["empty_info_reward_sum"])
+            event_summary["obstacle_info_reward_sum"] += float(info_metrics["obstacle_info_reward_sum"])
             event_summary["recent_revisit_trigger_count"] += float(bool(recent_revisit))
             event_summary["stall_trigger_count"] += float(bool(stall_triggered))
             if int(delta_empty) == 0 and int(delta_obstacle) == 0:
@@ -489,7 +504,7 @@ class TransitionCollector:
                 self.cfg,
                 delta_empty=delta_empty,
                 delta_obstacle=delta_obstacle,
-                reward_info_norm=self.reward_info_norm,
+                info_norm=self.reward_info_norm,
                 recent_revisit=recent_revisit,
                 stall_triggered=stall_triggered,
                 turn_penalty_weight=turn_penalty_weight,
@@ -651,7 +666,7 @@ class TransitionCollector:
 
                 final_coverage = float(self.cum_map.coverage_rate)
                 success = bool(done_reason == "coverage_reached")
-                episode_event_summary = dict(self._episode_event_summary)
+                episode_event_summary = finalize_reward_event_summary(dict(self._episode_event_summary))
                 episode_event_summary["timeout_flag"] = float(done_reason == "max_episode_steps")
                 completed_episode_idx = int(self.current_episode_idx)
                 completed_episode_seed = self.current_episode_seed
