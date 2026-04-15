@@ -14,6 +14,7 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = "formal_train_artifacts/v2"
 DEFAULT_MAIN_BASELINE_IDENTIFIER = "4.9_30万轮基线"
+CURRENT_FORMAL_PROTOCOL_REVISION = "formal_last_checkpoint_v2_1"
 
 RUNTIME_ONLY_FIELDS = (
     "enable_amp",
@@ -663,7 +664,6 @@ def build_observed_run_contract(
         "final_train_episode_idx": final_train_episode_idx,
         "train_episodes_header": _read_csv_header(logs_dir / "train_episodes.csv"),
         "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
-        "eval_metrics_header": _read_csv_header(logs_dir / "eval_metrics.csv"),
         "final_probe_header": _read_csv_header(logs_dir / "final_probe.csv"),
     }
 
@@ -692,6 +692,8 @@ def build_metric_snapshot(
     final_probe = _normalize_eval_like(final_probe_row, source_name="logs/final_probe.csv")
     last_eval = _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv") if last_eval_row else {}
     best_eval = _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval") if best_eval_row else {}
+    best_checkpoint_exists = (run_dir / "checkpoints" / "best.pt").exists()
+    legacy_context_available = bool(eval_rows) or bool(last_eval) or bool(best_eval) or best_checkpoint_exists
     train_step_rows = _read_csv_rows(logs_dir / "train_steps.csv")
     training_dynamics_summary = _build_training_dynamics_summary(
         train_step_rows=train_step_rows,
@@ -707,7 +709,7 @@ def build_metric_snapshot(
         "best_eval": best_eval,
     }
 
-    return {
+    payload = {
         "schema_version": SCHEMA_VERSION,
         "artifact_type": "metric_snapshot",
         "experiment_mode": "formal_train",
@@ -719,8 +721,6 @@ def build_metric_snapshot(
         "training_dynamics_summary": training_dynamics_summary,
         "train_final_consistency_summary": consistency_summary,
         "recent_train_support_summary": consistency_summary,
-        "last_eval": last_eval,
-        "best_eval": best_eval,
         "last_checkpoint_env_steps": last_checkpoint_env_steps,
         "last_checkpoint_train_episode_idx": last_checkpoint_train_episode_idx,
         "final_probe_source": final_probe_source,
@@ -752,18 +752,20 @@ def build_metric_snapshot(
                 "train_final_consistency",
             ],
         },
-        "legacy_diagnostic_context": {
-            "periodic_eval_csv": "logs/eval_metrics.csv",
-            "periodic_eval_available": bool(eval_rows),
-            "last_eval_available": bool(last_eval),
-            "best_eval_available": bool(best_eval),
-            "best_checkpoint_path": "checkpoints/best.pt",
-            "best_checkpoint_exists": (run_dir / "checkpoints" / "best.pt").exists(),
-            "role": "legacy_diagnostic_only",
-        },
         "unified_metrics": _build_unified_metric_table(metric_blocks),
         "insufficient_evidence_flags": sorted(set(insufficient_evidence_flags or [])),
     }
+    if legacy_context_available:
+        payload["legacy_diagnostic_context"] = {
+            "periodic_eval_available": bool(eval_rows),
+            "best_checkpoint_exists": best_checkpoint_exists,
+            "role": "legacy_diagnostic_only",
+        }
+        if last_eval:
+            payload["last_eval"] = last_eval
+        if best_eval:
+            payload["best_eval"] = best_eval
+    return payload
 
 
 def _structured_timing_stats(component_name: str, stats: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -891,7 +893,7 @@ def _comparability_sections(config_dict: Mapping[str, Any]) -> dict[str, Any]:
     group_seed = json.dumps(_json_safe(frozen_fields), ensure_ascii=False, sort_keys=True).encode("utf-8")
     group_hash = hashlib.sha1(group_seed).hexdigest()[:12]
     return {
-        "comparability_group": f"formal_last_probe_v2__{group_hash}",
+        "comparability_group": f"formal_last_checkpoint_v2_1__{group_hash}",
         "frozen_fields": frozen_fields,
         "allowed_tuning_fields": allowed_tuning,
         "manual_review_fields": manual_review,
@@ -938,7 +940,7 @@ def build_config_snapshot(
         "runtime_only_fields": {field_name: config_dict.get(field_name) for field_name in RUNTIME_ONLY_FIELDS if field_name in config_dict},
         "observed_run_contract": _json_safe(dict(observed_run_contract or {})),
         "evaluation_contract": {
-            "protocol_revision": "formal_last_checkpoint_v2",
+            "protocol_revision": CURRENT_FORMAL_PROTOCOL_REVISION,
             "formal_final_object": {
                 "checkpoint_path": "checkpoints/last.pt",
                 "acceptance_target": "final_probe_of_last_checkpoint_or_online_last",
@@ -946,7 +948,9 @@ def build_config_snapshot(
             },
             "final_probe_rule": {
                 "source": "last_checkpoint_if_available_else_online_last",
-                "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_else_runtime_seed_stream",
+                "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_final_probe_toggle_else_runtime_seed_stream",
+                "seed_toggle_field": "use_fixed_eval_seeds",
+                "seed_toggle_note": "legacy field name retained; it now controls final_probe held-out seeding only",
                 "csv_file": "logs/final_probe.csv",
             },
             "recent_train_role": "training_screening_and_ranking_support_only",

@@ -89,8 +89,7 @@ class TrainConfig:
     train_print_interval_episodes: int = 20
     use_fixed_train_episode_seeds: bool = True
     fixed_train_episode_seed_base: int = 20259323
-    use_fixed_eval_seeds: bool = True
-    fixed_eval_seed_base: int = 20260323
+    use_fixed_eval_seeds: bool = True  # Legacy name retained; now this toggle only controls fixed final_probe seeds.
     fixed_final_probe_seed_base: int = 20261323
 
     replay_capacity: int = 100_000
@@ -958,7 +957,6 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         learner,
         env_steps=int(env_steps),
         train_episode_idx=int(train_phase_episodes),
-        eval_metrics=None,
         train_config=cfg,
     )
 
@@ -1263,24 +1261,6 @@ def parse_args() -> TrainConfig:
         help="Stdout throttling only; separate from --log-interval and does not affect CSV metrics.",
     )
     p.add_argument(
-        "--enable-periodic-eval",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--enable-diagnostic-best-checkpoint",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--save-eval-trajectories",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
         "--save-train-representative-trajectories",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -1417,9 +1397,6 @@ def parse_args() -> TrainConfig:
     p.add_argument("--epsilon-end", type=float, default=0.05)
     p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
 
-    p.add_argument("--eval-interval-env-steps", type=int, default=24_000, help=argparse.SUPPRESS)
-    p.add_argument("--eval-interval-episodes", type=int, default=40, help=argparse.SUPPRESS)
-    p.add_argument("--eval-episodes", type=int, default=12, help=argparse.SUPPRESS)
     p.add_argument("--recent-episode-window", type=int, default=100)
     p.add_argument("--final-greedy-episodes", type=int, default=16)
     p.add_argument(
@@ -1438,13 +1415,7 @@ def parse_args() -> TrainConfig:
         "--use-fixed-eval-seeds",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use a fixed held-out map seed policy for final_probe to reduce metric noise.",
-    )
-    p.add_argument(
-        "--fixed-eval-seed-base",
-        type=int,
-        default=20260323,
-        help="Legacy reserved eval-seed base kept only for artifact compatibility; final_probe uses --fixed-final-probe-seed-base.",
+        help="Legacy-named toggle that now only controls fixed held-out map seeds for final_probe.",
     )
     p.add_argument(
         "--fixed-final-probe-seed-base",
@@ -1610,7 +1581,6 @@ def parse_args() -> TrainConfig:
             use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
             fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
             use_fixed_eval_seeds=True,
-            fixed_eval_seed_base=int(args.fixed_eval_seed_base),
             fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
             log_interval=20,
             log_interval_episodes=max(0, args.log_interval_episodes),
@@ -1696,7 +1666,6 @@ def parse_args() -> TrainConfig:
         use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
         fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
         use_fixed_eval_seeds=bool(args.use_fixed_eval_seeds),
-        fixed_eval_seed_base=int(args.fixed_eval_seed_base),
         fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
         log_interval=args.log_interval,
         log_interval_episodes=max(0, args.log_interval_episodes),
@@ -1843,7 +1812,6 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         use_fixed_train_episode_seeds=True,
         fixed_train_episode_seed_base=20259323,
         use_fixed_eval_seeds=True,
-        fixed_eval_seed_base=20260323,
         fixed_final_probe_seed_base=20261323,
         log_interval=500,
         log_interval_episodes=10,

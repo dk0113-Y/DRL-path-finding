@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 
@@ -30,14 +30,12 @@ class CheckpointManager:
         learner,
         env_steps: int,
         train_episode_idx: int | None = None,
-        eval_metrics: Optional[Dict[str, object]] = None,
         train_config=None,
     ) -> Dict[str, object]:
         payload: Dict[str, object] = {
             "online_state_dict": online_net.state_dict(),
             "env_steps": int(env_steps),
             "learn_steps": int(getattr(learner, "learn_steps", 0)),
-            "eval_metrics": eval_metrics,
             "train_config": self._serialize_config(train_config),
         }
         if train_episode_idx is not None:
@@ -52,7 +50,6 @@ class CheckpointManager:
         learner,
         env_steps: int,
         train_episode_idx: int | None = None,
-        eval_metrics: Optional[Dict[str, object]] = None,
         train_config=None,
     ) -> Path:
         payload = self._build_payload(
@@ -60,7 +57,6 @@ class CheckpointManager:
             learner,
             env_steps,
             train_episode_idx=train_episode_idx,
-            eval_metrics=eval_metrics,
             train_config=train_config,
         )
         torch.save(payload, self.last_path)
