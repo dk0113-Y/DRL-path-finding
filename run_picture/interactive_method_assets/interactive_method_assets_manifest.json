@@ -1,0 +1,24 @@
+{
+  "step": 9,
+  "action_key": "d",
+  "recent_trajectory_length": 8,
+  "before_display_steps": 8,
+  "after_display_steps": 8,
+  "before_agent_world": [
+    14,
+    40
+  ],
+  "after_agent_world": [
+    14,
+    41
+  ],
+  "files": {
+    "local_lidar_observation": "run_picture/interactive_method_assets/local_lidar_observation.png",
+    "belief_before_update": "run_picture/interactive_method_assets/belief_before_update.png",
+    "belief_after_update": "run_picture/interactive_method_assets/belief_after_update.png",
+    "observation_overlay": "run_picture/interactive_method_assets/observation_overlay.png",
+    "executed_action_arrow": "run_picture/interactive_method_assets/executed_action_arrow.png",
+    "semantic_input_belief_map": "run_picture/interactive_method_assets/semantic_input_belief_map.png",
+    "frontier_parsing_overlay": "run_picture/interactive_method_assets/frontier_parsing_overlay.png"
+  }
+}

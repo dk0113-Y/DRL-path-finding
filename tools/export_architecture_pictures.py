@@ -11,6 +11,7 @@ from __future__ import annotations
 """
 
 import argparse
+import os
 import random
 import sys
 from dataclasses import dataclass
@@ -18,7 +19,8 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")
+if os.environ.get("DRL_PAPER_FIGURE_INTERACTIVE") != "1":
+    matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
