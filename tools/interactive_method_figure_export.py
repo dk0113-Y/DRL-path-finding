@@ -4,7 +4,9 @@ import argparse
 import json
 import os
 import sys
+from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,6 +59,7 @@ from matplotlib.widgets import Button
 
 
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "run_picture" / "interactive_method_assets"
+DEFAULT_STATE_DIR = REPO_ROOT / "outputs" / "interactive_method_states"
 ACTION_KEYS = tuple(KEY_TO_ACTION.keys())
 
 
@@ -66,6 +69,31 @@ class CachedTransition:
     action_key: str
     before_snapshot: Snapshot
     after_snapshot: Snapshot
+
+
+@dataclass(frozen=True)
+class MethodFigureRuntimeState:
+    true_grid: np.ndarray
+    free_mask: np.ndarray
+    local_snap: np.ndarray
+    trajectory_world: np.ndarray
+    cum_map_map: np.ndarray
+    cum_map_visit_count: np.ndarray
+    cum_map_frontier_bool: np.ndarray
+    cum_map_frontier_u8: np.ndarray
+    start_state: tuple[int, int]
+    agent_state: tuple[int, int]
+    cum_map_origin_world_rc: tuple[int, int]
+    cum_map_step_count: int
+    cum_map_coverage_rate: float
+    cum_map_kpm_count: int
+    cum_map_tpm_count: int
+    cum_map_frontier_revision: int
+    step: int
+    recent_trajectory_length: int
+    scan_radius: int
+    status_message: str
+    last_transition: CachedTransition | None
 
 
 def get_recent_trajectory_window(history: np.ndarray | list[tuple[int, int]], length: int) -> np.ndarray:
@@ -109,9 +137,12 @@ class InteractiveMethodFigureExporter:
         *,
         output_dir: Path,
         recent_trajectory_length: int,
+        state_dir: Path,
+        load_state: Path | None,
         config: ExportConfig,
     ) -> None:
         self.output_dir = Path(output_dir)
+        self.state_dir = Path(state_dir)
         self.recent_trajectory_length = max(0, int(recent_trajectory_length))
         self.config = config
         self.method_style = MethodFigureStyle()
@@ -136,11 +167,285 @@ class InteractiveMethodFigureExporter:
         self.step = 0
         self.last_transition: CachedTransition | None = None
         self.status_message = "Press an action key, then press p or Export."
+        self.undo_history: deque[MethodFigureRuntimeState] = deque(maxlen=8)
 
         self.fig = None
         self.axes = None
         self.status_text = None
         self.export_button = None
+
+        if load_state is not None:
+            self.load_runtime_state(load_state)
+
+    @staticmethod
+    def _copy_snapshot(snapshot: Snapshot) -> Snapshot:
+        return Snapshot(
+            step=int(snapshot.step),
+            agent_world=(int(snapshot.agent_world[0]), int(snapshot.agent_world[1])),
+            agent_array=(int(snapshot.agent_array[0]), int(snapshot.agent_array[1])),
+            belief_origin_world=(
+                int(snapshot.belief_origin_world[0]),
+                int(snapshot.belief_origin_world[1]),
+            ),
+            analysis_box=tuple(int(v) for v in snapshot.analysis_box),
+            trajectory_world=np.asarray(snapshot.trajectory_world, dtype=np.int32).copy(),
+            trajectory_array=np.asarray(snapshot.trajectory_array, dtype=np.int32).copy(),
+            local_snap=np.asarray(snapshot.local_snap, dtype=np.int8).copy(),
+            belief_map=np.asarray(snapshot.belief_map, dtype=np.int8).copy(),
+        )
+
+    @staticmethod
+    def _copy_transition(transition: CachedTransition | None) -> CachedTransition | None:
+        if transition is None:
+            return None
+        return CachedTransition(
+            step=int(transition.step),
+            action_key=str(transition.action_key),
+            before_snapshot=InteractiveMethodFigureExporter._copy_snapshot(transition.before_snapshot),
+            after_snapshot=InteractiveMethodFigureExporter._copy_snapshot(transition.after_snapshot),
+        )
+
+    @staticmethod
+    def _snapshot_metadata(snapshot: Snapshot) -> dict[str, object]:
+        return {
+            "step": int(snapshot.step),
+            "agent_world": [int(v) for v in snapshot.agent_world],
+            "agent_array": [int(v) for v in snapshot.agent_array],
+            "belief_origin_world": [int(v) for v in snapshot.belief_origin_world],
+            "analysis_box": [int(v) for v in snapshot.analysis_box],
+        }
+
+    @staticmethod
+    def _snapshot_arrays(prefix: str, snapshot: Snapshot) -> dict[str, np.ndarray]:
+        return {
+            f"{prefix}_trajectory_world": np.asarray(snapshot.trajectory_world, dtype=np.int32),
+            f"{prefix}_trajectory_array": np.asarray(snapshot.trajectory_array, dtype=np.int32),
+            f"{prefix}_local_snap": np.asarray(snapshot.local_snap, dtype=np.int8),
+            f"{prefix}_belief_map": np.asarray(snapshot.belief_map, dtype=np.int8),
+        }
+
+    @staticmethod
+    def _tuple2(metadata: dict[str, object], key: str) -> tuple[int, int]:
+        values = metadata[key]
+        if not isinstance(values, (list, tuple)) or len(values) != 2:
+            raise ValueError(f"state metadata field {key!r} must contain two integers")
+        return (int(values[0]), int(values[1]))
+
+    @staticmethod
+    def _tuple4(metadata: dict[str, object], key: str) -> tuple[int, int, int, int]:
+        values = metadata[key]
+        if not isinstance(values, (list, tuple)) or len(values) != 4:
+            raise ValueError(f"state metadata field {key!r} must contain four integers")
+        return tuple(int(v) for v in values)
+
+    @classmethod
+    def _snapshot_from_npz(cls, metadata: dict[str, object], data, prefix: str) -> Snapshot:
+        return Snapshot(
+            step=int(metadata["step"]),
+            agent_world=cls._tuple2(metadata, "agent_world"),
+            agent_array=cls._tuple2(metadata, "agent_array"),
+            belief_origin_world=cls._tuple2(metadata, "belief_origin_world"),
+            analysis_box=cls._tuple4(metadata, "analysis_box"),
+            trajectory_world=np.asarray(data[f"{prefix}_trajectory_world"], dtype=np.int32).copy(),
+            trajectory_array=np.asarray(data[f"{prefix}_trajectory_array"], dtype=np.int32).copy(),
+            local_snap=np.asarray(data[f"{prefix}_local_snap"], dtype=np.int8).copy(),
+            belief_map=np.asarray(data[f"{prefix}_belief_map"], dtype=np.int8).copy(),
+        )
+
+    def capture_runtime_state(self) -> MethodFigureRuntimeState:
+        return MethodFigureRuntimeState(
+            true_grid=np.asarray(self.true_grid, dtype=np.int8).copy(),
+            free_mask=np.asarray(self.free_mask, dtype=bool).copy(),
+            local_snap=np.asarray(self.local_snap, dtype=np.int8).copy(),
+            trajectory_world=np.asarray(self.trajectory_world, dtype=np.int32).reshape((-1, 2)).copy(),
+            cum_map_map=np.asarray(self.cum_map.map, dtype=np.int8).copy(),
+            cum_map_visit_count=np.asarray(self.cum_map.visit_count, dtype=np.int32).copy(),
+            cum_map_frontier_bool=np.asarray(self.cum_map.frontier_bool, dtype=bool).copy(),
+            cum_map_frontier_u8=np.asarray(self.cum_map.frontier_u8, dtype=np.uint8).copy(),
+            start_state=(int(self.start_state[0]), int(self.start_state[1])),
+            agent_state=(int(self.agent_state[0]), int(self.agent_state[1])),
+            cum_map_origin_world_rc=(
+                int(self.cum_map.origin_world_rc[0]),
+                int(self.cum_map.origin_world_rc[1]),
+            ),
+            cum_map_step_count=int(self.cum_map.step_count),
+            cum_map_coverage_rate=float(self.cum_map.coverage_rate),
+            cum_map_kpm_count=int(self.cum_map.kpm_count),
+            cum_map_tpm_count=int(self.cum_map.tpm_count),
+            cum_map_frontier_revision=int(self.cum_map.frontier_revision),
+            step=int(self.step),
+            recent_trajectory_length=int(self.recent_trajectory_length),
+            scan_radius=int(self.sensor.scan_r),
+            status_message=str(self.status_message),
+            last_transition=self._copy_transition(self.last_transition),
+        )
+
+    def _runtime_state_metadata(self, state: MethodFigureRuntimeState) -> dict[str, object]:
+        transition = state.last_transition
+        return {
+            "format": "interactive_method_figure_export_state",
+            "version": 1,
+            "start_state": [int(v) for v in state.start_state],
+            "agent_state": [int(v) for v in state.agent_state],
+            "cum_map_origin_world_rc": [int(v) for v in state.cum_map_origin_world_rc],
+            "cum_map_step_count": int(state.cum_map_step_count),
+            "cum_map_coverage_rate": float(state.cum_map_coverage_rate),
+            "cum_map_kpm_count": int(state.cum_map_kpm_count),
+            "cum_map_tpm_count": int(state.cum_map_tpm_count),
+            "cum_map_frontier_revision": int(state.cum_map_frontier_revision),
+            "step": int(state.step),
+            "recent_trajectory_length": int(state.recent_trajectory_length),
+            "scan_radius": int(state.scan_radius),
+            "status_message": str(state.status_message),
+            "last_transition": None
+            if transition is None
+            else {
+                "step": int(transition.step),
+                "action_key": str(transition.action_key),
+                "before_snapshot": self._snapshot_metadata(transition.before_snapshot),
+                "after_snapshot": self._snapshot_metadata(transition.after_snapshot),
+            },
+        }
+
+    @classmethod
+    def _state_from_npz(cls, path: Path) -> MethodFigureRuntimeState:
+        with np.load(path, allow_pickle=False) as data:
+            metadata = json.loads(str(data["metadata"].item()))
+            if metadata.get("format") != "interactive_method_figure_export_state":
+                raise ValueError(f"unsupported interactive method state format in {path}")
+            if int(metadata.get("version", 0)) != 1:
+                raise ValueError(f"unsupported interactive method state version in {path}")
+            transition_meta = metadata.get("last_transition")
+            transition = None
+            if transition_meta is not None:
+                transition = CachedTransition(
+                    step=int(transition_meta["step"]),
+                    action_key=str(transition_meta["action_key"]),
+                    before_snapshot=cls._snapshot_from_npz(
+                        transition_meta["before_snapshot"],
+                        data,
+                        "last_before",
+                    ),
+                    after_snapshot=cls._snapshot_from_npz(
+                        transition_meta["after_snapshot"],
+                        data,
+                        "last_after",
+                    ),
+                )
+            return MethodFigureRuntimeState(
+                true_grid=np.asarray(data["true_grid"], dtype=np.int8).copy(),
+                free_mask=np.asarray(data["free_mask"], dtype=bool).copy(),
+                local_snap=np.asarray(data["local_snap"], dtype=np.int8).copy(),
+                trajectory_world=np.asarray(data["trajectory_world"], dtype=np.int32).reshape((-1, 2)).copy(),
+                cum_map_map=np.asarray(data["cum_map_map"], dtype=np.int8).copy(),
+                cum_map_visit_count=np.asarray(data["cum_map_visit_count"], dtype=np.int32).copy(),
+                cum_map_frontier_bool=np.asarray(data["cum_map_frontier_bool"], dtype=bool).copy(),
+                cum_map_frontier_u8=np.asarray(data["cum_map_frontier_u8"], dtype=np.uint8).copy(),
+                start_state=cls._tuple2(metadata, "start_state"),
+                agent_state=cls._tuple2(metadata, "agent_state"),
+                cum_map_origin_world_rc=cls._tuple2(metadata, "cum_map_origin_world_rc"),
+                cum_map_step_count=int(metadata["cum_map_step_count"]),
+                cum_map_coverage_rate=float(metadata["cum_map_coverage_rate"]),
+                cum_map_kpm_count=int(metadata["cum_map_kpm_count"]),
+                cum_map_tpm_count=int(metadata["cum_map_tpm_count"]),
+                cum_map_frontier_revision=int(metadata["cum_map_frontier_revision"]),
+                step=int(metadata["step"]),
+                recent_trajectory_length=int(metadata["recent_trajectory_length"]),
+                scan_radius=int(metadata["scan_radius"]),
+                status_message=str(metadata.get("status_message", "")),
+                last_transition=transition,
+            )
+
+    def restore_runtime_state(self, state: MethodFigureRuntimeState, *, preserve_undo: bool = False) -> None:
+        self.true_grid = np.asarray(state.true_grid, dtype=np.int8).copy()
+        self.free_mask = np.asarray(state.free_mask, dtype=bool).copy()
+        self.start_state = (int(state.start_state[0]), int(state.start_state[1]))
+        self.agent_state = (int(state.agent_state[0]), int(state.agent_state[1]))
+        self.sensor = RadarSensor(scan_radius=int(state.scan_radius))
+        self.obs_model = LocalObservationModel(self.true_grid, self.agent_state, sensor=self.sensor)
+        self.local_snap = np.asarray(state.local_snap, dtype=np.int8).copy()
+        self.obs_model.local_snap[:, :] = self.local_snap
+        self.cum_map = CumulativeBeliefMap(self.true_grid, self.start_state, self.local_snap)
+        self.cum_map.map = np.asarray(state.cum_map_map, dtype=np.int8).copy()
+        self.cum_map.visit_count = np.asarray(state.cum_map_visit_count, dtype=np.int32).copy()
+        self.cum_map.frontier_bool = np.asarray(state.cum_map_frontier_bool, dtype=bool).copy()
+        self.cum_map.frontier_u8 = np.asarray(state.cum_map_frontier_u8, dtype=np.uint8).copy()
+        self.cum_map.origin_world_rc = (
+            int(state.cum_map_origin_world_rc[0]),
+            int(state.cum_map_origin_world_rc[1]),
+        )
+        self.cum_map.step_count = int(state.cum_map_step_count)
+        self.cum_map.coverage_rate = float(state.cum_map_coverage_rate)
+        self.cum_map.kpm_count = int(state.cum_map_kpm_count)
+        self.cum_map.tpm_count = int(state.cum_map_tpm_count)
+        self.cum_map.frontier_revision = int(state.cum_map_frontier_revision)
+        self.cum_map._invalidate_visit_cache()
+        self.cum_map._invalidate_map_state_caches()
+        self.cum_map._update_analysis_box()
+
+        trajectory = np.asarray(state.trajectory_world, dtype=np.int32).reshape((-1, 2))
+        self.trajectory_world = [(int(row[0]), int(row[1])) for row in trajectory]
+        if not self.trajectory_world:
+            self.trajectory_world = [self.agent_state]
+        self.step = int(state.step)
+        self.recent_trajectory_length = max(0, int(state.recent_trajectory_length))
+        self.last_transition = self._copy_transition(state.last_transition)
+        self.status_message = str(state.status_message)
+        if not preserve_undo:
+            self.undo_history.clear()
+
+    def _default_state_path(self, directory: Path) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return Path(directory) / f"interactive_method_state_step{int(self.step):04d}_{timestamp}.npz"
+
+    def save_runtime_state(self, path: Path | None = None) -> Path:
+        state = self.capture_runtime_state()
+        save_path = Path(path) if path is not None else self._default_state_path(self.state_dir)
+        if save_path.suffix == "":
+            save_path = self._default_state_path(save_path)
+        elif save_path.suffix.lower() != ".npz":
+            save_path = save_path.with_suffix(".npz")
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = self._runtime_state_metadata(state)
+        arrays = {
+            "metadata": np.asarray(json.dumps(metadata, ensure_ascii=False)),
+            "true_grid": state.true_grid,
+            "free_mask": state.free_mask,
+            "local_snap": state.local_snap,
+            "trajectory_world": state.trajectory_world,
+            "cum_map_map": state.cum_map_map,
+            "cum_map_visit_count": state.cum_map_visit_count,
+            "cum_map_frontier_bool": state.cum_map_frontier_bool,
+            "cum_map_frontier_u8": state.cum_map_frontier_u8,
+        }
+        if state.last_transition is not None:
+            arrays.update(self._snapshot_arrays("last_before", state.last_transition.before_snapshot))
+            arrays.update(self._snapshot_arrays("last_after", state.last_transition.after_snapshot))
+        np.savez_compressed(save_path, **arrays)
+        self.status_message = f"Saved runtime state to {_format_output_path(save_path)}"
+        return save_path
+
+    def load_runtime_state(self, path: Path) -> Path:
+        load_path = Path(path)
+        if not load_path.exists() and load_path.suffix == "":
+            candidate = load_path.with_suffix(".npz")
+            if candidate.exists():
+                load_path = candidate
+        if not load_path.exists():
+            raise FileNotFoundError(f"interactive method state not found: {load_path}")
+        state = self._state_from_npz(load_path)
+        self.restore_runtime_state(state)
+        self.status_message = f"Loaded runtime state from {_format_output_path(load_path)}"
+        return load_path
+
+    def undo_last_state(self) -> bool:
+        if not self.undo_history:
+            self.status_message = "Undo history is empty."
+            return False
+        state = self.undo_history.pop()
+        self.restore_runtime_state(state, preserve_undo=True)
+        self.status_message = f"Undid one step; current step={self.step}."
+        return True
 
     def current_snapshot(self) -> Snapshot:
         return _capture_snapshot(
@@ -180,6 +485,7 @@ class InteractiveMethodFigureExporter:
                 raise RuntimeError(self.status_message)
             return False
 
+        self.undo_history.append(self.capture_runtime_state())
         next_step = int(self.step) + 1
         before_snapshot = _capture_snapshot(
             step=next_step,
@@ -359,7 +665,18 @@ class InteractiveMethodFigureExporter:
         return outputs
 
     def _on_key(self, event) -> None:
-        key = str(event.key or "").lower()
+        key = str(event.key or "").lower().replace("control+", "ctrl+")
+        if key in {"ctrl+s", "cmd+s"}:
+            try:
+                self.save_runtime_state()
+            except Exception as exc:
+                self.status_message = f"State save failed: {exc}"
+            self.refresh()
+            return
+        if key in {"ctrl+z", "cmd+z"}:
+            self.undo_last_state()
+            self.refresh()
+            return
         if key in KEY_TO_ACTION:
             self.execute_action(key)
             self.refresh()
@@ -404,6 +721,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactively control agent actions and export paper method assets.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--recent-trajectory-length", type=int, default=8)
+    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
+    parser.add_argument("--load-state", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--rows", type=int, default=40)
     parser.add_argument("--cols", type=int, default=60)
@@ -440,6 +759,8 @@ def main() -> None:
     exporter = InteractiveMethodFigureExporter(
         output_dir=Path(args.output_dir),
         recent_trajectory_length=int(args.recent_trajectory_length),
+        state_dir=Path(args.state_dir),
+        load_state=None if args.load_state is None else Path(args.load_state),
         config=config,
     )
 
