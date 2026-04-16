@@ -63,6 +63,7 @@ CLUSTER_PALETTE = (
     "#5b8e7d",
     "#d17b88",
 )
+RAW_FRONTIER_COLOR = CLUSTER_PALETTE[0]
 
 ANALYSIS_BOX_COLOR = "#0f4c5c"
 SUMMARY_BOX_COLOR = "#2f6f7e"
@@ -270,14 +271,6 @@ def _cluster_local_anchor(cluster: FrontierCluster, crop: CropBounds) -> tuple[f
     )
 
 
-def _block_local_centroid(block: UnknownBlock, crop: CropBounds) -> tuple[float, float]:
-    rows = np.asarray(block.rows, dtype=np.float32)
-    cols = np.asarray(block.cols, dtype=np.float32)
-    if rows.size <= 0 or cols.size <= 0:
-        return 0.0, 0.0
-    return float(np.mean(rows) - float(crop.r0)), float(np.mean(cols) - float(crop.c0))
-
-
 def _render_base_map(ax, belief_crop: np.ndarray) -> None:
     ax.imshow(_belief_rgba(belief_crop), origin="upper", interpolation="nearest")
 
@@ -292,79 +285,8 @@ def _overlay_mask(ax, mask: np.ndarray, *, color: str, alpha: float) -> None:
     ax.imshow(rgba, origin="upper", interpolation="nearest")
 
 
-def _draw_analysis_box_label(ax, crop: CropBounds, *, style: SharedSemanticAssetStyle) -> None:
-    inset = 0.12
-    ax.add_patch(
-        Rectangle(
-            (-0.5 + inset, -0.5 + inset),
-            float(crop.shape[1]) - (2.0 * inset),
-            float(crop.shape[0]) - (2.0 * inset),
-            fill=False,
-            edgecolor=ANALYSIS_BOX_COLOR,
-            linewidth=1.6,
-            linestyle="--",
-            alpha=0.92,
-            zorder=8,
-        )
-    )
-    ax.text(
-        0.7,
-        1.2,
-        "Zero-margin analysis box",
-        fontsize=float(style.label_font_size),
-        color="#102a43",
-        ha="left",
-        va="center",
-        bbox=dict(
-            boxstyle="round,pad=0.18",
-            facecolor="#ffffffde",
-            edgecolor="#d9e2ec",
-            linewidth=0.8,
-        ),
-        zorder=10,
-    )
-
-
-def _draw_parsing_links(
-    ax,
-    block: UnknownBlock,
-    crop: CropBounds,
-    *,
-    line_color: str,
-    node_color: str,
-) -> None:
-    centroid_r, centroid_c = _block_local_centroid(block, crop)
-    ax.scatter(
-        [centroid_c],
-        [centroid_r],
-        marker="o",
-        s=28,
-        c=node_color,
-        edgecolors="white",
-        linewidths=0.8,
-        zorder=8,
-    )
-    for cluster in block.frontier_clusters:
-        anchor_r, anchor_c = _cluster_local_anchor(cluster, crop)
-        ax.plot(
-            [anchor_c, centroid_c],
-            [anchor_r, centroid_r],
-            color=line_color,
-            linewidth=1.25,
-            alpha=0.82,
-            solid_capstyle="round",
-            zorder=7,
-        )
-        ax.scatter(
-            [anchor_c],
-            [anchor_r],
-            marker="o",
-            s=18,
-            c="#fff7d6",
-            edgecolors=line_color,
-            linewidths=0.8,
-            zorder=9,
-        )
+def _frontier_crop(scene: SemanticExportScene, crop: CropBounds) -> np.ndarray:
+    return np.asarray(scene.frontier_mask[crop.r0 : crop.r1, crop.c0 : crop.c1], dtype=bool)
 
 
 def _add_summary_card(
@@ -567,7 +489,7 @@ def _export_semantic_input_belief_map(
     belief_crop = _crop_belief(scene.snapshot, crop)
     fig, ax = _create_asset_axes(crop.shape, style=style)
     _render_base_map(ax, belief_crop)
-    _draw_analysis_box_label(ax, crop, style=style)
+    _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
     _save_asset_figure(fig, path, dpi=style.dpi)
 
 
@@ -590,21 +512,7 @@ def _export_frontier_parsing_overlay(
             color=block_color,
             alpha=float(style.parsing_block_alpha),
         )
-        _draw_parsing_links(
-            ax,
-            block,
-            crop,
-            line_color=block_color,
-            node_color=block_color,
-        )
-        for cluster_idx, cluster in enumerate(block.frontier_clusters):
-            frontier_color = CLUSTER_PALETTE[int(cluster_idx) % len(CLUSTER_PALETTE)]
-            _overlay_mask(
-                ax,
-                _mask_from_coords(np.asarray(cluster.rows), np.asarray(cluster.cols), crop),
-                color=frontier_color,
-                alpha=float(style.frontier_alpha),
-            )
+    _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
 
     _save_asset_figure(fig, path, dpi=style.dpi)
 
@@ -632,14 +540,6 @@ def _export_unknown_block(
         color=block_color,
         alpha=float(style.unknown_block_alpha),
     )
-    _draw_parsing_links(
-        ax,
-        focus_block,
-        crop,
-        line_color=block_color,
-        node_color=block_color,
-    )
-
     for cluster_idx, cluster in enumerate(focus_block.frontier_clusters):
         frontier_color = CLUSTER_PALETTE[int(cluster_idx) % len(CLUSTER_PALETTE)]
         _overlay_mask(
@@ -844,16 +744,16 @@ def _build_manifest(outputs: dict[str, Path], scene: SemanticExportScene) -> dic
         "files": {
             "semantic_input_belief_map.png": {
                 "path": _format_output_path(outputs["semantic_input_belief_map"]),
-                "paper_node": "Dynamic Cumulative Belief Map + Zero-margin Analysis Box",
+                "paper_node": "Dynamic Cumulative Belief Map + Raw Frontier",
                 "render_source": "real_code_data",
-                "data_basis": ["belief_map", "analysis_box"],
+                "data_basis": ["belief_map", "analysis_box", "raw_frontier"],
             },
             "frontier_parsing_overlay.png": {
                 "path": _format_output_path(outputs["frontier_parsing_overlay"]),
                 "paper_node": "Frontier-first Semantic Parsing",
-                "render_source": "real_code_data_with_light_visual_links",
-                "data_basis": ["belief_map", "analysis_box", "frontier_clusters", "unknown_blocks"],
-                "note": "Link lines are a visualization aid over real frontier anchors and grouped unknown blocks.",
+                "render_source": "real_code_data",
+                "data_basis": ["belief_map", "analysis_box", "raw_frontier", "unknown_blocks"],
+                "note": "Raw frontier is shown before clustered semantic outputs; debug-style center links are not rendered.",
             },
             "unknown_block.png": {
                 "path": _format_output_path(outputs["unknown_block"]),

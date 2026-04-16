@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib import font_manager
-from matplotlib.patches import Circle, FancyArrowPatch
+from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -126,6 +126,7 @@ class Snapshot:
     agent_world: tuple[int, int]
     agent_array: tuple[int, int]
     belief_origin_world: tuple[int, int]
+    analysis_box: tuple[int, int, int, int]
     trajectory_world: np.ndarray
     trajectory_array: np.ndarray
     local_snap: np.ndarray
@@ -198,6 +199,12 @@ def _capture_snapshot(
         agent_world=(int(agent_state[0]), int(agent_state[1])),
         agent_array=tuple(int(v) for v in cum_map.world_to_array(agent_state)),
         belief_origin_world=(int(cum_map.origin_world_rc[0]), int(cum_map.origin_world_rc[1])),
+        analysis_box=(
+            int(cum_map.analysis_box.r0),
+            int(cum_map.analysis_box.r1),
+            int(cum_map.analysis_box.c0),
+            int(cum_map.analysis_box.c1),
+        ),
         trajectory_world=trajectory_world_arr.copy(),
         trajectory_array=np.asarray(
             [tuple(int(v) for v in cum_map.world_to_array(tuple(world_rc))) for world_rc in trajectory_world_arr],
@@ -740,6 +747,7 @@ def _render_method_belief_axis(
     canvas: WorldCanvas,
     sensor: RadarSensor,
     style: MethodFigureStyle,
+    show_analysis_box: bool = False,
 ) -> None:
     belief_canvas = _project_belief_to_canvas(snapshot, canvas)
     ax.imshow(belief_canvas, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
@@ -749,6 +757,25 @@ def _render_method_belief_axis(
     if style.show_belief_scan_circle:
         _draw_scan_circle(ax, center_row=agent_row, center_col=agent_col, radius=float(sensor.scan_r))
     _draw_agent(ax, row=agent_row, col=agent_col)
+    if show_analysis_box:
+        r0, r1, c0, c1 = snapshot.analysis_box
+        world_r0 = int(snapshot.belief_origin_world[0]) + int(r0)
+        world_c0 = int(snapshot.belief_origin_world[1]) + int(c0)
+        canvas_r0 = world_r0 - int(canvas.origin_world[0])
+        canvas_c0 = world_c0 - int(canvas.origin_world[1])
+        ax.add_patch(
+            Rectangle(
+                (float(canvas_c0) - 0.5, float(canvas_r0) - 0.5),
+                float(int(c1) - int(c0)),
+                float(int(r1) - int(r0)),
+                fill=False,
+                edgecolor="#0f4c5c",
+                linewidth=1.05,
+                linestyle="-",
+                alpha=0.94,
+                zorder=8,
+            )
+        )
     _format_clean_axis(ax, canvas.shape)
 
 
@@ -819,9 +846,17 @@ def _export_method_belief_map(
     sensor: RadarSensor,
     style: MethodFigureStyle,
     dpi: int,
+    show_analysis_box: bool = False,
 ) -> None:
     fig, ax = _create_method_axis(canvas.shape, style=style)
-    _render_method_belief_axis(ax, snapshot=snapshot, canvas=canvas, sensor=sensor, style=style)
+    _render_method_belief_axis(
+        ax,
+        snapshot=snapshot,
+        canvas=canvas,
+        sensor=sensor,
+        style=style,
+        show_analysis_box=show_analysis_box,
+    )
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -958,6 +993,7 @@ def export_method_figure_assets(
         sensor=sensor,
         style=style,
         dpi=rollout_config.dpi,
+        show_analysis_box=True,
     )
 
     if include_observation_overlay:

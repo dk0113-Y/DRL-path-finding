@@ -18,24 +18,25 @@
   "files": {
     "semantic_input_belief_map.png": {
       "path": "run_picture/shared_semantic_layer_assets/semantic_input_belief_map.png",
-      "paper_node": "Dynamic Cumulative Belief Map + Zero-margin Analysis Box",
+      "paper_node": "Dynamic Cumulative Belief Map + Raw Frontier",
       "render_source": "real_code_data",
       "data_basis": [
         "belief_map",
-        "analysis_box"
+        "analysis_box",
+        "raw_frontier"
       ]
     },
     "frontier_parsing_overlay.png": {
       "path": "run_picture/shared_semantic_layer_assets/frontier_parsing_overlay.png",
       "paper_node": "Frontier-first Semantic Parsing",
-      "render_source": "real_code_data_with_light_visual_links",
+      "render_source": "real_code_data",
       "data_basis": [
         "belief_map",
         "analysis_box",
-        "frontier_clusters",
+        "raw_frontier",
         "unknown_blocks"
       ],
-      "note": "Link lines are a visualization aid over real frontier anchors and grouped unknown blocks."
+      "note": "Raw frontier is shown before clustered semantic outputs; debug-style center links are not rendered."
     },
     "unknown_block.png": {
       "path": "run_picture/shared_semantic_layer_assets/unknown_block.png",
