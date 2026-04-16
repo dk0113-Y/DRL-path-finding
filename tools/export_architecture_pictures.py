@@ -138,6 +138,7 @@ class MethodFigureAssets:
     step: int
     action_index: int
     action_key: str
+    trajectory_display_world: np.ndarray | None
     local_observation: Snapshot
     belief_before_update: Snapshot
     belief_after_update: Snapshot
@@ -246,9 +247,27 @@ def _run_deterministic_rollout_with_method_assets(
     config: ExportConfig,
     *,
     method_asset_step: int | None,
+    forced_method_action: str | None = None,
+    trajectory_visual_step: int | None = None,
 ) -> tuple[RadarSensor, dict[int, Snapshot], tuple[str, ...], tuple[str, ...], MethodFigureAssets | None]:
     if method_asset_step is not None and int(method_asset_step) <= 0:
         raise ValueError("method_asset_step must be >= 1")
+    forced_method_action_key: str | None = None
+    if forced_method_action is not None:
+        forced_method_action_key = str(forced_method_action).strip().lower()
+        if forced_method_action_key not in KEY_TO_ACTION:
+            allowed = ", ".join(sorted(KEY_TO_ACTION))
+            raise ValueError(f"forced_method_action must be one of: {allowed}")
+        if method_asset_step is None:
+            raise ValueError("forced_method_action requires method_asset_step")
+    if trajectory_visual_step is not None and int(trajectory_visual_step) < 0:
+        raise ValueError("trajectory_visual_step must be >= 0")
+    if (
+        method_asset_step is not None
+        and trajectory_visual_step is not None
+        and int(trajectory_visual_step) > int(method_asset_step)
+    ):
+        raise ValueError("trajectory_visual_step cannot exceed method_asset_step for method asset export")
 
     _set_global_seed(config.seed)
 
@@ -267,9 +286,17 @@ def _run_deterministic_rollout_with_method_assets(
     cum_map = CumulativeBeliefMap(true_grid, start_state, local_snap)
 
     checkpoints = {0, int(config.step_mid), int(config.step_late)}
-    rollout_horizon = max(int(config.step_mid), int(config.step_late), int(method_asset_step or 0))
+    rollout_horizon = max(
+        int(config.step_mid),
+        int(config.step_late),
+        int(method_asset_step or 0),
+        int(trajectory_visual_step or 0),
+    )
     agent_state = (int(start_state[0]), int(start_state[1]))
     trajectory_world = [agent_state]
+    trajectory_display_world: np.ndarray | None = None
+    if trajectory_visual_step is not None and int(trajectory_visual_step) == 0:
+        trajectory_display_world = np.asarray(trajectory_world, dtype=np.int32).copy()
     snapshots: dict[int, Snapshot] = {
         0: _capture_snapshot(
             step=0,
@@ -293,7 +320,19 @@ def _run_deterministic_rollout_with_method_assets(
         if not valid_actions:
             raise RuntimeError(f"agent has no legal moves at step {step_idx}")
 
-        if desired_action in valid_actions:
+        if (
+            method_asset_step is not None
+            and forced_method_action_key is not None
+            and step_idx == int(method_asset_step)
+        ):
+            chosen_action = int(KEY_TO_ACTION[forced_method_action_key])
+            if chosen_action not in valid_actions:
+                valid_keys = " ".join(ACTION_TO_KEY[int(action_idx)] for action_idx in valid_actions)
+                raise RuntimeError(
+                    f"forced method action '{forced_method_action_key}' is illegal at step {step_idx}; "
+                    f"valid actions: {valid_keys}"
+                )
+        elif desired_action in valid_actions:
             chosen_action = desired_action
         else:
             chosen_action = _select_fallback_action(
@@ -317,6 +356,8 @@ def _run_deterministic_rollout_with_method_assets(
         agent_state = (int(agent_state[0] + dr), int(agent_state[1] + dc))
         visit_counts[agent_state] = int(visit_counts.get(agent_state, 0) + 1)
         trajectory_world.append(agent_state)
+        if trajectory_visual_step is not None and step_idx == int(trajectory_visual_step):
+            trajectory_display_world = np.asarray(trajectory_world, dtype=np.int32).copy()
 
         local_snap = np.asarray(obs_model.observe_fast(agent_state), dtype=np.int8).copy()
         cum_map.update(agent_state, local_snap)
@@ -355,10 +396,13 @@ def _run_deterministic_rollout_with_method_assets(
             or method_action_key is None
         ):
             raise RuntimeError(f"missing before/after snapshots for method asset step {method_asset_step}")
+        if trajectory_visual_step is not None and trajectory_display_world is None:
+            raise RuntimeError(f"missing trajectory display source for step {trajectory_visual_step}")
         method_assets = MethodFigureAssets(
             step=int(method_asset_step),
             action_index=int(method_action_index),
             action_key=str(method_action_key),
+            trajectory_display_world=trajectory_display_world,
             local_observation=method_after_update,
             belief_before_update=method_before_update,
             belief_after_update=method_after_update,
@@ -697,19 +741,31 @@ def _project_belief_to_canvas(snapshot: Snapshot, canvas: WorldCanvas) -> np.nda
     return belief_canvas
 
 
-def _trajectory_world_to_canvas(snapshot: Snapshot, canvas: WorldCanvas) -> tuple[np.ndarray, np.ndarray]:
-    if snapshot.trajectory_world.size <= 0:
+def _trajectory_world_to_canvas(
+    snapshot: Snapshot,
+    canvas: WorldCanvas,
+    *,
+    trajectory_world: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    display_trajectory = snapshot.trajectory_world if trajectory_world is None else np.asarray(trajectory_world, dtype=np.int32)
+    if display_trajectory.size <= 0:
         return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.float32)
-    rows = snapshot.trajectory_world[:, 0].astype(np.float32) - float(canvas.origin_world[0])
-    cols = snapshot.trajectory_world[:, 1].astype(np.float32) - float(canvas.origin_world[1])
+    rows = display_trajectory[:, 0].astype(np.float32) - float(canvas.origin_world[0])
+    cols = display_trajectory[:, 1].astype(np.float32) - float(canvas.origin_world[1])
     return rows, cols
 
 
-def _trajectory_world_to_local(snapshot: Snapshot, sensor: RadarSensor) -> tuple[np.ndarray, np.ndarray]:
-    if snapshot.trajectory_world.size <= 0:
+def _trajectory_world_to_local(
+    snapshot: Snapshot,
+    sensor: RadarSensor,
+    *,
+    trajectory_world: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    display_trajectory = snapshot.trajectory_world if trajectory_world is None else np.asarray(trajectory_world, dtype=np.int32)
+    if display_trajectory.size <= 0:
         return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.float32)
-    rows = snapshot.trajectory_world[:, 0].astype(np.float32) - float(snapshot.agent_world[0]) + float(sensor.center_state[0])
-    cols = snapshot.trajectory_world[:, 1].astype(np.float32) - float(snapshot.agent_world[1]) + float(sensor.center_state[1])
+    rows = display_trajectory[:, 0].astype(np.float32) - float(snapshot.agent_world[0]) + float(sensor.center_state[0])
+    cols = display_trajectory[:, 1].astype(np.float32) - float(snapshot.agent_world[1]) + float(sensor.center_state[1])
     return rows, cols
 
 
@@ -725,9 +781,16 @@ def _apply_method_layout(fig: plt.Figure, style: MethodFigureStyle) -> None:
     fig.subplots_adjust(left=left, right=right, top=top, bottom=bottom)
 
 
-def _render_method_local_axis(ax, *, snapshot: Snapshot, sensor: RadarSensor, style: MethodFigureStyle) -> None:
+def _render_method_local_axis(
+    ax,
+    *,
+    snapshot: Snapshot,
+    sensor: RadarSensor,
+    style: MethodFigureStyle,
+    trajectory_world: np.ndarray | None = None,
+) -> None:
     ax.imshow(snapshot.local_snap, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
-    traj_rows, traj_cols = _trajectory_world_to_local(snapshot, sensor)
+    traj_rows, traj_cols = _trajectory_world_to_local(snapshot, sensor, trajectory_world=trajectory_world)
     _draw_trajectory(ax, traj_rows, traj_cols)
     if style.show_local_scan_circle:
         _draw_scan_circle(
@@ -748,10 +811,11 @@ def _render_method_belief_axis(
     sensor: RadarSensor,
     style: MethodFigureStyle,
     show_analysis_box: bool = False,
+    trajectory_world: np.ndarray | None = None,
 ) -> None:
     belief_canvas = _project_belief_to_canvas(snapshot, canvas)
     ax.imshow(belief_canvas, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
-    traj_rows, traj_cols = _trajectory_world_to_canvas(snapshot, canvas)
+    traj_rows, traj_cols = _trajectory_world_to_canvas(snapshot, canvas, trajectory_world=trajectory_world)
     _draw_trajectory(ax, traj_rows, traj_cols)
     agent_row, agent_col = _agent_world_to_canvas(snapshot, canvas)
     if style.show_belief_scan_circle:
@@ -787,6 +851,7 @@ def _render_observation_overlay_axis(
     canvas: WorldCanvas,
     sensor: RadarSensor,
     style: MethodFigureStyle,
+    trajectory_world: np.ndarray | None = None,
 ) -> None:
     belief_before_canvas = _project_belief_to_canvas(before_snapshot, canvas)
     ax.imshow(belief_before_canvas, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
@@ -816,7 +881,7 @@ def _render_observation_overlay_axis(
             )
 
     ax.imshow(overlay_rgba, origin="upper", interpolation="nearest")
-    traj_rows, traj_cols = _trajectory_world_to_canvas(after_snapshot, canvas)
+    traj_rows, traj_cols = _trajectory_world_to_canvas(after_snapshot, canvas, trajectory_world=trajectory_world)
     _draw_trajectory(ax, traj_rows, traj_cols, zorder=5)
     agent_row, agent_col = _agent_world_to_canvas(after_snapshot, canvas)
     if style.show_belief_scan_circle:
@@ -832,9 +897,10 @@ def _export_method_local_observation(
     sensor: RadarSensor,
     style: MethodFigureStyle,
     dpi: int,
+    trajectory_world: np.ndarray | None = None,
 ) -> None:
     fig, ax = _create_method_axis(snapshot.local_snap.shape, style=style)
-    _render_method_local_axis(ax, snapshot=snapshot, sensor=sensor, style=style)
+    _render_method_local_axis(ax, snapshot=snapshot, sensor=sensor, style=style, trajectory_world=trajectory_world)
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -847,6 +913,7 @@ def _export_method_belief_map(
     style: MethodFigureStyle,
     dpi: int,
     show_analysis_box: bool = False,
+    trajectory_world: np.ndarray | None = None,
 ) -> None:
     fig, ax = _create_method_axis(canvas.shape, style=style)
     _render_method_belief_axis(
@@ -856,6 +923,7 @@ def _export_method_belief_map(
         sensor=sensor,
         style=style,
         show_analysis_box=show_analysis_box,
+        trajectory_world=trajectory_world,
     )
     _save_figure(fig, path, dpi=dpi, tight=False)
 
@@ -869,6 +937,7 @@ def _export_method_overlay(
     sensor: RadarSensor,
     style: MethodFigureStyle,
     dpi: int,
+    trajectory_world: np.ndarray | None = None,
 ) -> None:
     fig, ax = _create_method_axis(canvas.shape, style=style)
     _render_observation_overlay_axis(
@@ -878,6 +947,7 @@ def _export_method_overlay(
         canvas=canvas,
         sensor=sensor,
         style=style,
+        trajectory_world=trajectory_world,
     )
     _save_figure(fig, path, dpi=dpi, tight=False)
 
@@ -926,6 +996,8 @@ def export_method_figure_assets(
     *,
     config: ExportConfig | None = None,
     step: int | None = None,
+    forced_method_action: str | None = None,
+    trajectory_visual_step: int | None = None,
     include_observation_overlay: bool = True,
     include_executed_action_arrow: bool = True,
     show_local_scan_circle: bool = True,
@@ -955,10 +1027,13 @@ def export_method_figure_assets(
     sensor, _, _, _, method_assets = _run_deterministic_rollout_with_method_assets(
         rollout_config,
         method_asset_step=target_step,
+        forced_method_action=forced_method_action,
+        trajectory_visual_step=trajectory_visual_step,
     )
     if method_assets is None:
         raise RuntimeError("method figure asset export did not capture before/after snapshots")
 
+    trajectory_display_world = method_assets.trajectory_display_world
     canvas = _build_method_world_canvas(
         method_assets.belief_before_update,
         method_assets.belief_after_update,
@@ -977,6 +1052,7 @@ def export_method_figure_assets(
         sensor=sensor,
         style=style,
         dpi=rollout_config.dpi,
+        trajectory_world=trajectory_display_world,
     )
     _export_method_belief_map(
         outputs["belief_before_update"],
@@ -985,6 +1061,7 @@ def export_method_figure_assets(
         sensor=sensor,
         style=style,
         dpi=rollout_config.dpi,
+        trajectory_world=trajectory_display_world,
     )
     _export_method_belief_map(
         outputs["belief_after_update"],
@@ -994,6 +1071,7 @@ def export_method_figure_assets(
         style=style,
         dpi=rollout_config.dpi,
         show_analysis_box=True,
+        trajectory_world=trajectory_display_world,
     )
 
     if include_observation_overlay:
@@ -1006,6 +1084,7 @@ def export_method_figure_assets(
             sensor=sensor,
             style=style,
             dpi=rollout_config.dpi,
+            trajectory_world=trajectory_display_world,
         )
 
     if include_executed_action_arrow:
@@ -1113,6 +1192,14 @@ def export_legacy_architecture_pictures(
     return outputs, planned_keys, executed_keys
 
 
+def _parse_action_key_arg(value: str) -> str:
+    action_key = str(value).strip().lower()
+    if action_key not in KEY_TO_ACTION:
+        allowed = ", ".join(sorted(KEY_TO_ACTION))
+        raise argparse.ArgumentTypeError(f"must be one of: {allowed}")
+    return action_key
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Export architecture or method-figure static assets.")
     parser.add_argument(
@@ -1135,6 +1222,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Target step used by --mode method-assets. Defaults to --step-late.",
+    )
+    parser.add_argument(
+        "--forced-method-action",
+        type=_parse_action_key_arg,
+        default=None,
+        help="Force the specified key action only at --method-step for --mode method-assets.",
+    )
+    parser.add_argument(
+        "--trajectory-visual-step",
+        type=int,
+        default=None,
+        help="Truncate only the rendered trajectory to this rollout step for --mode method-assets.",
     )
     parser.add_argument("--dpi", type=int, default=240)
     parser.add_argument(
@@ -1200,6 +1299,8 @@ def cli_main() -> None:
         args.output_dir,
         config=config,
         step=method_step,
+        forced_method_action=args.forced_method_action,
+        trajectory_visual_step=args.trajectory_visual_step,
         include_observation_overlay=bool(args.include_observation_overlay),
         include_executed_action_arrow=bool(args.include_executed_action_arrow),
         show_local_scan_circle=bool(args.show_local_scan_circle),
@@ -1208,6 +1309,8 @@ def cli_main() -> None:
     print(f"mode={args.mode}")
     print(f"seed={config.seed}")
     print(f"method_asset_step={method_step}")
+    print(f"forced_method_action={args.forced_method_action or ''}")
+    print(f"trajectory_visual_step={args.trajectory_visual_step if args.trajectory_visual_step is not None else ''}")
     print(f"show_local_scan_circle={bool(args.show_local_scan_circle)}")
     print(f"show_belief_scan_circle={bool(args.show_belief_scan_circle)}")
     for name, output in outputs.items():
