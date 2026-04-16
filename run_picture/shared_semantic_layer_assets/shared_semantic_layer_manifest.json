@@ -1,0 +1,80 @@
+{
+  "scene": {
+    "seed": 0,
+    "requested_step": 4,
+    "resolved_step": 4,
+    "analysis_box": {
+      "r0": 7,
+      "r1": 32,
+      "c0": 9,
+      "c1": 31,
+      "margin": 0
+    },
+    "focus_block_index": 1,
+    "focus_frontier_index": 3,
+    "focus_block_frontier_cluster_count": 4,
+    "focus_block_area": 75
+  },
+  "files": {
+    "semantic_input_belief_map.png": {
+      "path": "run_picture/shared_semantic_layer_assets/semantic_input_belief_map.png",
+      "paper_node": "Dynamic Cumulative Belief Map + Zero-margin Analysis Box",
+      "render_source": "real_code_data",
+      "data_basis": [
+        "belief_map",
+        "analysis_box"
+      ]
+    },
+    "frontier_parsing_overlay.png": {
+      "path": "run_picture/shared_semantic_layer_assets/frontier_parsing_overlay.png",
+      "paper_node": "Frontier-first Semantic Parsing",
+      "render_source": "real_code_data_with_light_visual_links",
+      "data_basis": [
+        "belief_map",
+        "analysis_box",
+        "frontier_clusters",
+        "unknown_blocks"
+      ],
+      "note": "Link lines are a visualization aid over real frontier anchors and grouped unknown blocks."
+    },
+    "unknown_block.png": {
+      "path": "run_picture/shared_semantic_layer_assets/unknown_block.png",
+      "paper_node": "Unknown Block",
+      "render_source": "real_code_data",
+      "data_basis": [
+        "focus_unknown_block",
+        "frontier_clusters"
+      ]
+    },
+    "frontier_cluster.png": {
+      "path": "run_picture/shared_semantic_layer_assets/frontier_cluster.png",
+      "paper_node": "Frontier Cluster",
+      "render_source": "real_code_data",
+      "data_basis": [
+        "focus_frontier_cluster"
+      ]
+    },
+    "local_attribute_summary.png": {
+      "path": "run_picture/shared_semantic_layer_assets/local_attribute_summary.png",
+      "paper_node": "Local Attribute Summary",
+      "render_source": "real_code_data_with_summary_card",
+      "data_basis": [
+        "focus_frontier_cluster",
+        "support_local_box",
+        "support_obstacle_density",
+        "entry_width"
+      ],
+      "note": "The card is a compact visualization of real local summary attributes rather than a support dilation region."
+    },
+    "shared_semantic_states.png": {
+      "path": "run_picture/shared_semantic_layer_assets/shared_semantic_states.png",
+      "paper_node": "Shared Semantic States",
+      "render_source": "real_code_data_with_compact_state_card",
+      "data_basis": [
+        "focus_unknown_block",
+        "focus_frontier_cluster",
+        "semantic_metrics"
+      ]
+    }
+  }
+}
