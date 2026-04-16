@@ -36,7 +36,7 @@ def main() -> None:
     )
     exporter = InteractiveMethodFigureExporter(
         output_dir=Path(args.output_dir),
-        recent_trajectory_length=8,
+        recent_trajectory_length=10,
         state_dir=DEFAULT_STATE_DIR,
         load_state=Path(args.load_state),
         config=config,

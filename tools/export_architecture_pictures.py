@@ -1072,7 +1072,6 @@ def export_method_figure_assets(
         sensor=sensor,
         style=style,
         dpi=rollout_config.dpi,
-        show_analysis_box=True,
         trajectory_world=trajectory_display_world,
     )
 

@@ -35,6 +35,8 @@ from tools.export_architecture_pictures import (
     Snapshot,
     _capture_snapshot,
     _clear_old_png_outputs,
+    _draw_agent,
+    _draw_trajectory,
     _format_output_path,
     _select_fallback_action,
     _set_global_seed,
@@ -66,6 +68,8 @@ CLUSTER_PALETTE = (
     "#d17b88",
 )
 RAW_FRONTIER_COLOR = CLUSTER_PALETTE[0]
+UNKNOWN_BLOCK_BOX_COLOR = "#2f6f7e"
+DEFAULT_SEMANTIC_TRAJECTORY_LENGTH = 10
 
 ANALYSIS_BOX_COLOR = "#0f4c5c"
 SUMMARY_BOX_COLOR = "#2f6f7e"
@@ -287,6 +291,81 @@ def _overlay_mask(ax, mask: np.ndarray, *, color: str, alpha: float) -> None:
     ax.imshow(rgba, origin="upper", interpolation="nearest")
 
 
+def _recent_trajectory_window(trajectory_world: np.ndarray, length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH) -> np.ndarray:
+    trajectory = np.asarray(trajectory_world, dtype=np.int32)
+    if trajectory.ndim != 2 or trajectory.shape[1] != 2:
+        trajectory = trajectory.reshape((-1, 2))
+    max_points = max(0, int(length)) + 1
+    if trajectory.shape[0] <= max_points:
+        return trajectory.copy()
+    return trajectory[-max_points:].copy()
+
+
+def _draw_cropped_trajectory_and_agent(
+    ax,
+    snapshot: Snapshot,
+    crop: CropBounds,
+    *,
+    trajectory_world: np.ndarray | None = None,
+) -> None:
+    trajectory = (
+        _recent_trajectory_window(snapshot.trajectory_world)
+        if trajectory_world is None
+        else np.asarray(trajectory_world, dtype=np.int32).reshape((-1, 2))
+    )
+    if trajectory.size > 0:
+        origin_r, origin_c = int(snapshot.belief_origin_world[0]), int(snapshot.belief_origin_world[1])
+        rows = trajectory[:, 0].astype(np.float32) - float(origin_r) - float(crop.r0)
+        cols = trajectory[:, 1].astype(np.float32) - float(origin_c) - float(crop.c0)
+        inside = (
+            (rows >= -0.5)
+            & (rows <= float(crop.shape[0]) - 0.5)
+            & (cols >= -0.5)
+            & (cols <= float(crop.shape[1]) - 0.5)
+        )
+        start = 0
+        for idx in range(int(inside.size) + 1):
+            if idx < int(inside.size) and bool(inside[idx]):
+                continue
+            if idx - start > 1:
+                _draw_trajectory(ax, rows[start:idx], cols[start:idx], zorder=6)
+            start = idx + 1
+
+    agent_r = float(int(snapshot.agent_array[0]) - int(crop.r0))
+    agent_c = float(int(snapshot.agent_array[1]) - int(crop.c0))
+    if -0.5 <= agent_r <= float(crop.shape[0]) - 0.5 and -0.5 <= agent_c <= float(crop.shape[1]) - 0.5:
+        _draw_agent(ax, row=agent_r, col=agent_c, zorder=7)
+
+
+def _add_local_bounds_box(
+    ax,
+    bounds: CropBounds,
+    crop: CropBounds,
+    *,
+    edge_color: str = UNKNOWN_BLOCK_BOX_COLOR,
+    linewidth: float = 1.15,
+) -> None:
+    local_r0 = float(int(bounds.r0) - int(crop.r0)) - 0.5
+    local_c0 = float(int(bounds.c0) - int(crop.c0)) - 0.5
+    width = float(int(bounds.c1) - int(bounds.c0))
+    height = float(int(bounds.r1) - int(bounds.r0))
+    if width <= 0.0 or height <= 0.0:
+        return
+    ax.add_patch(
+        Rectangle(
+            (local_c0, local_r0),
+            width,
+            height,
+            fill=False,
+            edgecolor=edge_color,
+            linewidth=linewidth,
+            linestyle="-",
+            alpha=0.92,
+            zorder=5,
+        )
+    )
+
+
 def _frontier_crop(scene: SemanticExportScene, crop: CropBounds) -> np.ndarray:
     return np.asarray(scene.frontier_mask[crop.r0 : crop.r1, crop.c0 : crop.c1], dtype=bool)
 
@@ -486,12 +565,14 @@ def _export_semantic_input_belief_map(
     scene: SemanticExportScene,
     *,
     style: SharedSemanticAssetStyle,
+    trajectory_world: np.ndarray | None = None,
 ) -> None:
     crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
     belief_crop = _crop_belief(scene.snapshot, crop)
     fig, ax = _create_asset_axes(crop.shape, style=style)
     _render_base_map(ax, belief_crop)
     _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
+    _draw_cropped_trajectory_and_agent(ax, scene.snapshot, crop, trajectory_world=trajectory_world)
     _save_asset_figure(fig, path, dpi=style.dpi)
 
 
@@ -506,14 +587,8 @@ def _export_frontier_parsing_overlay(
     fig, ax = _create_asset_axes(crop.shape, style=style)
     _render_base_map(ax, belief_crop)
 
-    for block_idx, block in enumerate(scene.semantic_snapshot.accessible_blocks):
-        block_color = BLOCK_PALETTE[int(block_idx) % len(BLOCK_PALETTE)]
-        _overlay_mask(
-            ax,
-            _mask_from_coords(np.asarray(block.rows), np.asarray(block.cols), crop),
-            color=block_color,
-            alpha=float(style.parsing_block_alpha),
-        )
+    for block in scene.semantic_snapshot.accessible_blocks:
+        _add_local_bounds_box(ax, _bounds_for_block(block), crop)
     _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
 
     _save_asset_figure(fig, path, dpi=style.dpi)
@@ -748,14 +823,14 @@ def _build_manifest(outputs: dict[str, Path], scene: SemanticExportScene) -> dic
                 "path": _format_output_path(outputs["semantic_input_belief_map"]),
                 "paper_node": "Dynamic Cumulative Belief Map + Raw Frontier",
                 "render_source": "real_code_data",
-                "data_basis": ["belief_map", "analysis_box", "raw_frontier"],
+                "data_basis": ["belief_map", "analysis_box", "raw_frontier", "recent_trajectory", "agent_state"],
             },
             "frontier_parsing_overlay.png": {
                 "path": _format_output_path(outputs["frontier_parsing_overlay"]),
                 "paper_node": "Frontier-first Semantic Parsing",
                 "render_source": "real_code_data",
                 "data_basis": ["belief_map", "analysis_box", "raw_frontier", "unknown_blocks"],
-                "note": "Raw frontier is shown before clustered semantic outputs; debug-style center links are not rendered.",
+                "note": "Raw frontier is shown before clustered semantic outputs; unknown blocks are framed with uniform local boxes, and debug-style center links are not rendered.",
             },
             "unknown_block.png": {
                 "path": _format_output_path(outputs["unknown_block"]),

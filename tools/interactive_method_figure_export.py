@@ -149,7 +149,7 @@ class InteractiveMethodFigureExporter:
         self.semantic_style = SharedSemanticAssetStyle(dpi=int(config.dpi))
         self.semantic_layer = SharedSemanticLayer()
         self.status_message = "Action keys move; p/Export exports images; k saves state; Ctrl+Z undoes."
-        self.undo_history: deque[MethodFigureRuntimeState] = deque(maxlen=8)
+        self.undo_history: deque[MethodFigureRuntimeState] = deque(maxlen=10)
 
         self.fig = None
         self.axes = None
@@ -623,7 +623,6 @@ class InteractiveMethodFigureExporter:
             sensor=self.sensor,
             style=self.method_style,
             dpi=int(self.config.dpi),
-            show_analysis_box=True,
             trajectory_world=after_recent,
         )
         _export_method_overlay(
@@ -645,7 +644,12 @@ class InteractiveMethodFigureExporter:
         )
 
         scene = self._semantic_scene(transition.after_snapshot)
-        _export_semantic_input_belief_map(outputs["semantic_input_belief_map"], scene, style=self.semantic_style)
+        _export_semantic_input_belief_map(
+            outputs["semantic_input_belief_map"],
+            scene,
+            style=self.semantic_style,
+            trajectory_world=after_recent,
+        )
         _export_frontier_parsing_overlay(outputs["frontier_parsing_overlay"], scene, style=self.semantic_style)
 
         manifest = {
@@ -721,7 +725,7 @@ class InteractiveMethodFigureExporter:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactively control agent actions and export paper method assets.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--recent-trajectory-length", type=int, default=8)
+    parser.add_argument("--recent-trajectory-length", type=int, default=10)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR, help="Directory for k state snapshots.")
     parser.add_argument("--load-state", type=Path, default=None, help="Load a saved .npz interactive method state.")
     parser.add_argument("--seed", type=int, default=0)
