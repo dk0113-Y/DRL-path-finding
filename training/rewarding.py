@@ -3,11 +3,14 @@ from __future__ import annotations
 import math
 
 
+# Diagnostic-only threshold for stall event counting. Stall no longer
+# contributes to formal reward; this value only defines stall_trigger_count.
+STALL_DIAGNOSTIC_WINDOW = 8
+
 REWARD_BREAKDOWN_FIELDS: tuple[str, ...] = (
     "info_reward_sum",
     "step_penalty_sum",
     "recent_revisit_penalty_sum",
-    "stall_penalty_sum",
     "turn_penalty_sum",
     "timeout_penalty_sum",
     "terminal_bonus_sum",
@@ -145,7 +148,6 @@ def valid_step_reward(
     delta_obstacle: int,
     info_norm: float,
     recent_revisit: bool,
-    stall_triggered: bool,
     turn_penalty_weight: float = 0.0,
     success: bool,
 ) -> float:
@@ -156,7 +158,6 @@ def valid_step_reward(
             delta_obstacle=delta_obstacle,
             info_norm=info_norm,
             recent_revisit=recent_revisit,
-            stall_triggered=stall_triggered,
             turn_penalty_weight=turn_penalty_weight,
             success=success,
         )
@@ -170,7 +171,6 @@ def valid_step_reward_breakdown(
     delta_obstacle: int,
     info_norm: float,
     recent_revisit: bool,
-    stall_triggered: bool,
     turn_penalty_weight: float = 0.0,
     success: bool,
 ) -> dict[str, float]:
@@ -178,9 +178,10 @@ def valid_step_reward_breakdown(
     #   weighted information gain
     #   - fixed step cost
     #   - recent revisit penalty over the trajectory_history_steps horizon
-    #   - stall penalty after consecutive zero-info steps
     #   - turn penalty = reward_turn_penalty_scale * explicit angle weight
     #   + success bonus
+    #
+    # Stall/zero-info events are diagnostic-only and are not part of reward.
     breakdown = zero_reward_breakdown()
     info_metrics = info_gain_components(
         delta_empty=delta_empty,
@@ -194,8 +195,6 @@ def valid_step_reward_breakdown(
 
     if recent_revisit:
         breakdown["recent_revisit_penalty_sum"] = float(-cfg.reward_revisit_penalty)
-    if stall_triggered:
-        breakdown["stall_penalty_sum"] = float(-cfg.reward_stall_penalty)
     if float(turn_penalty_weight) > 0.0:
         breakdown["turn_penalty_sum"] = float(-cfg.reward_turn_penalty_scale * float(turn_penalty_weight))
     if success:

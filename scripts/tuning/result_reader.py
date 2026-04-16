@@ -56,7 +56,6 @@ CHECKPOINT_CONFIG_KEYS = [
     "total_env_steps",
     "reward_turn_penalty_scale",
     "reward_revisit_penalty",
-    "reward_stall_penalty",
     "max_accessible_blocks",
     "max_entries_per_block",
 ]

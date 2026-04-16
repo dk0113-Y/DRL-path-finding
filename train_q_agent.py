@@ -113,12 +113,10 @@ class TrainConfig:
 
     reward_info_scale: float = 3.0
     reward_obstacle_weight: float = 0.25
-    reward_stall_window: int = 8
     reward_step_penalty: float = 0.02
     reward_terminal_bonus: float = 20.0
     # Current working default reward combo is turn=0.05 / revisit=0.10; historical baselines remain useful for A/B runs.
     reward_revisit_penalty: float = 0.10
-    reward_stall_penalty: float = 0.12
     reward_turn_penalty_scale: float = 0.05  # total turn penalty scale; angle-specific weights are configured below.
     reward_turn_weight_45: float = 0.0
     reward_turn_weight_90: float = 1.0 / 3.0
@@ -598,11 +596,9 @@ def build_system(cfg: TrainConfig):
         trajectory_history_steps=int(cfg.trajectory_history_steps),
         reward_info_scale=float(cfg.reward_info_scale),
         reward_obstacle_weight=float(cfg.reward_obstacle_weight),
-        reward_stall_window=int(cfg.reward_stall_window),
         reward_step_penalty=float(cfg.reward_step_penalty),
         reward_terminal_bonus=float(cfg.reward_terminal_bonus),
         reward_revisit_penalty=float(cfg.reward_revisit_penalty),
-        reward_stall_penalty=float(cfg.reward_stall_penalty),
         reward_turn_penalty_scale=float(cfg.reward_turn_penalty_scale),
         reward_turn_weight_45=float(cfg.reward_turn_weight_45),
         reward_turn_weight_90=float(cfg.reward_turn_weight_90),
@@ -1440,12 +1436,6 @@ def parse_args() -> TrainConfig:
         default=0.25,
         help="obstacle reveal weight inside the fixed half-perimeter information gain",
     )
-    p.add_argument(
-        "--reward-stall-window",
-        type=int,
-        default=8,
-        help="consecutive zero-info steps before stall penalty starts; kept unchanged in phase 1 as the control condition",
-    )
     p.add_argument("--reward-step-penalty", type=float, default=0.02, help="step penalty")
     p.add_argument("--reward-terminal-bonus", type=float, default=20.0, help="terminal success bonus")
     p.add_argument(
@@ -1454,7 +1444,6 @@ def parse_args() -> TrainConfig:
         default=0.10,
         help="recent revisit penalty; its horizon is fixed to trajectory_history_steps",
     )
-    p.add_argument("--reward-stall-penalty", type=float, default=0.12, help="stall penalty")
     p.add_argument(
         "--reward-turn-penalty-scale",
         type=float,
@@ -1585,11 +1574,9 @@ def parse_args() -> TrainConfig:
             max_episode_steps=80,
             reward_info_scale=args.reward_info_scale,
             reward_obstacle_weight=args.reward_obstacle_weight,
-            reward_stall_window=max(1, args.reward_stall_window),
             reward_step_penalty=args.reward_step_penalty,
             reward_terminal_bonus=args.reward_terminal_bonus,
             reward_revisit_penalty=args.reward_revisit_penalty,
-            reward_stall_penalty=args.reward_stall_penalty,
             reward_turn_penalty_scale=args.reward_turn_penalty_scale,
             reward_turn_weight_45=args.reward_turn_weight_45,
             reward_turn_weight_90=args.reward_turn_weight_90,
@@ -1678,11 +1665,9 @@ def parse_args() -> TrainConfig:
         obstacle_ratio=args.obstacle_ratio,
         reward_info_scale=args.reward_info_scale,
         reward_obstacle_weight=args.reward_obstacle_weight,
-        reward_stall_window=max(1, args.reward_stall_window),
         reward_step_penalty=args.reward_step_penalty,
         reward_terminal_bonus=args.reward_terminal_bonus,
         reward_revisit_penalty=args.reward_revisit_penalty,
-        reward_stall_penalty=args.reward_stall_penalty,
         reward_turn_penalty_scale=args.reward_turn_penalty_scale,
         reward_turn_weight_45=args.reward_turn_weight_45,
         reward_turn_weight_90=args.reward_turn_weight_90,
@@ -1821,11 +1806,9 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         coverage_stop_threshold=0.95,
         reward_info_scale=3.0,
         reward_obstacle_weight=0.25,
-        reward_stall_window=8,
         reward_step_penalty=0.02,
         reward_terminal_bonus=20.0,
         reward_revisit_penalty=0.10,
-        reward_stall_penalty=0.12,
         reward_turn_penalty_scale=0.05,
         reward_turn_weight_45=0.0,
         reward_turn_weight_90=(1.0 / 3.0),

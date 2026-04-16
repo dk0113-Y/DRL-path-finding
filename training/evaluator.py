@@ -20,6 +20,7 @@ from training.collector import CollectorConfig, SEMANTIC_EPISODE_FIELDS, summari
 from training.rewarding import (
     REWARD_BREAKDOWN_FIELDS,
     REWARD_EVENT_SUMMARY_FIELDS,
+    STALL_DIAGNOSTIC_WINDOW,
     add_reward_breakdown,
     finalize_reward_event_summary,
     fixed_half_perimeter_info_norm,
@@ -47,11 +48,9 @@ class EvaluatorConfig:
 
     reward_info_scale: float = 10.0
     reward_obstacle_weight: float = 0.25
-    reward_stall_window: int = 4
     reward_step_penalty: float = 0.01
     reward_terminal_bonus: float = 0.5
     reward_revisit_penalty: float = 0.05
-    reward_stall_penalty: float = 0.02
     reward_turn_penalty_scale: float = 0.0
     reward_turn_weight_45: float = 0.0
     reward_turn_weight_90: float = 1.0 / 3.0
@@ -87,7 +86,8 @@ class GreedyEvaluator:
         self.reward_info_norm = fixed_half_perimeter_info_norm(int(cfg.scan_radius))
         # Keep revisit-penalty horizon aligned with the explicit recent-trajectory branch.
         self._recent_revisit_horizon = max(1, int(cfg.trajectory_history_steps))
-        self._stall_window = max(1, int(cfg.reward_stall_window))
+        # Diagnostic-only threshold; stall events no longer contribute to formal reward.
+        self._stall_diagnostic_window = int(STALL_DIAGNOSTIC_WINDOW)
         self.generator = RandomMapGenerator(
             rows=cfg.rows,
             cols=cfg.cols,
@@ -112,11 +112,9 @@ class GreedyEvaluator:
             trajectory_history_steps=cfg.trajectory_history_steps,
             reward_info_scale=cfg.reward_info_scale,
             reward_obstacle_weight=cfg.reward_obstacle_weight,
-            reward_stall_window=cfg.reward_stall_window,
             reward_step_penalty=cfg.reward_step_penalty,
             reward_terminal_bonus=cfg.reward_terminal_bonus,
             reward_revisit_penalty=cfg.reward_revisit_penalty,
-            reward_stall_penalty=cfg.reward_stall_penalty,
             reward_turn_penalty_scale=cfg.reward_turn_penalty_scale,
             reward_turn_weight_45=cfg.reward_turn_weight_45,
             reward_turn_weight_90=cfg.reward_turn_weight_90,
@@ -390,7 +388,7 @@ class GreedyEvaluator:
                 stall_streak += 1
             else:
                 stall_streak = 0
-            stall_triggered = bool(stall_streak >= self._stall_window)
+            stall_triggered = bool(stall_streak >= self._stall_diagnostic_window)
             info_metrics = info_gain_components(
                 delta_empty=delta_empty,
                 delta_obstacle=delta_obstacle,
@@ -426,7 +424,6 @@ class GreedyEvaluator:
                 delta_obstacle=delta_obstacle,
                 info_norm=self.reward_info_norm,
                 recent_revisit=recent_revisit,
-                stall_triggered=stall_triggered,
                 turn_penalty_weight=turn_penalty_weight,
                 success=success,
             )

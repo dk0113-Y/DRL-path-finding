@@ -20,6 +20,7 @@ from env.shared_semantic_layer import build_semantic_visualization_payload
 from env.value_state_builder import VALUE_DIAGNOSTIC_FIELDS
 from training.rewarding import (
     REWARD_EVENT_SUMMARY_FIELDS,
+    STALL_DIAGNOSTIC_WINDOW,
     add_reward_breakdown,
     finalize_reward_event_summary,
     fixed_half_perimeter_info_norm,
@@ -81,11 +82,9 @@ class CollectorConfig:
 
     reward_info_scale: float = 10.0
     reward_obstacle_weight: float = 0.25
-    reward_stall_window: int = 4
     reward_step_penalty: float = 0.01
     reward_terminal_bonus: float = 0.5
     reward_revisit_penalty: float = 0.05
-    reward_stall_penalty: float = 0.02
     reward_turn_penalty_scale: float = 0.0
     reward_turn_weight_45: float = 0.0
     reward_turn_weight_90: float = 1.0 / 3.0
@@ -140,7 +139,8 @@ class TransitionCollector:
         # The short-horizon revisit penalty now shares the same horizon as the explicit
         # recent-trajectory branch so both signals operate on one consistent time scale.
         self._recent_revisit_horizon = self._trajectory_history_steps
-        self._stall_window = max(1, int(cfg.reward_stall_window))
+        # Diagnostic-only threshold; stall events no longer contribute to formal reward.
+        self._stall_diagnostic_window = int(STALL_DIAGNOSTIC_WINDOW)
         self.generator = RandomMapGenerator(
             rows=cfg.rows,
             cols=cfg.cols,
@@ -279,7 +279,7 @@ class TransitionCollector:
             self._stall_streak += 1
         else:
             self._stall_streak = 0
-        return bool(self._stall_streak >= self._stall_window)
+        return bool(self._stall_streak >= self._stall_diagnostic_window)
 
     def _build_state_tensors(self):
         if self._current_shared_artifacts is None:
@@ -506,7 +506,6 @@ class TransitionCollector:
                 delta_obstacle=delta_obstacle,
                 info_norm=self.reward_info_norm,
                 recent_revisit=recent_revisit,
-                stall_triggered=stall_triggered,
                 turn_penalty_weight=turn_penalty_weight,
                 success=success,
             )

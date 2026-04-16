@@ -11,10 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from training.rewarding import STALL_DIAGNOSTIC_WINDOW
 
-SCHEMA_VERSION = "formal_train_artifacts/v2"
+SCHEMA_VERSION = "formal_train_artifacts/v3"
 DEFAULT_MAIN_BASELINE_IDENTIFIER = "4.9_30万轮基线"
-CURRENT_FORMAL_PROTOCOL_REVISION = "formal_last_checkpoint_v2_1"
+CURRENT_FORMAL_PROTOCOL_REVISION = "formal_last_checkpoint_v2_2"
 
 RUNTIME_ONLY_FIELDS = (
     "enable_amp",
@@ -53,7 +54,6 @@ ALLOWED_TUNING_FIELDS = (
 )
 
 MANUAL_REVIEW_FIELDS = (
-    "reward_stall_penalty",
     "max_entries_per_block",
 )
 
@@ -93,7 +93,6 @@ FROZEN_COMPARABILITY_FIELDS = (
     "coverage_stop_threshold",
     "reward_info_scale",
     "reward_obstacle_weight",
-    "reward_stall_window",
     "reward_step_penalty",
     "reward_terminal_bonus",
     "reward_timeout_penalty",
@@ -104,7 +103,6 @@ REWARD_BREAKDOWN_FIELDS = (
     "info_reward_sum",
     "step_penalty_sum",
     "recent_revisit_penalty_sum",
-    "stall_penalty_sum",
     "turn_penalty_sum",
     "timeout_penalty_sum",
     "terminal_bonus_sum",
@@ -901,7 +899,7 @@ def _comparability_sections(config_dict: Mapping[str, Any]) -> dict[str, Any]:
     group_seed = json.dumps(_json_safe(frozen_fields), ensure_ascii=False, sort_keys=True).encode("utf-8")
     group_hash = hashlib.sha1(group_seed).hexdigest()[:12]
     return {
-        "comparability_group": f"formal_last_checkpoint_v2_1__{group_hash}",
+        "comparability_group": f"{CURRENT_FORMAL_PROTOCOL_REVISION}__{group_hash}",
         "frozen_fields": frozen_fields,
         "allowed_tuning_fields": allowed_tuning,
         "manual_review_fields": manual_review,
@@ -984,7 +982,14 @@ def build_config_snapshot(
                     ],
                     "per_step_formula": "reward_turn_penalty_scale * selected_turn_weight",
                 },
-                "stall_penalty_status": "retained_in_phase1_control_condition",
+                "stall_penalty_status": "removed_from_formal_reward_mainline",
+                "stall_diagnostic_rule": {
+                    "threshold": int(STALL_DIAGNOSTIC_WINDOW),
+                    "threshold_role": "internal_fixed_diagnostic_constant",
+                    "trigger_definition": "count one stall_trigger_count event when consecutive zero-info steps reach the threshold",
+                    "reward_effect": "no_formal_reward_effect",
+                },
+                "zero_info_step_count_role": "raw diagnostic event count; not a reward term",
             },
             "recent_train_role": "training_screening_and_ranking_support_only",
             "automatic_tuning_ranking_basis": {
