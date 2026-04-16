@@ -792,8 +792,6 @@ def _render_method_local_axis(
     trajectory_world: np.ndarray | None = None,
 ) -> None:
     ax.imshow(snapshot.local_snap, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
-    traj_rows, traj_cols = _trajectory_world_to_local(snapshot, sensor, trajectory_world=trajectory_world)
-    _draw_trajectory(ax, traj_rows, traj_cols)
     if style.show_local_scan_circle:
         _draw_scan_circle(
             ax,
@@ -902,7 +900,7 @@ def _export_method_local_observation(
     trajectory_world: np.ndarray | None = None,
 ) -> None:
     fig, ax = _create_method_axis(snapshot.local_snap.shape, style=style)
-    _render_method_local_axis(ax, snapshot=snapshot, sensor=sensor, style=style, trajectory_world=trajectory_world)
+    _render_method_local_axis(ax, snapshot=snapshot, sensor=sensor, style=style)
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -1054,7 +1052,6 @@ def export_method_figure_assets(
         sensor=sensor,
         style=style,
         dpi=rollout_config.dpi,
-        trajectory_world=trajectory_display_world,
     )
     _export_method_belief_map(
         outputs["belief_before_update"],

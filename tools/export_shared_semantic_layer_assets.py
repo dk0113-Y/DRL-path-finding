@@ -366,6 +366,50 @@ def _add_local_bounds_box(
     )
 
 
+def _iter_frontier_clusters(scene: SemanticExportScene) -> list[FrontierCluster]:
+    clusters: list[FrontierCluster] = []
+    for block in scene.semantic_snapshot.accessible_blocks:
+        clusters.extend(list(block.frontier_clusters))
+    return clusters
+
+
+def _render_frontier_clusters(
+    ax,
+    scene: SemanticExportScene,
+    crop: CropBounds,
+    *,
+    style: SharedSemanticAssetStyle,
+    alpha: float | None = None,
+) -> None:
+    alpha_use = float(style.frontier_alpha if alpha is None else alpha)
+    for cluster_idx, cluster in enumerate(_iter_frontier_clusters(scene)):
+        cluster_color = CLUSTER_PALETTE[int(cluster_idx) % len(CLUSTER_PALETTE)]
+        _overlay_mask(
+            ax,
+            _mask_from_coords(np.asarray(cluster.rows, dtype=np.int32), np.asarray(cluster.cols, dtype=np.int32), crop),
+            color=cluster_color,
+            alpha=alpha_use,
+        )
+
+
+def _render_cluster_analysis_boxes(
+    ax,
+    scene: SemanticExportScene,
+    crop: CropBounds,
+    *,
+    style: SharedSemanticAssetStyle,
+) -> None:
+    _render_frontier_clusters(ax, scene, crop, style=style, alpha=0.68)
+    for cluster in _iter_frontier_clusters(scene):
+        _add_local_bounds_box(
+            ax,
+            _bounds_for_support(cluster),
+            crop,
+            edge_color=UNKNOWN_BLOCK_BOX_COLOR,
+            linewidth=1.05,
+        )
+
+
 def _frontier_crop(scene: SemanticExportScene, crop: CropBounds) -> np.ndarray:
     return np.asarray(scene.frontier_mask[crop.r0 : crop.r1, crop.c0 : crop.c1], dtype=bool)
 
@@ -586,11 +630,35 @@ def _export_frontier_parsing_overlay(
     belief_crop = _crop_belief(scene.snapshot, crop)
     fig, ax = _create_asset_axes(crop.shape, style=style)
     _render_base_map(ax, belief_crop)
+    _render_cluster_analysis_boxes(ax, scene, crop, style=style)
+    _save_asset_figure(fig, path, dpi=style.dpi)
 
-    for block in scene.semantic_snapshot.accessible_blocks:
-        _add_local_bounds_box(ax, _bounds_for_block(block), crop)
-    _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
 
+def _export_frontier_cluster_overlay(
+    path: Path,
+    scene: SemanticExportScene,
+    *,
+    style: SharedSemanticAssetStyle,
+) -> None:
+    crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
+    belief_crop = _crop_belief(scene.snapshot, crop)
+    fig, ax = _create_asset_axes(crop.shape, style=style)
+    _render_base_map(ax, belief_crop)
+    _render_frontier_clusters(ax, scene, crop, style=style)
+    _save_asset_figure(fig, path, dpi=style.dpi)
+
+
+def _export_cluster_analysis_boxes(
+    path: Path,
+    scene: SemanticExportScene,
+    *,
+    style: SharedSemanticAssetStyle,
+) -> None:
+    crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
+    belief_crop = _crop_belief(scene.snapshot, crop)
+    fig, ax = _create_asset_axes(crop.shape, style=style)
+    _render_base_map(ax, belief_crop)
+    _render_cluster_analysis_boxes(ax, scene, crop, style=style)
     _save_asset_figure(fig, path, dpi=style.dpi)
 
 
@@ -829,8 +897,20 @@ def _build_manifest(outputs: dict[str, Path], scene: SemanticExportScene) -> dic
                 "path": _format_output_path(outputs["frontier_parsing_overlay"]),
                 "paper_node": "Frontier-first Semantic Parsing",
                 "render_source": "real_code_data",
-                "data_basis": ["belief_map", "analysis_box", "raw_frontier", "unknown_blocks"],
-                "note": "Raw frontier is shown before clustered semantic outputs; unknown blocks are framed with uniform local boxes, and debug-style center links are not rendered.",
+                "data_basis": ["belief_map", "analysis_box", "frontier_clusters", "cluster_analysis_boxes"],
+                "note": "Compatibility output: frontier clusters are shown with cluster-wise local analysis boxes; unknown-block boxes and debug-style center links are not rendered.",
+            },
+            "frontier_cluster_overlay.png": {
+                "path": _format_output_path(outputs["frontier_cluster_overlay"]),
+                "paper_node": "Frontier Cluster Overlay",
+                "render_source": "real_code_data",
+                "data_basis": ["belief_map", "analysis_box", "frontier_clusters"],
+            },
+            "cluster_analysis_boxes.png": {
+                "path": _format_output_path(outputs["cluster_analysis_boxes"]),
+                "paper_node": "Cluster-wise Local Attribute Regions",
+                "render_source": "real_code_data",
+                "data_basis": ["belief_map", "analysis_box", "frontier_clusters", "support_local_box"],
             },
             "unknown_block.png": {
                 "path": _format_output_path(outputs["unknown_block"]),
@@ -884,6 +964,8 @@ def export_shared_semantic_layer_assets(
 
     outputs: dict[str, Path] = {
         "semantic_input_belief_map": output_dir_path / "semantic_input_belief_map.png",
+        "frontier_cluster_overlay": output_dir_path / "frontier_cluster_overlay.png",
+        "cluster_analysis_boxes": output_dir_path / "cluster_analysis_boxes.png",
         "frontier_parsing_overlay": output_dir_path / "frontier_parsing_overlay.png",
         "unknown_block": output_dir_path / "unknown_block.png",
         "frontier_cluster": output_dir_path / "frontier_cluster.png",
@@ -891,6 +973,8 @@ def export_shared_semantic_layer_assets(
     }
 
     _export_semantic_input_belief_map(outputs["semantic_input_belief_map"], scene, style=style)
+    _export_frontier_cluster_overlay(outputs["frontier_cluster_overlay"], scene, style=style)
+    _export_cluster_analysis_boxes(outputs["cluster_analysis_boxes"], scene, style=style)
     _export_frontier_parsing_overlay(outputs["frontier_parsing_overlay"], scene, style=style)
     _export_unknown_block(outputs["unknown_block"], scene, style=style)
     _export_frontier_cluster(outputs["frontier_cluster"], scene, style=style)

@@ -47,7 +47,10 @@ from tools.export_shared_semantic_layer_assets import (
     SharedSemanticAssetStyle,
     _crop_belief,
     _crop_from_box,
+    _draw_cropped_trajectory_and_agent,
+    _export_cluster_analysis_boxes,
     _export_frontier_parsing_overlay,
+    _export_frontier_cluster_overlay,
     _export_semantic_input_belief_map,
     _frontier_crop,
     _overlay_mask,
@@ -531,6 +534,7 @@ class InteractiveMethodFigureExporter:
         ax.clear()
         _render_base_map(ax, belief_crop)
         _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(self.semantic_style.frontier_alpha))
+        _draw_cropped_trajectory_and_agent(ax, snapshot, crop, trajectory_world=self.current_recent_trajectory())
         _format_clean_axis(ax, crop.shape)
         ax.set_title("Shared Semantic Input: analysis domain + analysis frontier", fontsize=9)
 
@@ -559,7 +563,6 @@ class InteractiveMethodFigureExporter:
             snapshot=snapshot,
             sensor=self.sensor,
             style=self.method_style,
-            trajectory_world=recent_trajectory,
         )
         self.axes[1].set_title("Local LiDAR Observation", fontsize=9)
 
@@ -596,6 +599,8 @@ class InteractiveMethodFigureExporter:
             "observation_overlay": self.output_dir / "observation_overlay.png",
             "executed_action_arrow": self.output_dir / "executed_action_arrow.png",
             "semantic_input_belief_map": self.output_dir / "semantic_input_belief_map.png",
+            "frontier_cluster_overlay": self.output_dir / "frontier_cluster_overlay.png",
+            "cluster_analysis_boxes": self.output_dir / "cluster_analysis_boxes.png",
             "frontier_parsing_overlay": self.output_dir / "frontier_parsing_overlay.png",
         }
 
@@ -605,7 +610,6 @@ class InteractiveMethodFigureExporter:
             sensor=self.sensor,
             style=self.method_style,
             dpi=int(self.config.dpi),
-            trajectory_world=after_recent,
         )
         _export_method_belief_map(
             outputs["belief_before_update"],
@@ -623,7 +627,6 @@ class InteractiveMethodFigureExporter:
             sensor=self.sensor,
             style=self.method_style,
             dpi=int(self.config.dpi),
-            trajectory_world=after_recent,
         )
         _export_method_overlay(
             outputs["observation_overlay"],
@@ -650,6 +653,8 @@ class InteractiveMethodFigureExporter:
             style=self.semantic_style,
             trajectory_world=after_recent,
         )
+        _export_frontier_cluster_overlay(outputs["frontier_cluster_overlay"], scene, style=self.semantic_style)
+        _export_cluster_analysis_boxes(outputs["cluster_analysis_boxes"], scene, style=self.semantic_style)
         _export_frontier_parsing_overlay(outputs["frontier_parsing_overlay"], scene, style=self.semantic_style)
 
         manifest = {
