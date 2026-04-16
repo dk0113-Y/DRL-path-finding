@@ -47,9 +47,6 @@ from tools.export_shared_semantic_layer_assets import (
     SharedSemanticAssetStyle,
     _crop_belief,
     _crop_from_box,
-    _draw_cropped_trajectory_and_agent,
-    _export_cluster_analysis_boxes,
-    _export_frontier_parsing_overlay,
     _export_frontier_cluster_overlay,
     _export_semantic_input_belief_map,
     _frontier_crop,
@@ -64,6 +61,7 @@ from matplotlib.widgets import Button
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "run_picture" / "interactive_method_assets"
 DEFAULT_STATE_DIR = REPO_ROOT / "outputs" / "interactive_method_states"
 ACTION_KEYS = tuple(KEY_TO_ACTION.keys())
+LEGACY_SEMANTIC_OUTPUT_NAMES = ("cluster_analysis_boxes.png", "frontier_parsing_overlay.png")
 
 
 @dataclass(frozen=True)
@@ -534,9 +532,8 @@ class InteractiveMethodFigureExporter:
         ax.clear()
         _render_base_map(ax, belief_crop)
         _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(self.semantic_style.frontier_alpha))
-        _draw_cropped_trajectory_and_agent(ax, snapshot, crop, trajectory_world=self.current_recent_trajectory())
         _format_clean_axis(ax, crop.shape)
-        ax.set_title("Shared Semantic Input: analysis domain + analysis frontier", fontsize=9)
+        ax.set_title("Shared Semantic Input: analysis domain + raw frontier", fontsize=9)
 
     def refresh(self) -> None:
         if self.axes is None:
@@ -578,6 +575,10 @@ class InteractiveMethodFigureExporter:
 
         transition = self.last_transition
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        for legacy_name in LEGACY_SEMANTIC_OUTPUT_NAMES:
+            legacy_path = self.output_dir / legacy_name
+            if legacy_path.exists():
+                legacy_path.unlink()
         before_recent = get_recent_trajectory_window(
             transition.before_snapshot.trajectory_world,
             self.recent_trajectory_length,
@@ -600,8 +601,6 @@ class InteractiveMethodFigureExporter:
             "executed_action_arrow": self.output_dir / "executed_action_arrow.png",
             "semantic_input_belief_map": self.output_dir / "semantic_input_belief_map.png",
             "frontier_cluster_overlay": self.output_dir / "frontier_cluster_overlay.png",
-            "cluster_analysis_boxes": self.output_dir / "cluster_analysis_boxes.png",
-            "frontier_parsing_overlay": self.output_dir / "frontier_parsing_overlay.png",
         }
 
         _export_method_local_observation(
@@ -651,11 +650,8 @@ class InteractiveMethodFigureExporter:
             outputs["semantic_input_belief_map"],
             scene,
             style=self.semantic_style,
-            trajectory_world=after_recent,
         )
         _export_frontier_cluster_overlay(outputs["frontier_cluster_overlay"], scene, style=self.semantic_style)
-        _export_cluster_analysis_boxes(outputs["cluster_analysis_boxes"], scene, style=self.semantic_style)
-        _export_frontier_parsing_overlay(outputs["frontier_parsing_overlay"], scene, style=self.semantic_style)
 
         manifest = {
             "step": int(transition.step),
