@@ -463,7 +463,7 @@ class InteractiveMethodFigureExporter:
 
     def _semantic_scene(self, snapshot: Snapshot):
         semantic_snapshot = self.semantic_layer.analyze(self.cum_map, self.agent_state)
-        frontier_mask = self.cum_map.compute_analysis_box_frontier_bool()
+        frontier_mask = np.asarray(self.cum_map.get_frontier_u8(refresh=False), dtype=np.uint8) > 0
         return SimpleNamespace(
             snapshot=snapshot,
             frontier_mask=frontier_mask,

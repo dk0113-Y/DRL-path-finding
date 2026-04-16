@@ -45,7 +45,7 @@ class LocalStateBuilder:
       it is not inferred from sensor local_snap or scan_radius.
     - near = local geometry + local frontier cue + short-term recency + global normalized position context.
     - all channels come from cumulative belief/state (belief map, visit history, agent global position).
-    - the frontier channel is a dense local mask sampled from the analysis-box-local frontier.
+    - the frontier channel is a dense local mask sampled from the current belief-map frontier.
     """
 
     def __init__(self, config: Optional[LocalStateConfig] = None):
@@ -124,13 +124,9 @@ class LocalStateBuilder:
         frontier_u8_use = frontier_u8
         if frontier_u8_use is None:
             frontier_u8_use = self._shared_artifact_value(shared_artifacts, "frontier_u8")
-        # Legacy compatibility only. Local-state frontier belongs to the
-        # analysis representation and therefore recomputes box-local frontier
-        # unless a caller provides explicit analysis-domain frontier_stats.
-        _ = frontier_u8_use
 
         if frontier_stats_use is None:
-            frontier_stats_use = cum_map.get_analysis_box_frontier_derived_stats()
+            frontier_stats_use = cum_map.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_u8_use)
 
         frontier_bool = np.asarray(frontier_stats_use.frontier_bool, dtype=bool)
         if frontier_bool.shape != cum_map.map.shape:

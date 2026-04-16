@@ -558,7 +558,7 @@ def _collect_semantic_scene(config: ExportConfig, *, step: int | None = None) ->
                     local_snap=local_snap,
                     cum_map=cum_map,
                 ),
-                frontier_mask=cum_map.compute_analysis_box_frontier_bool(),
+                frontier_mask=np.asarray(cum_map.get_frontier_u8(refresh=False), dtype=np.uint8) > 0,
                 semantic_snapshot=semantic_snapshot,
             )
             scene_score = _scene_score(semantic_snapshot)
