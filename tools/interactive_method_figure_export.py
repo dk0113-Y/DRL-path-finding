@@ -156,7 +156,7 @@ class InteractiveMethodFigureExporter:
 
     def _semantic_scene(self, snapshot: Snapshot):
         semantic_snapshot = self.semantic_layer.analyze(self.cum_map, self.agent_state)
-        frontier_mask = np.asarray(self.cum_map.get_frontier_u8(refresh=False), dtype=np.uint8) > 0
+        frontier_mask = self.cum_map.compute_analysis_box_frontier_bool()
         return SimpleNamespace(
             snapshot=snapshot,
             frontier_mask=frontier_mask,
@@ -225,7 +225,7 @@ class InteractiveMethodFigureExporter:
         _render_base_map(ax, belief_crop)
         _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(self.semantic_style.frontier_alpha))
         _format_clean_axis(ax, crop.shape)
-        ax.set_title("Shared Semantic Input: analysis domain + raw frontier", fontsize=9)
+        ax.set_title("Shared Semantic Input: analysis domain + analysis frontier", fontsize=9)
 
     def refresh(self) -> None:
         if self.axes is None:

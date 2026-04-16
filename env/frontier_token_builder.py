@@ -185,9 +185,13 @@ class FrontierRegionTokenBuilder:
         frontier_u8_use = frontier_u8
         if frontier_u8_use is None:
             frontier_u8_use = self._shared_artifact_value(shared_artifacts, "frontier_u8")
+        # This legacy token builder is analysis-domain representation code.
+        # It must not inherit full-map frontier membership from unknown cells
+        # outside AnalysisBox, so default stats are recomputed box-locally.
+        _ = frontier_u8_use
 
         if frontier_stats_use is None:
-            frontier_stats_use = cum_map.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_u8_use)
+            frontier_stats_use = cum_map.get_analysis_box_frontier_derived_stats()
 
         frontier_bool = np.asarray(frontier_stats_use.frontier_bool, dtype=bool)
         if frontier_bool.shape != cum_map.map.shape:
@@ -929,21 +933,14 @@ class FrontierRegionTokenBuilder:
         shared_artifacts=None,
         world_window_shape: Tuple[int, int] = (128, 128),
     ) -> dict[str, object]:
-        frontier_stats_use = frontier_stats
-        frontier_bool = None
-        if frontier_u8 is not None:
-            frontier_bool = np.asarray(frontier_u8, dtype=np.uint8) > 0
-            frontier_source_uid = int(self._shared_artifact_value(shared_artifacts, "frontier_source_uid") or -1)
-            frontier_revision = int(self._shared_artifact_value(shared_artifacts, "frontier_revision") or -1)
-        else:
-            frontier_stats_use, frontier_bool = self._resolve_frontier_stats(
-                cum_map,
-                frontier_u8=frontier_u8,
-                frontier_stats=frontier_stats,
-                shared_artifacts=shared_artifacts,
-            )
-            frontier_source_uid = int(frontier_stats_use.frontier_source_uid)
-            frontier_revision = int(frontier_stats_use.frontier_revision)
+        frontier_stats_use, frontier_bool = self._resolve_frontier_stats(
+            cum_map,
+            frontier_u8=frontier_u8,
+            frontier_stats=frontier_stats,
+            shared_artifacts=shared_artifacts,
+        )
+        frontier_source_uid = int(frontier_stats_use.frontier_source_uid)
+        frontier_revision = int(frontier_stats_use.frontier_revision)
 
         feature_cache, _ = self._build_feature_cache(
             cum_map,
@@ -1091,10 +1088,9 @@ def _smoke_test() -> None:
     obs = LocalObservationModel(g, s)
     snap, _ = obs.observe(s)
     cm = CumulativeBeliefMap(g, s, snap)
-    frontier_u8 = cm.get_frontier_u8(refresh=True)
 
     builder = FrontierRegionTokenBuilder(FrontierRegionTokenConfig(top_k=12))
-    tokens, mask, meta = builder.build(cm, s, frontier_u8, world_window_shape=(96, 96), return_meta=True)
+    tokens, mask, meta = builder.build(cm, s, world_window_shape=(96, 96), return_meta=True)
 
     assert tokens.shape == (12, FRONTIER_REGION_TOKEN_FIELD_COUNT)
     assert mask.shape == (12,)

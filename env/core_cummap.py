@@ -30,7 +30,7 @@ class MidMapConfig:
 
 @dataclass(frozen=True)
 class FrontierDerivedStats:
-    """Shared frontier snapshot derived from the incrementally maintained frontier cache."""
+    """Frontier snapshot plus metadata for reusable map-derived channels."""
 
     frontier_u8: np.ndarray
     frontier_bool: np.ndarray
@@ -524,6 +524,58 @@ class CumulativeBeliefMap:
     def _recompute_frontier_full_u8(self) -> np.ndarray:
         return self._recompute_frontier_full_bool().astype(np.uint8) * 255
 
+    def compute_analysis_box_frontier_bool(self, analysis_box: Optional[AnalysisBox] = None) -> np.ndarray:
+        """
+        Compute the analysis-box-local frontier as a full-map-shaped bool mask.
+
+        AnalysisBox is a strict known-region bounding box. For shared semantic
+        and analysis-derived channels, frontier membership is decided only by
+        free/unknown adjacency visible inside that box. Unknown cells outside
+        the analysis box are neither padded in nor allowed to make an in-box
+        free cell become a semantic frontier.
+
+        This intentionally recomputes frontier on the box slice instead of
+        cropping the full-map frontier cache, because cropping would preserve
+        outside-box unknown adjacency in the membership decision.
+        """
+        box = self.analysis_box if analysis_box is None else analysis_box
+        frontier = np.zeros_like(self.map, dtype=bool)
+        if int(box.r0) >= int(box.r1) or int(box.c0) >= int(box.c1):
+            return frontier
+
+        box_map = np.asarray(self.map[int(box.r0):int(box.r1), int(box.c0):int(box.c1)], dtype=np.int8)
+        if box_map.size <= 0:
+            return frontier
+
+        box_frontier = GridTopology.frontier_mask(
+            box_map,
+            min_unknown_neighbors=FRONTIER_MIN_UNKNOWN_NEIGHBORS,
+            connectivity=FRONTIER_NEIGHBOR_CONNECTIVITY,
+        )
+        frontier[int(box.r0):int(box.r1), int(box.c0):int(box.c1)] = box_frontier
+        return frontier
+
+    def get_analysis_box_frontier_u8(self, analysis_box: Optional[AnalysisBox] = None) -> np.ndarray:
+        """Return the analysis-box-local frontier mask encoded as uint8 values."""
+        return self.compute_analysis_box_frontier_bool(analysis_box).astype(np.uint8) * 255
+
+    def get_analysis_box_frontier_derived_stats(
+        self,
+        analysis_box: Optional[AnalysisBox] = None,
+    ) -> FrontierDerivedStats:
+        """Return frontier stats for analysis-box-local semantic channels."""
+        t0 = time.perf_counter() if self.enable_timing else 0.0
+        frontier_bool = self.compute_analysis_box_frontier_bool(analysis_box)
+        out = FrontierDerivedStats(
+            frontier_u8=frontier_bool.astype(np.uint8) * 255,
+            frontier_bool=frontier_bool,
+            frontier_source_uid=int(self.frontier_source_uid),
+            frontier_revision=int(self.frontier_revision),
+        )
+        if self.enable_timing:
+            self.frontier_stats_time += time.perf_counter() - t0
+        return out
+
     def debug_frontier_consistency_stats(self) -> FrontierConsistencyStats:
         full_bool = self._recompute_frontier_full_bool()
         mismatch = int(np.count_nonzero(self.frontier_bool != full_bool))
@@ -754,13 +806,19 @@ class CumulativeBeliefMap:
 
     def get_frontier_u8(self, refresh: bool = False) -> np.ndarray:
         """
-        Canonical frontier getter.
+        Canonical full-map frontier getter.
 
         frontier := known_free cells adjacent to orthogonally connected unknown
         cells in current belief map.
         Frontier semantics are rule-based and independent of truth-side
         reachability. Higher-level value assessment is handled downstream by the
         frontier token builder.
+
+        This full-map cache may include adjacency between an in-analysis-box
+        free cell and an unknown cell outside the analysis box. Shared semantic
+        and analysis-derived representation paths must use
+        compute_analysis_box_frontier_bool() /
+        get_analysis_box_frontier_derived_stats() instead.
 
         Normal path returns the incrementally maintained frontier cache.
         refresh=True is a debug/full-recompute path and is not used by the
@@ -778,8 +836,9 @@ class CumulativeBeliefMap:
         """
         Return frontier-related reusable statistics with caching.
 
-        These are summary auxiliaries for map/token channels and do not alter
-        canonical frontier membership.
+        These are full-map summary auxiliaries and do not alter canonical
+        frontier membership. Analysis-box semantic paths must not crop these
+        stats; they should recompute with get_analysis_box_frontier_derived_stats().
         """
         if (
             frontier_u8 is None
@@ -960,8 +1019,10 @@ class CumulativeBeliefMap:
         This remains a fixed-range mid map:
             cumulative belief -> fixed world window -> coarse aggregation -> fixed mid map
         It is not a token replacement: frontier_density provides a coarse
-        regional entrance-distribution background, while the token branch keeps
-        the sparse frontier-candidate summary.
+        regional entrance-distribution background, while the semantic tree keeps
+        the sparse frontier-candidate summary. Because frontier_density belongs
+        to the shared semantic background, it uses analysis-box-local frontier:
+        outside-box unknown cells must not define in-box frontier membership.
         """
         t0 = time.perf_counter() if self.enable_timing else 0.0
         cfg = config if config is not None else MidMapConfig()
@@ -989,9 +1050,13 @@ class CumulativeBeliefMap:
         frontier_u8_use = frontier_u8
         if frontier_u8_use is None:
             frontier_u8_use = self._shared_artifact_value(shared_artifacts, "frontier_u8")
+        # frontier_u8 is accepted for older callers, but the built-in
+        # frontier_density channel is semantic/analysis-box-local. Explicit
+        # frontier_stats overrides are expected to already follow that domain.
+        _ = frontier_u8_use
 
         if frontier_stats_use is None:
-            frontier_stats_use = self.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_u8_use)
+            frontier_stats_use = self.get_analysis_box_frontier_derived_stats()
 
         sampled_map_buf, sampled_frontier_buf, sampled_visit_log_buf = self._get_domain_buffers(
             wh,

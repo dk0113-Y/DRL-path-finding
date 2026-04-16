@@ -320,6 +320,9 @@ class StateTensorAdapter:
         agent_state,
         frontier_u8=None,
     ) -> SharedStepArtifacts:
+        # Collectors still maintain/pass the full-map frontier cache for
+        # incremental consistency diagnostics. Shared semantics deliberately
+        # ignore it and recompute analysis-box-local frontier internally.
         _ = frontier_u8
         t0 = time.perf_counter() if self._timing_enabled else 0.0
         shared = SharedStepArtifacts(

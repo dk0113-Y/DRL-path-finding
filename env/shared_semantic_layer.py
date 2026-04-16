@@ -426,7 +426,11 @@ class SharedSemanticLayer:
         map_view = np.asarray(cum_map.map, dtype=np.int8)
         box_map = map_view[box.r0:box.r1, box.c0:box.c1]
         unknown_box = (box_map == INVISIBLE)
-        frontier_view = np.asarray(cum_map.get_frontier_u8(refresh=False), dtype=np.uint8) > 0
+        # AnalysisBox is a strict known-region bounding box. Shared semantics
+        # must not let unknown cells outside that box create frontier membership
+        # for free cells inside the box, so frontier is recomputed locally in
+        # the analysis box instead of cropping the full-map frontier cache.
+        frontier_view = cum_map.compute_analysis_box_frontier_bool(box)
         frontier_box = frontier_view[box.r0:box.r1, box.c0:box.c1]
         return box, box_map, unknown_box, frontier_box
 
