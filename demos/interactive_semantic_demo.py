@@ -23,8 +23,10 @@ from __future__ import annotations
 """
 
 import argparse
+import json
 import random
 import sys
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +108,51 @@ class DemoConfig:
     show_local_observation: bool = True
     show_help_on_start: bool = True
     screenshot_dir: Path = REPO_ROOT / "outputs" / "demo_frames"
+    state_dir: Path = REPO_ROOT / "outputs" / "demo_states"
+    load_state: Optional[Path] = None
+
+
+@dataclass
+class DemoRuntimeState:
+    true_grid: np.ndarray
+    base_grid: np.ndarray
+    local_snap: np.ndarray
+    cum_map_map: np.ndarray
+    cum_map_visit_count: np.ndarray
+    cum_map_frontier_bool: np.ndarray
+    cum_map_frontier_u8: np.ndarray
+    trajectory_world: np.ndarray
+    start_state: tuple[int, int]
+    base_start_state: tuple[int, int]
+    agent_state: tuple[int, int]
+    cum_map_origin_world_rc: tuple[int, int]
+    cum_map_step_count: int
+    cum_map_coverage_rate: float
+    cum_map_kpm_count: int
+    cum_map_tpm_count: int
+    cum_map_frontier_revision: int
+    map_generation_index: int
+    show_semantics: bool
+    show_blocks: bool
+    show_frontiers: bool
+    show_trajectory: bool
+    show_entry_labels: bool
+    status_message: str
+    status_is_error: bool
+
+
+class _SemanticFrontierMapView:
+    """Demo-only cum_map view whose frontier is recomputed inside analysis_box."""
+
+    def __init__(self, cum_map: CumulativeBeliefMap, frontier_u8: np.ndarray):
+        self._cum_map = cum_map
+        self._frontier_u8 = np.asarray(frontier_u8, dtype=np.uint8)
+
+    def get_frontier_u8(self, refresh: bool = False) -> np.ndarray:
+        return self._frontier_u8
+
+    def __getattr__(self, name: str):
+        return getattr(self._cum_map, name)
 
 
 def _configure_matplotlib_chinese_fonts() -> None:
@@ -170,6 +217,8 @@ def print_controls() -> None:
     print("t = 切换轨迹显示")
     print("i = 切换前沿簇编号显示")
     print("s = 保存截图")
+    print("ctrl+s = 保存完整交互状态")
+    print("ctrl+z = 回退一步")
     print("h = 打印帮助")
     print("esc 或关闭窗口 = 退出")
     print("")
@@ -215,10 +264,12 @@ class InteractiveSemanticDemo:
         self.trajectory_array: list[tuple[int, int]] = []
         self.visible_world_rows = np.zeros((0,), dtype=np.int32)
         self.visible_world_cols = np.zeros((0,), dtype=np.int32)
-        self.frontier_u8 = np.zeros((1, 1), dtype=np.uint8)
+        self.full_frontier_u8 = np.zeros((1, 1), dtype=np.uint8)
+        self.semantic_frontier_u8 = np.zeros((1, 1), dtype=np.uint8)
         self.metrics: dict[str, float] = {}
         self.entry_count = 0
         self.agent_array = (0, 0)
+        self.undo_history: deque[DemoRuntimeState] = deque(maxlen=8)
 
         self._base_grid: np.ndarray | None = None
         self._base_start_state: tuple[int, int] | None = None
@@ -227,6 +278,8 @@ class InteractiveSemanticDemo:
         self.axes: dict[str, object] = {}
 
         self.new_map(initial=True)
+        if self.config.load_state is not None:
+            self.load_runtime_state(self.config.load_state)
 
     def _set_status(self, message: str, *, is_error: bool = False, print_to_terminal: bool = False) -> None:
         self.status_message = str(message)
@@ -259,6 +312,21 @@ class InteractiveSemanticDemo:
             np.asarray(gc[visible], dtype=np.int32),
         )
 
+    def _analysis_box_frontier_u8(self) -> np.ndarray:
+        assert self.cum_map is not None
+        semantic_frontier = np.zeros_like(self.cum_map.map, dtype=np.uint8)
+        box = self.cum_map.analysis_box
+        box_map = np.asarray(self.cum_map.map[box.r0:box.r1, box.c0:box.c1], dtype=np.int8)
+        if box_map.size <= 0:
+            return semantic_frontier
+        box_frontier = GridTopology.frontier_mask(
+            box_map,
+            min_unknown_neighbors=1,
+            connectivity=4,
+        )
+        semantic_frontier[box.r0:box.r1, box.c0:box.c1] = box_frontier.astype(np.uint8) * 255
+        return semantic_frontier
+
     def _refresh_runtime_views(self) -> None:
         assert self.true_grid is not None
         assert self.free_mask is not None
@@ -266,8 +334,10 @@ class InteractiveSemanticDemo:
         assert self.cum_map is not None
 
         self.valid_action_indices = GridTopology.valid_action_indices_fast(self.free_mask, self.agent_state)
-        self.frontier_u8 = np.asarray(self.cum_map.get_frontier_u8(refresh=False), dtype=np.uint8).copy()
-        self.semantic_snapshot = self.shared_semantic_layer.analyze(self.cum_map, self.agent_state)
+        self.full_frontier_u8 = np.asarray(self.cum_map.get_frontier_u8(refresh=False), dtype=np.uint8).copy()
+        self.semantic_frontier_u8 = self._analysis_box_frontier_u8()
+        semantic_map_view = _SemanticFrontierMapView(self.cum_map, self.semantic_frontier_u8)
+        self.semantic_snapshot = self.shared_semantic_layer.analyze(semantic_map_view, self.agent_state)
         self.semantic_payload = build_semantic_visualization_payload(self.semantic_snapshot)
         self.metrics = dict(self.semantic_snapshot.metrics())
         self.entry_count = sum(len(block["frontier_clusters"]) for block in self.semantic_payload["blocks"])
@@ -290,6 +360,7 @@ class InteractiveSemanticDemo:
 
         self.trajectory_world = [self.agent_state]
         self._refresh_runtime_views()
+        self.undo_history.clear()
         self._set_status(status_message)
 
     def new_map(self, *, initial: bool = False) -> None:
@@ -323,6 +394,216 @@ class InteractiveSemanticDemo:
         self._set_status(f"已保存截图：{path}")
         return path
 
+    def capture_runtime_state(self) -> DemoRuntimeState:
+        assert self.true_grid is not None
+        assert self.local_snap is not None
+        assert self.cum_map is not None
+        assert self.start_state is not None
+        assert self.agent_state is not None
+
+        base_grid = self._base_grid if self._base_grid is not None else self.true_grid
+        base_start_state = self._base_start_state if self._base_start_state is not None else self.start_state
+        trajectory_world = np.asarray(self.trajectory_world, dtype=np.int32).reshape((-1, 2))
+        return DemoRuntimeState(
+            true_grid=np.asarray(self.true_grid, dtype=np.int8).copy(),
+            base_grid=np.asarray(base_grid, dtype=np.int8).copy(),
+            local_snap=np.asarray(self.local_snap, dtype=np.int8).copy(),
+            cum_map_map=np.asarray(self.cum_map.map, dtype=np.int8).copy(),
+            cum_map_visit_count=np.asarray(self.cum_map.visit_count, dtype=np.int32).copy(),
+            cum_map_frontier_bool=np.asarray(self.cum_map.frontier_bool, dtype=bool).copy(),
+            cum_map_frontier_u8=np.asarray(self.cum_map.frontier_u8, dtype=np.uint8).copy(),
+            trajectory_world=trajectory_world.copy(),
+            start_state=(int(self.start_state[0]), int(self.start_state[1])),
+            base_start_state=(int(base_start_state[0]), int(base_start_state[1])),
+            agent_state=(int(self.agent_state[0]), int(self.agent_state[1])),
+            cum_map_origin_world_rc=(
+                int(self.cum_map.origin_world_rc[0]),
+                int(self.cum_map.origin_world_rc[1]),
+            ),
+            cum_map_step_count=int(self.cum_map.step_count),
+            cum_map_coverage_rate=float(self.cum_map.coverage_rate),
+            cum_map_kpm_count=int(self.cum_map.kpm_count),
+            cum_map_tpm_count=int(self.cum_map.tpm_count),
+            cum_map_frontier_revision=int(self.cum_map.frontier_revision),
+            map_generation_index=int(self.map_generation_index),
+            show_semantics=bool(self.show_semantics),
+            show_blocks=bool(self.show_blocks),
+            show_frontiers=bool(self.show_frontiers),
+            show_trajectory=bool(self.show_trajectory),
+            show_entry_labels=bool(self.show_entry_labels),
+            status_message=str(self.status_message),
+            status_is_error=bool(self.status_is_error),
+        )
+
+    @staticmethod
+    def _runtime_state_metadata(state: DemoRuntimeState) -> dict[str, object]:
+        return {
+            "format": "interactive_semantic_demo_state",
+            "version": 1,
+            "start_state": list(state.start_state),
+            "base_start_state": list(state.base_start_state),
+            "agent_state": list(state.agent_state),
+            "cum_map_origin_world_rc": list(state.cum_map_origin_world_rc),
+            "cum_map_step_count": int(state.cum_map_step_count),
+            "cum_map_coverage_rate": float(state.cum_map_coverage_rate),
+            "cum_map_kpm_count": int(state.cum_map_kpm_count),
+            "cum_map_tpm_count": int(state.cum_map_tpm_count),
+            "cum_map_frontier_revision": int(state.cum_map_frontier_revision),
+            "map_generation_index": int(state.map_generation_index),
+            "show_semantics": bool(state.show_semantics),
+            "show_blocks": bool(state.show_blocks),
+            "show_frontiers": bool(state.show_frontiers),
+            "show_trajectory": bool(state.show_trajectory),
+            "show_entry_labels": bool(state.show_entry_labels),
+            "status_message": str(state.status_message),
+            "status_is_error": bool(state.status_is_error),
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+        }
+
+    @staticmethod
+    def _state_tuple(metadata: dict[str, object], key: str) -> tuple[int, int]:
+        values = metadata[key]
+        if not isinstance(values, (list, tuple)) or len(values) != 2:
+            raise ValueError(f"state metadata field {key!r} must contain two integers")
+        return (int(values[0]), int(values[1]))
+
+    @classmethod
+    def _state_from_npz(cls, path: Path) -> DemoRuntimeState:
+        with np.load(path, allow_pickle=False) as data:
+            metadata = json.loads(str(data["metadata"].item()))
+            if metadata.get("format") != "interactive_semantic_demo_state":
+                raise ValueError(f"unsupported demo state format in {path}")
+            if int(metadata.get("version", 0)) != 1:
+                raise ValueError(f"unsupported demo state version in {path}")
+            return DemoRuntimeState(
+                true_grid=np.asarray(data["true_grid"], dtype=np.int8).copy(),
+                base_grid=np.asarray(data["base_grid"], dtype=np.int8).copy(),
+                local_snap=np.asarray(data["local_snap"], dtype=np.int8).copy(),
+                cum_map_map=np.asarray(data["cum_map_map"], dtype=np.int8).copy(),
+                cum_map_visit_count=np.asarray(data["cum_map_visit_count"], dtype=np.int32).copy(),
+                cum_map_frontier_bool=np.asarray(data["cum_map_frontier_bool"], dtype=bool).copy(),
+                cum_map_frontier_u8=np.asarray(data["cum_map_frontier_u8"], dtype=np.uint8).copy(),
+                trajectory_world=np.asarray(data["trajectory_world"], dtype=np.int32).reshape((-1, 2)).copy(),
+                start_state=cls._state_tuple(metadata, "start_state"),
+                base_start_state=cls._state_tuple(metadata, "base_start_state"),
+                agent_state=cls._state_tuple(metadata, "agent_state"),
+                cum_map_origin_world_rc=cls._state_tuple(metadata, "cum_map_origin_world_rc"),
+                cum_map_step_count=int(metadata["cum_map_step_count"]),
+                cum_map_coverage_rate=float(metadata["cum_map_coverage_rate"]),
+                cum_map_kpm_count=int(metadata["cum_map_kpm_count"]),
+                cum_map_tpm_count=int(metadata["cum_map_tpm_count"]),
+                cum_map_frontier_revision=int(metadata["cum_map_frontier_revision"]),
+                map_generation_index=int(metadata["map_generation_index"]),
+                show_semantics=bool(metadata["show_semantics"]),
+                show_blocks=bool(metadata["show_blocks"]),
+                show_frontiers=bool(metadata["show_frontiers"]),
+                show_trajectory=bool(metadata["show_trajectory"]),
+                show_entry_labels=bool(metadata["show_entry_labels"]),
+                status_message=str(metadata.get("status_message", "")),
+                status_is_error=bool(metadata.get("status_is_error", False)),
+            )
+
+    def restore_runtime_state(self, state: DemoRuntimeState, *, preserve_undo: bool = False) -> None:
+        self.true_grid = np.asarray(state.true_grid, dtype=np.int8).copy()
+        self._base_grid = np.asarray(state.base_grid, dtype=np.int8).copy()
+        self.start_state = (int(state.start_state[0]), int(state.start_state[1]))
+        self._base_start_state = (int(state.base_start_state[0]), int(state.base_start_state[1]))
+        self.agent_state = (int(state.agent_state[0]), int(state.agent_state[1]))
+        self.free_mask = GridTopology.free_mask(self.true_grid)
+
+        self.obs_model = LocalObservationModel(self.true_grid, self.agent_state, sensor=self.sensor)
+        self.local_snap = np.asarray(state.local_snap, dtype=np.int8).copy()
+        self.obs_model.local_snap[:, :] = self.local_snap
+
+        self.cum_map = CumulativeBeliefMap(self.true_grid, self.start_state, self.local_snap)
+        self.cum_map.map = np.asarray(state.cum_map_map, dtype=np.int8).copy()
+        self.cum_map.visit_count = np.asarray(state.cum_map_visit_count, dtype=np.int32).copy()
+        self.cum_map.frontier_bool = np.asarray(state.cum_map_frontier_bool, dtype=bool).copy()
+        self.cum_map.frontier_u8 = np.asarray(state.cum_map_frontier_u8, dtype=np.uint8).copy()
+        self.cum_map.origin_world_rc = (
+            int(state.cum_map_origin_world_rc[0]),
+            int(state.cum_map_origin_world_rc[1]),
+        )
+        self.cum_map.step_count = int(state.cum_map_step_count)
+        self.cum_map.coverage_rate = float(state.cum_map_coverage_rate)
+        self.cum_map.kpm_count = int(state.cum_map_kpm_count)
+        self.cum_map.tpm_count = int(state.cum_map_tpm_count)
+        self.cum_map.frontier_revision = int(state.cum_map_frontier_revision)
+        self.cum_map._invalidate_visit_cache()
+        self.cum_map._invalidate_map_state_caches()
+        self.cum_map._update_analysis_box()
+
+        trajectory = np.asarray(state.trajectory_world, dtype=np.int32).reshape((-1, 2))
+        if trajectory.size <= 0:
+            self.trajectory_world = [self.agent_state]
+        else:
+            self.trajectory_world = [(int(row[0]), int(row[1])) for row in trajectory]
+        self.map_generation_index = int(state.map_generation_index)
+        self.show_semantics = bool(state.show_semantics)
+        self.show_blocks = bool(state.show_blocks)
+        self.show_frontiers = bool(state.show_frontiers)
+        self.show_trajectory = bool(state.show_trajectory)
+        self.show_entry_labels = bool(state.show_entry_labels)
+        self.status_message = str(state.status_message)
+        self.status_is_error = bool(state.status_is_error)
+
+        self._refresh_runtime_views()
+        if not preserve_undo:
+            self.undo_history.clear()
+
+    def _default_state_path(self, directory: Path) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return directory / (
+            f"interactive_demo_state_map{self.map_generation_index:03d}_"
+            f"step{self._demo_step():04d}_{timestamp}.npz"
+        )
+
+    def save_runtime_state(self, path: Optional[Path] = None) -> Path:
+        state = self.capture_runtime_state()
+        save_path = Path(path) if path is not None else self._default_state_path(self.config.state_dir)
+        if save_path.suffix == "":
+            save_path = self._default_state_path(save_path)
+        elif save_path.suffix.lower() != ".npz":
+            save_path = save_path.with_suffix(".npz")
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = self._runtime_state_metadata(state)
+        np.savez_compressed(
+            save_path,
+            metadata=np.asarray(json.dumps(metadata, ensure_ascii=False)),
+            true_grid=state.true_grid,
+            base_grid=state.base_grid,
+            local_snap=state.local_snap,
+            cum_map_map=state.cum_map_map,
+            cum_map_visit_count=state.cum_map_visit_count,
+            cum_map_frontier_bool=state.cum_map_frontier_bool,
+            cum_map_frontier_u8=state.cum_map_frontier_u8,
+            trajectory_world=state.trajectory_world,
+        )
+        self._set_status(f"saved runtime state: {save_path}")
+        return save_path
+
+    def load_runtime_state(self, path: Path) -> Path:
+        load_path = Path(path)
+        if not load_path.exists() and load_path.suffix == "":
+            candidate = load_path.with_suffix(".npz")
+            if candidate.exists():
+                load_path = candidate
+        if not load_path.exists():
+            raise FileNotFoundError(f"demo state not found: {load_path}")
+        state = self._state_from_npz(load_path)
+        self.restore_runtime_state(state)
+        self._set_status(f"loaded runtime state: {load_path}")
+        return load_path
+
+    def undo_last_state(self) -> bool:
+        if not self.undo_history:
+            self._set_status("undo history is empty", is_error=True, print_to_terminal=True)
+            return False
+        state = self.undo_history.pop()
+        self.restore_runtime_state(state, preserve_undo=True)
+        self._set_status(f"undid one step; current step {self._demo_step()}")
+        return True
+
     def step_with_action_index(self, action_idx: int, *, key: Optional[str] = None) -> bool:
         assert self.agent_state is not None
         assert self.obs_model is not None
@@ -339,6 +620,7 @@ class InteractiveSemanticDemo:
             )
             return False
 
+        self.undo_history.append(self.capture_runtime_state())
         dr, dc = ACTIONS_8[action_idx]
         self.agent_state = (int(self.agent_state[0] + dr), int(self.agent_state[1] + dc))
         self.trajectory_world.append(self.agent_state)
@@ -383,12 +665,17 @@ class InteractiveSemanticDemo:
     def _on_key_press(self, event) -> None:
         if event.key is None:
             return
-        key = str(event.key).lower()
+        key = str(event.key).lower().replace("control+", "ctrl+")
 
         if key == "escape":
             plt.close(self.figure)
             return
-        if key in MOVE_KEY_TO_ACTION:
+        if key in {"ctrl+s", "cmd+s"}:
+            path = self.save_runtime_state()
+            print(f"runtime state saved to: {path}")
+        elif key in {"ctrl+z", "cmd+z"}:
+            self.undo_last_state()
+        elif key in MOVE_KEY_TO_ACTION:
             self.step_with_action_index(MOVE_KEY_TO_ACTION[key], key=key)
         elif key == "r":
             self.reset_current_map()
@@ -690,7 +977,7 @@ class InteractiveSemanticDemo:
         belief_map = np.asarray(self.cum_map.map, dtype=np.int8)
         ax.imshow(belief_map, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
 
-        frontier_mask = self.frontier_u8 > 0
+        frontier_mask = self.full_frontier_u8 > 0
         frontier_rgba = np.zeros((*belief_map.shape, 4), dtype=np.float32)
         frontier_rgba[frontier_mask] = np.array([0.96, 0.73, 0.16, 0.62], dtype=np.float32)
         ax.imshow(frontier_rgba, origin="upper", interpolation="nearest")
@@ -792,6 +1079,10 @@ class InteractiveSemanticDemo:
             block_labels: list[tuple[float, float, str]] = []
             frontier_labels: list[tuple[float, float, str]] = []
             support_boxes: list[tuple[float, float, float, float, np.ndarray]] = []
+
+            if self.show_frontiers:
+                semantic_frontier_mask = self.semantic_frontier_u8 > 0
+                frontier_rgba[semantic_frontier_mask] = np.array([0.96, 0.73, 0.16, 0.38], dtype=np.float32)
 
             for block_slot, block in enumerate(blocks):
                 block_rows = np.asarray(block["rows"], dtype=np.int32)
@@ -946,7 +1237,8 @@ class InteractiveSemanticDemo:
                 f"块{'开' if self.show_blocks else '关'} | "
                 f"前沿{'开' if self.show_frontiers else '关'} | "
                 f"编号{'开' if self.show_entry_labels else '关'}"
-            )
+            ),
+            f"analysis-box frontier cells: {int(np.count_nonzero(self.semantic_frontier_u8 > 0))}",
         ]
         if not self.show_semantics:
             semantic_lines.append("语义叠加已隐藏（按 'p' 切换）。")
@@ -1099,6 +1391,24 @@ def parse_args() -> DemoConfig:
         default=True,
         help="启动时在终端打印按键帮助。",
     )
+    parser.add_argument(
+        "--screenshot-dir",
+        type=Path,
+        default=REPO_ROOT / "outputs" / "demo_frames",
+        help="截图保存目录。默认：outputs/demo_frames。",
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=REPO_ROOT / "outputs" / "demo_states",
+        help="Ctrl+S 交互状态快照保存目录。默认：outputs/demo_states。",
+    )
+    parser.add_argument(
+        "--load-state",
+        type=Path,
+        default=None,
+        help="启动时加载由 Ctrl+S 保存的 .npz 交互状态快照。",
+    )
     args = parser.parse_args()
     return DemoConfig(
         rows=int(args.rows),
@@ -1111,6 +1421,9 @@ def parse_args() -> DemoConfig:
         show_semantics=bool(args.show_semantics),
         show_local_observation=bool(args.show_local_observation),
         show_help_on_start=bool(args.show_help_on_start),
+        screenshot_dir=Path(args.screenshot_dir),
+        state_dir=Path(args.state_dir),
+        load_state=None if args.load_state is None else Path(args.load_state),
     )
 
 
