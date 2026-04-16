@@ -147,6 +147,18 @@ class InteractiveMethodFigureExporter:
         self.config = config
         self.method_style = MethodFigureStyle()
         self.semantic_style = SharedSemanticAssetStyle(dpi=int(config.dpi))
+        self.semantic_layer = SharedSemanticLayer()
+        self.status_message = "Action keys move; p/Export exports images; k saves state; Ctrl+Z undoes."
+        self.undo_history: deque[MethodFigureRuntimeState] = deque(maxlen=8)
+
+        self.fig = None
+        self.axes = None
+        self.status_text = None
+        self.export_button = None
+
+        if load_state is not None:
+            self.load_runtime_state(load_state)
+            return
 
         _set_global_seed(int(config.seed))
         generator = RandomMapGenerator(
@@ -162,20 +174,9 @@ class InteractiveMethodFigureExporter:
         self.agent_state = (int(self.start_state[0]), int(self.start_state[1]))
         self.local_snap = np.asarray(self.obs_model.local_snap, dtype=np.int8).copy()
         self.cum_map = CumulativeBeliefMap(self.true_grid, self.agent_state, self.local_snap)
-        self.semantic_layer = SharedSemanticLayer()
         self.trajectory_world: list[tuple[int, int]] = [self.agent_state]
         self.step = 0
         self.last_transition: CachedTransition | None = None
-        self.status_message = "Press an action key, then press p or Export."
-        self.undo_history: deque[MethodFigureRuntimeState] = deque(maxlen=8)
-
-        self.fig = None
-        self.axes = None
-        self.status_text = None
-        self.export_button = None
-
-        if load_state is not None:
-            self.load_runtime_state(load_state)
 
     @staticmethod
     def _copy_snapshot(snapshot: Snapshot) -> Snapshot:
@@ -666,7 +667,7 @@ class InteractiveMethodFigureExporter:
 
     def _on_key(self, event) -> None:
         key = str(event.key or "").lower().replace("control+", "ctrl+")
-        if key in {"ctrl+s", "cmd+s"}:
+        if key in {"k", "ctrl+shift+s", "shift+ctrl+s", "cmd+shift+s", "shift+cmd+s"}:
             try:
                 self.save_runtime_state()
             except Exception as exc:
@@ -721,8 +722,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactively control agent actions and export paper method assets.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--recent-trajectory-length", type=int, default=8)
-    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
-    parser.add_argument("--load-state", type=Path, default=None)
+    parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR, help="Directory for k state snapshots.")
+    parser.add_argument("--load-state", type=Path, default=None, help="Load a saved .npz interactive method state.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--rows", type=int, default=40)
     parser.add_argument("--cols", type=int, default=60)
