@@ -150,10 +150,42 @@ def _create_asset_axes(shape: tuple[int, int], *, style: SharedSemanticAssetStyl
     return fig, ax
 
 
+def _trim_external_png_background(path: Path) -> None:
+    try:
+        from PIL import Image
+    except Exception:
+        return
+
+    image = Image.open(path).convert("RGBA")
+    arr = np.asarray(image, dtype=np.uint8)
+    if arr.size <= 0:
+        return
+
+    alpha = arr[..., 3]
+    rgb = arr[..., :3]
+    pure_white = (alpha == 255) & np.all(rgb == 255, axis=2)
+    transparent = alpha == 0
+    content = ~(pure_white | transparent)
+    if not np.any(content):
+        return
+
+    rows, cols = np.nonzero(content)
+    r0 = int(rows.min())
+    r1 = int(rows.max()) + 1
+    c0 = int(cols.min())
+    c1 = int(cols.max()) + 1
+    if r0 == 0 and c0 == 0 and r1 == int(arr.shape[0]) and c1 == int(arr.shape[1]):
+        return
+
+    cropped = arr[r0:r1, c0:c1]
+    Image.fromarray(cropped, mode="RGBA").save(path)
+
+
 def _save_asset_figure(fig: plt.Figure, path: Path, *, dpi: int, facecolor: str = "white") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=int(dpi), pad_inches=0.0, bbox_inches=None, facecolor=facecolor)
     plt.close(fig)
+    _trim_external_png_background(path)
 
 
 def _crop_from_box(box: AnalysisBox) -> CropBounds:

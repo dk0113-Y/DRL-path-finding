@@ -152,7 +152,7 @@ class WorldCanvas:
 class MethodFigureStyle:
     canvas_size: tuple[float, float] = (6.0, 4.4)
     arrow_canvas_size: tuple[float, float] = (2.1, 2.1)
-    margins: tuple[float, float, float, float] = (0.04, 0.96, 0.96, 0.04)
+    margins: tuple[float, float, float, float] = (0.0, 1.0, 1.0, 0.0)
     show_local_scan_circle: bool = True
     show_belief_scan_circle: bool = False
     overlay_known_alpha: float = 0.28
@@ -437,13 +437,77 @@ def _grid_figure_size(shape: tuple[int, int], *, height: float = 4.8, min_width:
     return width, float(height)
 
 
-def _save_figure(fig: plt.Figure, path: Path, *, dpi: int, tight: bool = True) -> None:
+def _method_figure_size_for_shape(shape: tuple[int, int], *, style: MethodFigureStyle) -> tuple[float, float]:
+    rows = max(1, int(shape[0]))
+    cols = max(1, int(shape[1]))
+    max_width = max(0.1, float(style.canvas_size[0]))
+    max_height = max(0.1, float(style.canvas_size[1]))
+    scale = min(max_width / float(cols), max_height / float(rows))
+    return float(cols) * scale, float(rows) * scale
+
+
+def _create_method_axis(shape: tuple[int, int], *, style: MethodFigureStyle):
+    fig = plt.figure(figsize=_method_figure_size_for_shape(shape, style=style), frameon=False)
+    fig.patch.set_facecolor("white")
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_facecolor("white")
+    return fig, ax
+
+
+def _trim_external_png_background(path: Path) -> None:
+    try:
+        from PIL import Image
+    except Exception:
+        return
+
+    image = Image.open(path).convert("RGBA")
+    arr = np.asarray(image, dtype=np.uint8)
+    if arr.size <= 0:
+        return
+
+    alpha = arr[..., 3]
+    rgb = arr[..., :3]
+    pure_white = (alpha == 255) & np.all(rgb == 255, axis=2)
+    transparent = alpha == 0
+    content = ~(pure_white | transparent)
+    if not np.any(content):
+        return
+
+    rows, cols = np.nonzero(content)
+    r0 = int(rows.min())
+    r1 = int(rows.max()) + 1
+    c0 = int(cols.min())
+    c1 = int(cols.max()) + 1
+    if r0 == 0 and c0 == 0 and r1 == int(arr.shape[0]) and c1 == int(arr.shape[1]):
+        return
+
+    cropped = arr[r0:r1, c0:c1]
+    Image.fromarray(cropped, mode="RGBA").save(path)
+
+
+def _save_figure(fig: plt.Figure, path: Path, *, dpi: int, tight: bool = True, transparent: bool = False) -> None:
     _ensure_output_dir(path.parent)
+    facecolor = "none" if transparent else "white"
     if tight:
-        fig.savefig(path, dpi=int(dpi), bbox_inches="tight", pad_inches=0.05, facecolor="white")
+        fig.savefig(
+            path,
+            dpi=int(dpi),
+            bbox_inches="tight",
+            pad_inches=0.0,
+            facecolor=facecolor,
+            transparent=bool(transparent),
+        )
     else:
-        fig.savefig(path, dpi=int(dpi), facecolor="white")
+        fig.savefig(
+            path,
+            dpi=int(dpi),
+            bbox_inches=None,
+            pad_inches=0.0,
+            facecolor=facecolor,
+            transparent=bool(transparent),
+        )
     plt.close(fig)
+    _trim_external_png_background(path)
 
 
 def _export_local_radar_observation(path: Path, snapshot: Snapshot, sensor: RadarSensor, *, dpi: int) -> None:
@@ -742,9 +806,8 @@ def _export_method_local_observation(
     style: MethodFigureStyle,
     dpi: int,
 ) -> None:
-    fig, ax = plt.subplots(figsize=style.canvas_size)
+    fig, ax = _create_method_axis(snapshot.local_snap.shape, style=style)
     _render_method_local_axis(ax, snapshot=snapshot, sensor=sensor, style=style)
-    _apply_method_layout(fig, style)
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -757,9 +820,8 @@ def _export_method_belief_map(
     style: MethodFigureStyle,
     dpi: int,
 ) -> None:
-    fig, ax = plt.subplots(figsize=style.canvas_size)
+    fig, ax = _create_method_axis(canvas.shape, style=style)
     _render_method_belief_axis(ax, snapshot=snapshot, canvas=canvas, sensor=sensor, style=style)
-    _apply_method_layout(fig, style)
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -773,7 +835,7 @@ def _export_method_overlay(
     style: MethodFigureStyle,
     dpi: int,
 ) -> None:
-    fig, ax = plt.subplots(figsize=style.canvas_size)
+    fig, ax = _create_method_axis(canvas.shape, style=style)
     _render_observation_overlay_axis(
         ax,
         before_snapshot=before_snapshot,
@@ -782,7 +844,6 @@ def _export_method_overlay(
         sensor=sensor,
         style=style,
     )
-    _apply_method_layout(fig, style)
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -800,7 +861,10 @@ def _export_executed_action_arrow(
     unit_row = delta_row / max_abs
     unit_col = delta_col / max_abs
 
-    fig, ax = plt.subplots(figsize=style.arrow_canvas_size)
+    fig = plt.figure(figsize=style.arrow_canvas_size, frameon=False)
+    fig.patch.set_alpha(0.0)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    ax.set_facecolor("none")
     arrow = FancyArrowPatch(
         posA=(-0.42 * unit_col, -0.42 * unit_row),
         posB=(0.42 * unit_col, 0.42 * unit_row),
@@ -819,8 +883,7 @@ def _export_executed_action_arrow(
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
-    _apply_method_layout(fig, style)
-    _save_figure(fig, path, dpi=dpi, tight=False)
+    _save_figure(fig, path, dpi=dpi, tight=False, transparent=True)
 
 
 def export_method_figure_assets(
