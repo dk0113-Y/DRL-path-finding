@@ -790,16 +790,24 @@ def _render_method_local_axis(
     sensor: RadarSensor,
     style: MethodFigureStyle,
     trajectory_world: np.ndarray | None = None,
+    show_agent: bool = True,
+    show_scan_circle: bool | None = None,
+    show_trajectory: bool = False,
 ) -> None:
     ax.imshow(snapshot.local_snap, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
-    if style.show_local_scan_circle:
+    if show_trajectory:
+        traj_rows, traj_cols = _trajectory_world_to_local(snapshot, sensor, trajectory_world=trajectory_world)
+        _draw_trajectory(ax, traj_rows, traj_cols)
+    scan_visible = bool(style.show_local_scan_circle if show_scan_circle is None else show_scan_circle)
+    if scan_visible:
         _draw_scan_circle(
             ax,
             center_row=float(sensor.center_state[0]),
             center_col=float(sensor.center_state[1]),
             radius=float(sensor.scan_r),
         )
-    _draw_agent(ax, row=float(sensor.center_state[0]), col=float(sensor.center_state[1]))
+    if show_agent:
+        _draw_agent(ax, row=float(sensor.center_state[0]), col=float(sensor.center_state[1]))
     _format_clean_axis(ax, snapshot.local_snap.shape)
 
 
@@ -812,15 +820,21 @@ def _render_method_belief_axis(
     style: MethodFigureStyle,
     show_analysis_box: bool = False,
     trajectory_world: np.ndarray | None = None,
+    show_agent: bool = True,
+    show_scan_circle: bool | None = None,
+    show_trajectory: bool = True,
 ) -> None:
     belief_canvas = _project_belief_to_canvas(snapshot, canvas)
     ax.imshow(belief_canvas, cmap=BELIEF_CMAP, norm=BELIEF_NORM, origin="upper", interpolation="nearest")
-    traj_rows, traj_cols = _trajectory_world_to_canvas(snapshot, canvas, trajectory_world=trajectory_world)
-    _draw_trajectory(ax, traj_rows, traj_cols)
+    if show_trajectory:
+        traj_rows, traj_cols = _trajectory_world_to_canvas(snapshot, canvas, trajectory_world=trajectory_world)
+        _draw_trajectory(ax, traj_rows, traj_cols)
     agent_row, agent_col = _agent_world_to_canvas(snapshot, canvas)
-    if style.show_belief_scan_circle:
+    scan_visible = bool(style.show_belief_scan_circle if show_scan_circle is None else show_scan_circle)
+    if scan_visible:
         _draw_scan_circle(ax, center_row=agent_row, center_col=agent_col, radius=float(sensor.scan_r))
-    _draw_agent(ax, row=agent_row, col=agent_col)
+    if show_agent:
+        _draw_agent(ax, row=agent_row, col=agent_col)
     if show_analysis_box:
         r0, r1, c0, c1 = snapshot.analysis_box
         world_r0 = int(snapshot.belief_origin_world[0]) + int(r0)
@@ -898,9 +912,21 @@ def _export_method_local_observation(
     style: MethodFigureStyle,
     dpi: int,
     trajectory_world: np.ndarray | None = None,
+    show_agent: bool = True,
+    show_scan_circle: bool | None = None,
+    show_trajectory: bool = False,
 ) -> None:
     fig, ax = _create_method_axis(snapshot.local_snap.shape, style=style)
-    _render_method_local_axis(ax, snapshot=snapshot, sensor=sensor, style=style)
+    _render_method_local_axis(
+        ax,
+        snapshot=snapshot,
+        sensor=sensor,
+        style=style,
+        trajectory_world=trajectory_world,
+        show_agent=show_agent,
+        show_scan_circle=show_scan_circle,
+        show_trajectory=show_trajectory,
+    )
     _save_figure(fig, path, dpi=dpi, tight=False)
 
 
@@ -914,6 +940,9 @@ def _export_method_belief_map(
     dpi: int,
     show_analysis_box: bool = False,
     trajectory_world: np.ndarray | None = None,
+    show_agent: bool = True,
+    show_scan_circle: bool | None = None,
+    show_trajectory: bool = True,
 ) -> None:
     fig, ax = _create_method_axis(canvas.shape, style=style)
     _render_method_belief_axis(
@@ -924,6 +953,9 @@ def _export_method_belief_map(
         style=style,
         show_analysis_box=show_analysis_box,
         trajectory_world=trajectory_world,
+        show_agent=show_agent,
+        show_scan_circle=show_scan_circle,
+        show_trajectory=show_trajectory,
     )
     _save_figure(fig, path, dpi=dpi, tight=False)
 

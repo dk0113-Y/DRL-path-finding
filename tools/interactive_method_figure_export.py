@@ -45,11 +45,13 @@ from tools.export_architecture_pictures import (
 from tools.export_shared_semantic_layer_assets import (
     RAW_FRONTIER_COLOR,
     SharedSemanticAssetStyle,
-    _crop_belief,
-    _crop_from_box,
+    _analysis_window_from_full_canvas,
+    _build_semantic_full_canvas,
+    _export_belief_after_update_with_frontier,
     _export_frontier_cluster_overlay,
-    _export_semantic_input_belief_map,
-    _frontier_crop,
+    _export_local_semantic_crop,
+    _export_semantic_input_analysis_crop,
+    _export_trajectory_decay_10step_local,
     _overlay_mask,
     _render_base_map,
 )
@@ -61,7 +63,12 @@ from matplotlib.widgets import Button
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "run_picture" / "interactive_method_assets"
 DEFAULT_STATE_DIR = REPO_ROOT / "outputs" / "interactive_method_states"
 ACTION_KEYS = tuple(KEY_TO_ACTION.keys())
-LEGACY_SEMANTIC_OUTPUT_NAMES = ("cluster_analysis_boxes.png", "frontier_parsing_overlay.png")
+LEGACY_SEMANTIC_OUTPUT_NAMES = (
+    "cluster_analysis_boxes.png",
+    "frontier_parsing_overlay.png",
+    "semantic_input_belief_map.png",
+    "trajectory_decay_10step.png",
+)
 
 
 @dataclass(frozen=True)
@@ -141,10 +148,18 @@ class InteractiveMethodFigureExporter:
         state_dir: Path,
         load_state: Path | None,
         config: ExportConfig,
+        trajectory_decay_length: int = 10,
+        local_semantic_crop_radius: int | None = None,
+        override_recent_trajectory_length: int | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.state_dir = Path(state_dir)
         self.recent_trajectory_length = max(0, int(recent_trajectory_length))
+        self.trajectory_decay_length = max(0, int(trajectory_decay_length))
+        self.local_semantic_crop_radius = None if local_semantic_crop_radius is None else max(0, int(local_semantic_crop_radius))
+        self.override_recent_trajectory_length = (
+            None if override_recent_trajectory_length is None else max(0, int(override_recent_trajectory_length))
+        )
         self.config = config
         self.method_style = MethodFigureStyle()
         self.semantic_style = SharedSemanticAssetStyle(dpi=int(config.dpi))
@@ -159,6 +174,7 @@ class InteractiveMethodFigureExporter:
 
         if load_state is not None:
             self.load_runtime_state(load_state)
+            self._apply_recent_trajectory_override()
             return
 
         _set_global_seed(int(config.seed))
@@ -178,6 +194,7 @@ class InteractiveMethodFigureExporter:
         self.trajectory_world: list[tuple[int, int]] = [self.agent_state]
         self.step = 0
         self.last_transition: CachedTransition | None = None
+        self._apply_recent_trajectory_override()
 
     @staticmethod
     def _copy_snapshot(snapshot: Snapshot) -> Snapshot:
@@ -395,6 +412,11 @@ class InteractiveMethodFigureExporter:
         self.status_message = str(state.status_message)
         if not preserve_undo:
             self.undo_history.clear()
+        self._apply_recent_trajectory_override()
+
+    def _apply_recent_trajectory_override(self) -> None:
+        if self.override_recent_trajectory_length is not None:
+            self.recent_trajectory_length = max(0, int(self.override_recent_trajectory_length))
 
     def _default_state_path(self, directory: Path) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -467,6 +489,7 @@ class InteractiveMethodFigureExporter:
         return SimpleNamespace(
             snapshot=snapshot,
             frontier_mask=frontier_mask,
+            belief_frontier_mask=np.asarray(self.cum_map.frontier_bool, dtype=bool).copy(),
             semantic_snapshot=semantic_snapshot,
         )
 
@@ -527,12 +550,22 @@ class InteractiveMethodFigureExporter:
 
     def _draw_shared_entry_axis(self, ax, snapshot: Snapshot) -> None:
         scene = self._semantic_scene(snapshot)
-        crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
-        belief_crop = _crop_belief(snapshot, crop)
+        full_canvas = _build_semantic_full_canvas(
+            scene,
+            trajectory_world=self.current_recent_trajectory(),
+            trajectory_length=int(self.recent_trajectory_length),
+            show_trajectory=False,
+        )
+        analysis_window = _analysis_window_from_full_canvas(full_canvas)
         ax.clear()
-        _render_base_map(ax, belief_crop)
-        _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(self.semantic_style.frontier_alpha))
-        _format_clean_axis(ax, crop.shape)
+        _render_base_map(ax, analysis_window.belief_crop)
+        _overlay_mask(
+            ax,
+            analysis_window.raw_frontier_crop,
+            color=RAW_FRONTIER_COLOR,
+            alpha=float(self.semantic_style.frontier_alpha),
+        )
+        _format_clean_axis(ax, analysis_window.crop.shape)
         ax.set_title("Shared Semantic Input: analysis domain + raw frontier", fontsize=9)
 
     def refresh(self) -> None:
@@ -599,8 +632,11 @@ class InteractiveMethodFigureExporter:
             "belief_after_update": self.output_dir / "belief_after_update.png",
             "observation_overlay": self.output_dir / "observation_overlay.png",
             "executed_action_arrow": self.output_dir / "executed_action_arrow.png",
-            "semantic_input_belief_map": self.output_dir / "semantic_input_belief_map.png",
+            "belief_after_update_with_frontier": self.output_dir / "belief_after_update_with_frontier.png",
+            "local_semantic_crop": self.output_dir / "local_semantic_crop.png",
+            "semantic_input_analysis_crop": self.output_dir / "semantic_input_analysis_crop.png",
             "frontier_cluster_overlay": self.output_dir / "frontier_cluster_overlay.png",
+            "trajectory_decay_10step_local": self.output_dir / "trajectory_decay_10step_local.png",
         }
 
         _export_method_local_observation(
@@ -618,6 +654,9 @@ class InteractiveMethodFigureExporter:
             style=self.method_style,
             dpi=int(self.config.dpi),
             trajectory_world=before_recent,
+            show_agent=False,
+            show_scan_circle=False,
+            show_trajectory=True,
         )
         _export_method_belief_map(
             outputs["belief_after_update"],
@@ -626,6 +665,10 @@ class InteractiveMethodFigureExporter:
             sensor=self.sensor,
             style=self.method_style,
             dpi=int(self.config.dpi),
+            trajectory_world=after_recent,
+            show_agent=True,
+            show_scan_circle=False,
+            show_trajectory=True,
         )
         _export_method_overlay(
             outputs["observation_overlay"],
@@ -646,17 +689,74 @@ class InteractiveMethodFigureExporter:
         )
 
         scene = self._semantic_scene(transition.after_snapshot)
-        _export_semantic_input_belief_map(
-            outputs["semantic_input_belief_map"],
+        local_crop_shape = (
+            transition.after_snapshot.local_snap.shape
+            if self.local_semantic_crop_radius is None
+            else (
+                2 * max(0, int(self.local_semantic_crop_radius)) + 1,
+                2 * max(0, int(self.local_semantic_crop_radius)) + 1,
+            )
+        )
+        semantic_full_canvas = _build_semantic_full_canvas(
+            scene,
+            trajectory_world=after_recent,
+            trajectory_length=int(self.recent_trajectory_length),
+            show_trajectory=True,
+        )
+        semantic_analysis_window = _analysis_window_from_full_canvas(semantic_full_canvas)
+        _export_belief_after_update_with_frontier(
+            outputs["belief_after_update_with_frontier"],
             scene,
             style=self.semantic_style,
+            full_canvas=semantic_full_canvas,
+            trajectory_world=after_recent,
+            trajectory_length=int(self.recent_trajectory_length),
+            show_agent=False,
+            show_scan_circle=False,
+            show_trajectory=True,
         )
-        _export_frontier_cluster_overlay(outputs["frontier_cluster_overlay"], scene, style=self.semantic_style)
+        _export_local_semantic_crop(
+            outputs["local_semantic_crop"],
+            scene,
+            style=self.semantic_style,
+            crop_shape=local_crop_shape,
+            trajectory_world=after_recent,
+            trajectory_length=int(self.recent_trajectory_length),
+            show_agent=False,
+            show_scan_circle=False,
+            show_trajectory=True,
+        )
+        _export_semantic_input_analysis_crop(
+            outputs["semantic_input_analysis_crop"],
+            scene,
+            style=self.semantic_style,
+            analysis_window=semantic_analysis_window,
+            trajectory_world=after_recent,
+            trajectory_length=int(self.recent_trajectory_length),
+            show_agent=False,
+            show_scan_circle=False,
+            show_trajectory=True,
+        )
+        _export_frontier_cluster_overlay(
+            outputs["frontier_cluster_overlay"],
+            scene,
+            style=self.semantic_style,
+            analysis_window=semantic_analysis_window,
+            show_trajectory=False,
+        )
+        _export_trajectory_decay_10step_local(
+            outputs["trajectory_decay_10step_local"],
+            transition.after_snapshot,
+            style=self.semantic_style,
+            crop_shape=local_crop_shape,
+            length=int(self.trajectory_decay_length),
+        )
 
         manifest = {
             "step": int(transition.step),
             "action_key": str(transition.action_key),
             "recent_trajectory_length": int(self.recent_trajectory_length),
+            "trajectory_decay_length": int(self.trajectory_decay_length),
             "before_display_steps": int(before_recent.shape[0] - 1),
             "after_display_steps": int(after_recent.shape[0] - 1),
             "before_agent_world": [int(v) for v in transition.before_snapshot.agent_world],
@@ -727,6 +827,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactively control agent actions and export paper method assets.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--recent-trajectory-length", type=int, default=10)
+    parser.add_argument(
+        "--override-recent-trajectory-length",
+        type=int,
+        default=None,
+        help="Override recent_trajectory_length after loading an older .npz state.",
+    )
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR, help="Directory for k state snapshots.")
     parser.add_argument("--load-state", type=Path, default=None, help="Load a saved .npz interactive method state.")
     parser.add_argument("--seed", type=int, default=0)
@@ -736,6 +842,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--obs-size", type=int, default=6)
     parser.add_argument("--scan-radius", type=int, default=10)
     parser.add_argument("--dpi", type=int, default=240)
+    parser.add_argument(
+        "--trajectory-decay-length",
+        type=int,
+        default=10,
+        help="Recent trajectory window length for trajectory_decay_10step_local.png. Default: 10.",
+    )
+    parser.add_argument(
+        "--local-semantic-crop-radius",
+        type=int,
+        default=None,
+        help="Agent-centered cumulative-belief crop radius for local_semantic_crop.png. Defaults to --scan-radius or the loaded state's scan radius.",
+    )
     parser.add_argument(
         "--scripted-actions",
         type=_parse_action_sequence,
@@ -768,6 +886,9 @@ def main() -> None:
         state_dir=Path(args.state_dir),
         load_state=None if args.load_state is None else Path(args.load_state),
         config=config,
+        trajectory_decay_length=int(args.trajectory_decay_length),
+        local_semantic_crop_radius=args.local_semantic_crop_radius,
+        override_recent_trajectory_length=args.override_recent_trajectory_length,
     )
 
     for action_key in args.scripted_actions or []:
@@ -780,6 +901,7 @@ def main() -> None:
         print(f"step={transition.step if transition else 0}")
         print(f"last_action={transition.action_key if transition else ''}")
         print(f"recent_trajectory_length={exporter.recent_trajectory_length}")
+        print(f"trajectory_decay_length={exporter.trajectory_decay_length}")
         for name, path in outputs.items():
             print(f"{name}={_format_output_path(path)}")
         return

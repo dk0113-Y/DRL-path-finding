@@ -25,11 +25,40 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--load-state", type=Path, required=True, help="Saved .npz state from interactive_method_figure_export.py.")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for exported PNG assets.")
     parser.add_argument("--dpi", type=int, default=240, help="Export DPI. Default: 240.")
+    parser.add_argument(
+        "--recent-trajectory-length",
+        type=int,
+        default=None,
+        help="Deprecated alias for --override-recent-trajectory-length.",
+    )
+    parser.add_argument(
+        "--override-recent-trajectory-length",
+        type=int,
+        default=None,
+        help="Override the recent trajectory length stored in older .npz states.",
+    )
+    parser.add_argument(
+        "--trajectory-decay-length",
+        type=int,
+        default=10,
+        help="Recent trajectory window length for trajectory_decay_10step_local.png. Default: 10.",
+    )
+    parser.add_argument(
+        "--local-semantic-crop-radius",
+        type=int,
+        default=None,
+        help="Agent-centered cumulative-belief crop radius for local_semantic_crop.png. Defaults to the loaded state's scan radius.",
+    )
     return parser
 
 
 def main() -> None:
     args = _build_arg_parser().parse_args()
+    recent_override = (
+        args.override_recent_trajectory_length
+        if args.override_recent_trajectory_length is not None
+        else args.recent_trajectory_length
+    )
     config = ExportConfig(
         dpi=int(args.dpi),
         output_dir=Path(args.output_dir),
@@ -40,6 +69,9 @@ def main() -> None:
         state_dir=DEFAULT_STATE_DIR,
         load_state=Path(args.load_state),
         config=config,
+        trajectory_decay_length=int(args.trajectory_decay_length),
+        local_semantic_crop_radius=args.local_semantic_crop_radius,
+        override_recent_trajectory_length=recent_override,
     )
     if exporter.last_transition is None:
         raise RuntimeError(
@@ -53,6 +85,7 @@ def main() -> None:
     print(f"step={transition.step if transition else 0}")
     print(f"last_action={transition.action_key if transition else ''}")
     print(f"recent_trajectory_length={exporter.recent_trajectory_length}")
+    print(f"trajectory_decay_length={exporter.trajectory_decay_length}")
     for name, path in outputs.items():
         print(f"{name}={_format_output_path(path)}")
 

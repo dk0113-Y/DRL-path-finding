@@ -32,10 +32,13 @@ from tools.export_architecture_pictures import (
     ExportConfig,
     FIXED_ACTION_PREFERENCES,
     KEY_TO_ACTION,
+    MethodFigureStyle,
     Snapshot,
     _capture_snapshot,
     _clear_old_png_outputs,
+    _create_method_axis,
     _draw_agent,
+    _draw_scan_circle,
     _draw_trajectory,
     _format_output_path,
     _select_fallback_action,
@@ -68,6 +71,7 @@ CLUSTER_PALETTE = (
     "#d17b88",
 )
 RAW_FRONTIER_COLOR = CLUSTER_PALETTE[0]
+TRAJECTORY_DECAY_COLOR = "#2d6a8c"
 UNKNOWN_BLOCK_BOX_COLOR = "#2f6f7e"
 DEFAULT_SEMANTIC_TRAJECTORY_LENGTH = 10
 
@@ -96,9 +100,27 @@ class SemanticExportScene:
     resolved_step: int
     snapshot: Snapshot
     frontier_mask: np.ndarray
+    belief_frontier_mask: np.ndarray
     semantic_snapshot: SharedSemanticSnapshot
     focus_block: UnknownBlock
     focus_cluster: FrontierCluster
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticFullCanvas:
+    belief_map: np.ndarray
+    raw_frontier_mask: np.ndarray
+    trajectory_array: np.ndarray
+    analysis_crop: CropBounds
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticAnalysisWindow:
+    crop: CropBounds
+    belief_crop: np.ndarray
+    raw_frontier_crop: np.ndarray
+    trajectory_rows: np.ndarray
+    trajectory_cols: np.ndarray
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +179,22 @@ def _create_asset_axes(shape: tuple[int, int], *, style: SharedSemanticAssetStyl
     return fig, ax
 
 
+def _format_asset_axis(ax, shape: tuple[int, int]) -> None:
+    ax.set_aspect("equal")
+    ax.set_xlim(-0.5, float(shape[1]) - 0.5)
+    ax.set_ylim(float(shape[0]) - 0.5, -0.5)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def _create_local_asset_axes(shape: tuple[int, int]):
+    fig, ax = _create_method_axis(shape, style=MethodFigureStyle())
+    _format_asset_axis(ax, shape)
+    return fig, ax
+
+
 def _trim_external_png_background(path: Path) -> None:
     try:
         from PIL import Image
@@ -188,11 +226,19 @@ def _trim_external_png_background(path: Path) -> None:
     Image.fromarray(cropped, mode="RGBA").save(path)
 
 
-def _save_asset_figure(fig: plt.Figure, path: Path, *, dpi: int, facecolor: str = "white") -> None:
+def _save_asset_figure(
+    fig: plt.Figure,
+    path: Path,
+    *,
+    dpi: int,
+    facecolor: str = "white",
+    trim: bool = True,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=int(dpi), pad_inches=0.0, bbox_inches=None, facecolor=facecolor)
     plt.close(fig)
-    _trim_external_png_background(path)
+    if trim:
+        _trim_external_png_background(path)
 
 
 def _crop_from_box(box: AnalysisBox) -> CropBounds:
@@ -253,6 +299,74 @@ def _crop_belief(snapshot: Snapshot, crop: CropBounds) -> np.ndarray:
     return np.asarray(snapshot.belief_map[crop.r0:crop.r1, crop.c0:crop.c1], dtype=np.int8)
 
 
+def _fixed_centered_crop(
+    array: np.ndarray,
+    *,
+    center_rc: tuple[int, int],
+    radius: int,
+    fill_value,
+) -> np.ndarray:
+    source = np.asarray(array)
+    radius_use = max(0, int(radius))
+    size = (2 * radius_use) + 1
+    out = np.full((size, size), fill_value, dtype=source.dtype)
+
+    center_r, center_c = int(center_rc[0]), int(center_rc[1])
+    desired_r0 = center_r - radius_use
+    desired_r1 = center_r + radius_use + 1
+    desired_c0 = center_c - radius_use
+    desired_c1 = center_c + radius_use + 1
+
+    src_r0 = max(0, desired_r0)
+    src_r1 = min(int(source.shape[0]), desired_r1)
+    src_c0 = max(0, desired_c0)
+    src_c1 = min(int(source.shape[1]), desired_c1)
+    if src_r0 >= src_r1 or src_c0 >= src_c1:
+        return out
+
+    dst_r0 = src_r0 - desired_r0
+    dst_r1 = dst_r0 + (src_r1 - src_r0)
+    dst_c0 = src_c0 - desired_c0
+    dst_c1 = dst_c0 + (src_c1 - src_c0)
+    out[dst_r0:dst_r1, dst_c0:dst_c1] = source[src_r0:src_r1, src_c0:src_c1]
+    return out
+
+
+def _fixed_centered_crop_shape(
+    array: np.ndarray,
+    *,
+    center_rc: tuple[int, int],
+    shape: tuple[int, int],
+    fill_value,
+) -> np.ndarray:
+    source = np.asarray(array)
+    rows = max(1, int(shape[0]))
+    cols = max(1, int(shape[1]))
+    out = np.full((rows, cols), fill_value, dtype=source.dtype)
+
+    center_r, center_c = int(center_rc[0]), int(center_rc[1])
+    half_before_r = rows // 2
+    half_before_c = cols // 2
+    desired_r0 = center_r - half_before_r
+    desired_r1 = desired_r0 + rows
+    desired_c0 = center_c - half_before_c
+    desired_c1 = desired_c0 + cols
+
+    src_r0 = max(0, desired_r0)
+    src_r1 = min(int(source.shape[0]), desired_r1)
+    src_c0 = max(0, desired_c0)
+    src_c1 = min(int(source.shape[1]), desired_c1)
+    if src_r0 >= src_r1 or src_c0 >= src_c1:
+        return out
+
+    dst_r0 = src_r0 - desired_r0
+    dst_r1 = dst_r0 + (src_r1 - src_r0)
+    dst_c0 = src_c0 - desired_c0
+    dst_c1 = dst_c0 + (src_c1 - src_c0)
+    out[dst_r0:dst_r1, dst_c0:dst_c1] = source[src_r0:src_r1, src_c0:src_c1]
+    return out
+
+
 def _mask_from_coords(rows: np.ndarray, cols: np.ndarray, crop: CropBounds) -> np.ndarray:
     mask = np.zeros(crop.shape, dtype=bool)
     if rows.size <= 0 or cols.size <= 0:
@@ -307,13 +421,15 @@ def _draw_cropped_trajectory_and_agent(
     crop: CropBounds,
     *,
     trajectory_world: np.ndarray | None = None,
+    show_agent: bool = True,
+    show_trajectory: bool = True,
 ) -> None:
     trajectory = (
         _recent_trajectory_window(snapshot.trajectory_world)
         if trajectory_world is None
         else np.asarray(trajectory_world, dtype=np.int32).reshape((-1, 2))
     )
-    if trajectory.size > 0:
+    if show_trajectory and trajectory.size > 0:
         origin_r, origin_c = int(snapshot.belief_origin_world[0]), int(snapshot.belief_origin_world[1])
         rows = trajectory[:, 0].astype(np.float32) - float(origin_r) - float(crop.r0)
         cols = trajectory[:, 1].astype(np.float32) - float(origin_c) - float(crop.c0)
@@ -333,7 +449,7 @@ def _draw_cropped_trajectory_and_agent(
 
     agent_r = float(int(snapshot.agent_array[0]) - int(crop.r0))
     agent_c = float(int(snapshot.agent_array[1]) - int(crop.c0))
-    if -0.5 <= agent_r <= float(crop.shape[0]) - 0.5 and -0.5 <= agent_c <= float(crop.shape[1]) - 0.5:
+    if show_agent and -0.5 <= agent_r <= float(crop.shape[0]) - 0.5 and -0.5 <= agent_c <= float(crop.shape[1]) - 0.5:
         _draw_agent(ax, row=agent_r, col=agent_c, zorder=7)
 
 
@@ -412,6 +528,153 @@ def _render_cluster_analysis_boxes(
 
 def _frontier_crop(scene: SemanticExportScene, crop: CropBounds) -> np.ndarray:
     return np.asarray(scene.frontier_mask[crop.r0 : crop.r1, crop.c0 : crop.c1], dtype=bool)
+
+
+def _belief_frontier_mask(scene: SemanticExportScene) -> np.ndarray:
+    return np.asarray(getattr(scene, "belief_frontier_mask", scene.frontier_mask), dtype=bool)
+
+
+def _snapshot_trajectory_array(snapshot: Snapshot, trajectory_world: np.ndarray) -> np.ndarray:
+    trajectory = np.asarray(trajectory_world, dtype=np.int32)
+    if trajectory.ndim != 2 or trajectory.shape[1] != 2:
+        trajectory = trajectory.reshape((-1, 2))
+    if trajectory.size <= 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    origin_r, origin_c = int(snapshot.belief_origin_world[0]), int(snapshot.belief_origin_world[1])
+    rows = trajectory[:, 0].astype(np.float32) - float(origin_r)
+    cols = trajectory[:, 1].astype(np.float32) - float(origin_c)
+    return np.stack([rows, cols], axis=1)
+
+
+def _build_semantic_full_canvas(
+    scene: SemanticExportScene,
+    *,
+    trajectory_world: np.ndarray | None = None,
+    trajectory_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+    show_trajectory: bool = True,
+) -> SemanticFullCanvas:
+    belief_map = np.asarray(scene.snapshot.belief_map, dtype=np.int8).copy()
+    raw_frontier_mask = _belief_frontier_mask(scene).copy()
+    if tuple(raw_frontier_mask.shape) != tuple(belief_map.shape):
+        raise ValueError(
+            f"raw frontier mask shape mismatch: expected {belief_map.shape}, got {raw_frontier_mask.shape}"
+        )
+
+    trajectory_source = (
+        _recent_trajectory_window(scene.snapshot.trajectory_world, length=int(trajectory_length))
+        if trajectory_world is None
+        else np.asarray(trajectory_world, dtype=np.int32).reshape((-1, 2))
+    )
+    trajectory_array = (
+        _snapshot_trajectory_array(scene.snapshot, trajectory_source)
+        if show_trajectory
+        else np.zeros((0, 2), dtype=np.float32)
+    )
+    crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
+    rows, cols = int(belief_map.shape[0]), int(belief_map.shape[1])
+    if int(crop.r0) < 0 or int(crop.c0) < 0 or int(crop.r1) > rows or int(crop.c1) > cols:
+        raise ValueError(f"analysis crop {crop} is outside belief map shape {belief_map.shape}")
+
+    return SemanticFullCanvas(
+        belief_map=belief_map,
+        raw_frontier_mask=raw_frontier_mask,
+        trajectory_array=np.asarray(trajectory_array, dtype=np.float32).copy(),
+        analysis_crop=crop,
+    )
+
+
+def _analysis_window_from_full_canvas(full_canvas: SemanticFullCanvas) -> SemanticAnalysisWindow:
+    crop = full_canvas.analysis_crop
+    trajectory_array = np.asarray(full_canvas.trajectory_array, dtype=np.float32)
+    if trajectory_array.shape[0] > 0:
+        trajectory_rows = trajectory_array[:, 0].astype(np.float32, copy=True) - float(crop.r0)
+        trajectory_cols = trajectory_array[:, 1].astype(np.float32, copy=True) - float(crop.c0)
+    else:
+        trajectory_rows = np.zeros((0,), dtype=np.float32)
+        trajectory_cols = np.zeros((0,), dtype=np.float32)
+
+    return SemanticAnalysisWindow(
+        crop=crop,
+        belief_crop=np.asarray(full_canvas.belief_map[crop.r0 : crop.r1, crop.c0 : crop.c1], dtype=np.int8).copy(),
+        raw_frontier_crop=np.asarray(
+            full_canvas.raw_frontier_mask[crop.r0 : crop.r1, crop.c0 : crop.c1],
+            dtype=bool,
+        ).copy(),
+        trajectory_rows=trajectory_rows,
+        trajectory_cols=trajectory_cols,
+    )
+
+
+def _build_semantic_analysis_window(
+    scene: SemanticExportScene,
+    *,
+    trajectory_world: np.ndarray | None = None,
+    trajectory_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+    show_trajectory: bool = True,
+) -> SemanticAnalysisWindow:
+    full_canvas = _build_semantic_full_canvas(
+        scene,
+        trajectory_world=trajectory_world,
+        trajectory_length=int(trajectory_length),
+        show_trajectory=show_trajectory,
+    )
+    return _analysis_window_from_full_canvas(full_canvas)
+
+
+def _draw_window_trajectory(
+    ax,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    shape: tuple[int, int],
+    *,
+    zorder: int = 6,
+) -> None:
+    rows_arr = np.asarray(rows, dtype=np.float32)
+    cols_arr = np.asarray(cols, dtype=np.float32)
+    if rows_arr.size <= 0 or cols_arr.size <= 0:
+        return
+    inside = (
+        (rows_arr >= -0.5)
+        & (rows_arr <= float(int(shape[0])) - 0.5)
+        & (cols_arr >= -0.5)
+        & (cols_arr <= float(int(shape[1])) - 0.5)
+    )
+    start = 0
+    for idx in range(int(inside.size) + 1):
+        if idx < int(inside.size) and bool(inside[idx]):
+            continue
+        if idx - start > 1:
+            _draw_trajectory(ax, rows_arr[start:idx], cols_arr[start:idx], zorder=zorder)
+        start = idx + 1
+
+
+def _centered_local_trajectory(
+    snapshot: Snapshot,
+    trajectory_world: np.ndarray,
+    crop_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    trajectory_array = _snapshot_trajectory_array(snapshot, trajectory_world)
+    if trajectory_array.shape[0] <= 0:
+        return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.float32)
+    center_r = float(int(crop_shape[0]) // 2)
+    center_c = float(int(crop_shape[1]) // 2)
+    rows = trajectory_array[:, 0] - float(int(snapshot.agent_array[0])) + center_r
+    cols = trajectory_array[:, 1] - float(int(snapshot.agent_array[1])) + center_c
+    return rows.astype(np.float32), cols.astype(np.float32)
+
+
+def _draw_centered_trajectory(
+    ax,
+    snapshot: Snapshot,
+    trajectory_world: np.ndarray,
+    crop_shape: tuple[int, int],
+    *,
+    zorder: int = 6,
+) -> None:
+    rows, cols = _centered_local_trajectory(snapshot, trajectory_world, crop_shape)
+    if rows.size <= 1 or cols.size <= 1:
+        return
+    _draw_trajectory(ax, rows, cols, zorder=zorder)
 
 
 def _add_summary_card(
@@ -499,6 +762,7 @@ def _build_scene(
     resolved_step: int,
     snapshot: Snapshot,
     frontier_mask: np.ndarray,
+    belief_frontier_mask: np.ndarray,
     semantic_snapshot: SharedSemanticSnapshot,
 ) -> SemanticExportScene:
     focus_block = _focus_block(tuple(semantic_snapshot.accessible_blocks))
@@ -509,6 +773,7 @@ def _build_scene(
         resolved_step=int(resolved_step),
         snapshot=snapshot,
         frontier_mask=np.asarray(frontier_mask, dtype=bool).copy(),
+        belief_frontier_mask=np.asarray(belief_frontier_mask, dtype=bool).copy(),
         semantic_snapshot=semantic_snapshot,
         focus_block=focus_block,
         focus_cluster=focus_cluster,
@@ -559,6 +824,7 @@ def _collect_semantic_scene(config: ExportConfig, *, step: int | None = None) ->
                     cum_map=cum_map,
                 ),
                 frontier_mask=np.asarray(cum_map.get_frontier_u8(refresh=False), dtype=np.uint8) > 0,
+                belief_frontier_mask=np.asarray(cum_map.frontier_bool, dtype=bool),
                 semantic_snapshot=semantic_snapshot,
             )
             scene_score = _scene_score(semantic_snapshot)
@@ -604,6 +870,91 @@ def _cluster_count(scene: SemanticExportScene) -> int:
     return int(sum(block.frontier_cluster_count for block in scene.semantic_snapshot.accessible_blocks))
 
 
+def _export_belief_after_update_with_frontier(
+    path: Path,
+    scene: SemanticExportScene,
+    *,
+    style: SharedSemanticAssetStyle,
+    full_canvas: SemanticFullCanvas | None = None,
+    trajectory_world: np.ndarray | None = None,
+    trajectory_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+    show_agent: bool = False,
+    show_scan_circle: bool = False,
+    show_trajectory: bool = True,
+    scan_radius: int | None = None,
+) -> None:
+    canvas = full_canvas or _build_semantic_full_canvas(
+        scene,
+        trajectory_world=trajectory_world,
+        trajectory_length=int(trajectory_length),
+        show_trajectory=show_trajectory,
+    )
+    fig, ax = _create_asset_axes(canvas.belief_map.shape, style=style)
+    _render_base_map(ax, canvas.belief_map)
+    _overlay_mask(ax, canvas.raw_frontier_mask, color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
+
+    if show_trajectory and canvas.trajectory_array.shape[0] > 0:
+        _draw_trajectory(ax, canvas.trajectory_array[:, 0], canvas.trajectory_array[:, 1], zorder=6)
+
+    if show_scan_circle and scan_radius is not None:
+        _draw_scan_circle(
+            ax,
+            center_row=float(scene.snapshot.agent_array[0]),
+            center_col=float(scene.snapshot.agent_array[1]),
+            radius=float(scan_radius),
+            zorder=7,
+        )
+    if show_agent:
+        _draw_agent(
+            ax,
+            row=float(scene.snapshot.agent_array[0]),
+            col=float(scene.snapshot.agent_array[1]),
+            zorder=8,
+        )
+    _save_asset_figure(fig, path, dpi=style.dpi)
+
+
+def _export_semantic_input_analysis_crop(
+    path: Path,
+    scene: SemanticExportScene,
+    *,
+    style: SharedSemanticAssetStyle,
+    analysis_window: SemanticAnalysisWindow | None = None,
+    trajectory_world: np.ndarray | None = None,
+    trajectory_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+    show_agent: bool = False,
+    show_scan_circle: bool = False,
+    show_trajectory: bool = True,
+    scan_radius: int | None = None,
+) -> None:
+    window = analysis_window or _build_semantic_analysis_window(
+        scene,
+        trajectory_world=trajectory_world,
+        trajectory_length=int(trajectory_length),
+        show_trajectory=show_trajectory,
+    )
+    crop = window.crop
+    fig, ax = _create_asset_axes(crop.shape, style=style)
+    _render_base_map(ax, window.belief_crop)
+    _overlay_mask(ax, window.raw_frontier_crop, color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
+    if show_trajectory:
+        _draw_window_trajectory(ax, window.trajectory_rows, window.trajectory_cols, crop.shape, zorder=6)
+    if show_agent:
+        agent_r = float(int(scene.snapshot.agent_array[0]) - int(crop.r0))
+        agent_c = float(int(scene.snapshot.agent_array[1]) - int(crop.c0))
+        if -0.5 <= agent_r <= float(crop.shape[0]) - 0.5 and -0.5 <= agent_c <= float(crop.shape[1]) - 0.5:
+            _draw_agent(ax, row=agent_r, col=agent_c, zorder=7)
+    if show_scan_circle and scan_radius is not None:
+        _draw_scan_circle(
+            ax,
+            center_row=float(int(scene.snapshot.agent_array[0]) - int(crop.r0)),
+            center_col=float(int(scene.snapshot.agent_array[1]) - int(crop.c0)),
+            radius=float(scan_radius),
+            zorder=7,
+        )
+    _save_asset_figure(fig, path, dpi=style.dpi)
+
+
 def _export_semantic_input_belief_map(
     path: Path,
     scene: SemanticExportScene,
@@ -611,13 +962,117 @@ def _export_semantic_input_belief_map(
     style: SharedSemanticAssetStyle,
     trajectory_world: np.ndarray | None = None,
 ) -> None:
-    del trajectory_world
-    crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
-    belief_crop = _crop_belief(scene.snapshot, crop)
-    fig, ax = _create_asset_axes(crop.shape, style=style)
+    _export_semantic_input_analysis_crop(
+        path,
+        scene,
+        style=style,
+        trajectory_world=trajectory_world,
+        show_agent=False,
+        show_scan_circle=False,
+        show_trajectory=False,
+    )
+
+
+def _export_local_semantic_crop(
+    path: Path,
+    scene: SemanticExportScene,
+    *,
+    style: SharedSemanticAssetStyle,
+    crop_shape: tuple[int, int] | None = None,
+    crop_radius: int | None = None,
+    trajectory_world: np.ndarray | None = None,
+    trajectory_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+    show_agent: bool = False,
+    show_scan_circle: bool = False,
+    show_trajectory: bool = True,
+    scan_radius: int | None = None,
+) -> None:
+    center = (int(scene.snapshot.agent_array[0]), int(scene.snapshot.agent_array[1]))
+    shape = (
+        (2 * max(0, int(crop_radius)) + 1, 2 * max(0, int(crop_radius)) + 1)
+        if crop_shape is None and crop_radius is not None
+        else tuple(int(v) for v in (scene.snapshot.local_snap.shape if crop_shape is None else crop_shape))
+    )
+    belief_crop = _fixed_centered_crop_shape(
+        scene.snapshot.belief_map,
+        center_rc=center,
+        shape=shape,
+        fill_value=np.int8(INVISIBLE),
+    )
+    frontier_crop = _fixed_centered_crop_shape(
+        _belief_frontier_mask(scene),
+        center_rc=center,
+        shape=shape,
+        fill_value=False,
+    )
+    fig, ax = _create_local_asset_axes(belief_crop.shape)
     _render_base_map(ax, belief_crop)
-    _overlay_mask(ax, _frontier_crop(scene, crop), color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
+    _overlay_mask(ax, frontier_crop, color=RAW_FRONTIER_COLOR, alpha=float(style.frontier_alpha))
+    trajectory = (
+        _recent_trajectory_window(scene.snapshot.trajectory_world, length=int(trajectory_length))
+        if trajectory_world is None
+        else np.asarray(trajectory_world, dtype=np.int32).reshape((-1, 2))
+    )
+    if show_trajectory:
+        _draw_centered_trajectory(ax, scene.snapshot, trajectory, belief_crop.shape, zorder=6)
+    center_row = float(int(belief_crop.shape[0]) // 2)
+    center_col = float(int(belief_crop.shape[1]) // 2)
+    if show_scan_circle and scan_radius is not None:
+        _draw_scan_circle(ax, center_row=center_row, center_col=center_col, radius=float(scan_radius), zorder=7)
+    if show_agent:
+        _draw_agent(ax, row=center_row, col=center_col, zorder=8)
     _save_asset_figure(fig, path, dpi=style.dpi)
+
+
+def _export_trajectory_decay_10step_local(
+    path: Path,
+    snapshot: Snapshot,
+    *,
+    style: SharedSemanticAssetStyle,
+    crop_shape: tuple[int, int],
+    trajectory_world: np.ndarray | None = None,
+    length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+) -> None:
+    trajectory_source = snapshot.trajectory_world if trajectory_world is None else trajectory_world
+    trajectory = _recent_trajectory_window(np.asarray(trajectory_source, dtype=np.int32), length=length)
+    shape = tuple(int(v) for v in crop_shape)
+    fig, ax = _create_local_asset_axes(shape)
+    local_rows, local_cols = _centered_local_trajectory(snapshot, trajectory, shape)
+
+    segment_count = max(0, int(local_rows.shape[0]) - 1)
+    if segment_count > 0:
+        for segment_idx in range(segment_count):
+            progress = float(segment_idx + 1) / float(segment_count)
+            alpha = 0.22 + (0.74 * progress)
+            linewidth = 1.25 + (0.65 * progress)
+            ax.plot(
+                local_cols[segment_idx : segment_idx + 2],
+                local_rows[segment_idx : segment_idx + 2],
+                color=TRAJECTORY_DECAY_COLOR,
+                linewidth=linewidth,
+                alpha=alpha,
+                solid_capstyle="round",
+                zorder=4 + segment_idx,
+            )
+    _save_asset_figure(fig, path, dpi=style.dpi, facecolor="white", trim=False)
+
+
+def _export_trajectory_decay(
+    path: Path,
+    snapshot: Snapshot,
+    *,
+    style: SharedSemanticAssetStyle,
+    trajectory_world: np.ndarray | None = None,
+    length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+) -> None:
+    _export_trajectory_decay_10step_local(
+        path,
+        snapshot,
+        style=style,
+        crop_shape=snapshot.local_snap.shape,
+        trajectory_world=trajectory_world,
+        length=length,
+    )
 
 
 def _export_frontier_parsing_overlay(
@@ -639,12 +1094,23 @@ def _export_frontier_cluster_overlay(
     scene: SemanticExportScene,
     *,
     style: SharedSemanticAssetStyle,
+    analysis_window: SemanticAnalysisWindow | None = None,
+    trajectory_world: np.ndarray | None = None,
+    trajectory_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+    show_trajectory: bool = False,
 ) -> None:
-    crop = _crop_from_box(scene.semantic_snapshot.analysis_box)
-    belief_crop = _crop_belief(scene.snapshot, crop)
+    window = analysis_window or _build_semantic_analysis_window(
+        scene,
+        trajectory_world=trajectory_world,
+        trajectory_length=int(trajectory_length),
+        show_trajectory=show_trajectory,
+    )
+    crop = window.crop
     fig, ax = _create_asset_axes(crop.shape, style=style)
-    _render_base_map(ax, belief_crop)
+    _render_base_map(ax, window.belief_crop)
     _render_frontier_clusters(ax, scene, crop, style=style)
+    if show_trajectory:
+        _draw_window_trajectory(ax, window.trajectory_rows, window.trajectory_cols, crop.shape, zorder=6)
     _save_asset_figure(fig, path, dpi=style.dpi)
 
 
@@ -868,7 +1334,12 @@ def _export_shared_semantic_states(
     _save_asset_figure(fig, path, dpi=style.dpi)
 
 
-def _build_manifest(outputs: dict[str, Path], scene: SemanticExportScene) -> dict[str, object]:
+def _build_manifest(
+    outputs: dict[str, Path],
+    scene: SemanticExportScene,
+    *,
+    trajectory_decay_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+) -> dict[str, object]:
     return {
         "scene": {
             "seed": int(scene.seed),
@@ -887,17 +1358,36 @@ def _build_manifest(outputs: dict[str, Path], scene: SemanticExportScene) -> dic
             "focus_block_area": int(scene.focus_block.block_area),
         },
         "files": {
-            "semantic_input_belief_map.png": {
-                "path": _format_output_path(outputs["semantic_input_belief_map"]),
-                "paper_node": "Dynamic Cumulative Belief Map + Raw Frontier",
+            "belief_after_update_with_frontier.png": {
+                "path": _format_output_path(outputs["belief_after_update_with_frontier"]),
+                "paper_node": "Shared Semantic Layer Full-Map Frontier Input",
                 "render_source": "real_code_data",
-                "data_basis": ["belief_map", "analysis_box", "raw_frontier"],
+                "data_basis": ["belief_map", "cumulative_frontier", "recent_trajectory"],
+            },
+            "local_semantic_crop.png": {
+                "path": _format_output_path(outputs["local_semantic_crop"]),
+                "paper_node": "Shared Semantic Layer Local Crop",
+                "render_source": "real_code_data",
+                "data_basis": ["belief_map", "agent_centered_local_crop", "cumulative_frontier", "recent_trajectory"],
+            },
+            "semantic_input_analysis_crop.png": {
+                "path": _format_output_path(outputs["semantic_input_analysis_crop"]),
+                "paper_node": "Shared Semantic Layer Analysis Crop",
+                "render_source": "real_code_data",
+                "data_basis": ["shared_full_canvas_crop", "analysis_box", "raw_frontier", "recent_trajectory"],
             },
             "frontier_cluster_overlay.png": {
                 "path": _format_output_path(outputs["frontier_cluster_overlay"]),
                 "paper_node": "Frontier Cluster Overlay",
                 "render_source": "real_code_data",
-                "data_basis": ["belief_map", "analysis_box", "frontier_clusters"],
+                "data_basis": ["shared_analysis_window", "analysis_box", "frontier_clusters"],
+            },
+            "trajectory_decay_10step_local.png": {
+                "path": _format_output_path(outputs["trajectory_decay_10step_local"]),
+                "paper_node": "Local Recent Trajectory Decay",
+                "render_source": "real_code_data",
+                "data_basis": ["trajectory_world", "local_observation_shape", "recent_trajectory_length"],
+                "trajectory_decay_length": int(trajectory_decay_length),
             },
             "unknown_block.png": {
                 "path": _format_output_path(outputs["unknown_block"]),
@@ -927,6 +1417,8 @@ def export_shared_semantic_layer_assets(
     *,
     config: ExportConfig | None = None,
     step: int | None = None,
+    local_semantic_crop_radius: int | None = None,
+    trajectory_decay_length: int = DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
     include_shared_semantic_states: bool = True,
 ) -> dict[str, object]:
     output_dir_path = Path(output_dir)
@@ -948,17 +1440,73 @@ def export_shared_semantic_layer_assets(
     )
     scene = _collect_semantic_scene(rollout_config, step=step)
     style = SharedSemanticAssetStyle(dpi=int(rollout_config.dpi))
+    local_crop_shape = (
+        scene.snapshot.local_snap.shape
+        if local_semantic_crop_radius is None
+        else (2 * max(0, int(local_semantic_crop_radius)) + 1, 2 * max(0, int(local_semantic_crop_radius)) + 1)
+    )
+    semantic_full_canvas = _build_semantic_full_canvas(
+        scene,
+        trajectory_length=int(trajectory_decay_length),
+        show_trajectory=True,
+    )
+    semantic_analysis_window = _analysis_window_from_full_canvas(semantic_full_canvas)
 
     outputs: dict[str, Path] = {
-        "semantic_input_belief_map": output_dir_path / "semantic_input_belief_map.png",
+        "belief_after_update_with_frontier": output_dir_path / "belief_after_update_with_frontier.png",
+        "local_semantic_crop": output_dir_path / "local_semantic_crop.png",
+        "semantic_input_analysis_crop": output_dir_path / "semantic_input_analysis_crop.png",
         "frontier_cluster_overlay": output_dir_path / "frontier_cluster_overlay.png",
+        "trajectory_decay_10step_local": output_dir_path / "trajectory_decay_10step_local.png",
         "unknown_block": output_dir_path / "unknown_block.png",
         "frontier_cluster": output_dir_path / "frontier_cluster.png",
         "local_attribute_summary": output_dir_path / "local_attribute_summary.png",
     }
 
-    _export_semantic_input_belief_map(outputs["semantic_input_belief_map"], scene, style=style)
-    _export_frontier_cluster_overlay(outputs["frontier_cluster_overlay"], scene, style=style)
+    _export_belief_after_update_with_frontier(
+        outputs["belief_after_update_with_frontier"],
+        scene,
+        style=style,
+        full_canvas=semantic_full_canvas,
+        trajectory_length=int(trajectory_decay_length),
+        show_agent=False,
+        show_scan_circle=False,
+        show_trajectory=True,
+    )
+    _export_local_semantic_crop(
+        outputs["local_semantic_crop"],
+        scene,
+        style=style,
+        crop_shape=local_crop_shape,
+        trajectory_length=int(trajectory_decay_length),
+        show_agent=False,
+        show_scan_circle=False,
+        show_trajectory=True,
+    )
+    _export_semantic_input_analysis_crop(
+        outputs["semantic_input_analysis_crop"],
+        scene,
+        style=style,
+        analysis_window=semantic_analysis_window,
+        trajectory_length=int(trajectory_decay_length),
+        show_agent=False,
+        show_scan_circle=False,
+        show_trajectory=True,
+    )
+    _export_frontier_cluster_overlay(
+        outputs["frontier_cluster_overlay"],
+        scene,
+        style=style,
+        analysis_window=semantic_analysis_window,
+        show_trajectory=False,
+    )
+    _export_trajectory_decay_10step_local(
+        outputs["trajectory_decay_10step_local"],
+        scene.snapshot,
+        style=style,
+        crop_shape=local_crop_shape,
+        length=int(trajectory_decay_length),
+    )
     _export_unknown_block(outputs["unknown_block"], scene, style=style)
     _export_frontier_cluster(outputs["frontier_cluster"], scene, style=style)
     _export_local_attribute_summary(outputs["local_attribute_summary"], scene, style=style)
@@ -967,7 +1515,7 @@ def export_shared_semantic_layer_assets(
         outputs["shared_semantic_states"] = output_dir_path / "shared_semantic_states.png"
         _export_shared_semantic_states(outputs["shared_semantic_states"], scene, style=style)
 
-    manifest = _build_manifest(outputs, scene)
+    manifest = _build_manifest(outputs, scene, trajectory_decay_length=int(trajectory_decay_length))
     if include_shared_semantic_states and "shared_semantic_states" in outputs:
         manifest["files"]["shared_semantic_states.png"] = {
             "path": _format_output_path(outputs["shared_semantic_states"]),
@@ -1005,6 +1553,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dpi", type=int, default=260)
     parser.add_argument(
+        "--local-semantic-crop-radius",
+        type=int,
+        default=None,
+        help="Optional agent-centered cumulative-belief crop radius for local_semantic_crop.png. Omit to match the Local LiDAR Observation shape.",
+    )
+    parser.add_argument(
+        "--trajectory-decay-length",
+        type=int,
+        default=DEFAULT_SEMANTIC_TRAJECTORY_LENGTH,
+        help="Recent trajectory window length for trajectory_decay_10step_local.png. Default: 10.",
+    )
+    parser.add_argument(
         "--no-shared-semantic-states",
         dest="include_shared_semantic_states",
         action="store_false",
@@ -1032,6 +1592,8 @@ def cli_main() -> None:
         args.output_dir,
         config=config,
         step=args.step,
+        local_semantic_crop_radius=args.local_semantic_crop_radius,
+        trajectory_decay_length=int(args.trajectory_decay_length),
         include_shared_semantic_states=bool(args.include_shared_semantic_states),
     )
     scene = result["scene"]
