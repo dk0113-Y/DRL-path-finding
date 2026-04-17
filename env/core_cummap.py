@@ -9,23 +9,8 @@ import numpy as np
 from env.grid_topology import EMPTY, INVISIBLE, OBSTACLE, GridTopology
 
 
-MID_MAP_CHANNELS = (
-    "unknown_density",
-    "known_obstacle_density",
-    "coarse_visit_density",
-    "frontier_density",
-)
-MID_MAP_CHANNEL_COUNT = len(MID_MAP_CHANNELS)
 FRONTIER_MIN_UNKNOWN_NEIGHBORS = 1
 FRONTIER_NEIGHBOR_CONNECTIVITY = 4
-
-
-@dataclass(frozen=True)
-class MidMapConfig:
-    """Agent-centered fixed-window mid map config, not a far/full-world map config."""
-
-    mid_map_shape: Tuple[int, int] = (32, 32)         # fixed output size (H_m, W_m)
-    world_window_shape: Tuple[int, int] = (128, 128)  # agent-centered world window (H_w, W_w)
 
 
 @dataclass(frozen=True)
@@ -108,7 +93,6 @@ class CumulativeBeliefMap:
     - Agent does not receive true-map total area or reachable-area priors as observation channels.
     """
 
-    _aggregate_edge_cache: dict[tuple[int, int, int, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     _instance_uid_counter: int = 0
 
     def __init__(
@@ -160,17 +144,8 @@ class CumulativeBeliefMap:
         self._cached_visit_log_max: float = 0.0
         self._cached_obstacle_integral: Optional[np.ndarray] = None
         self._visit_cache_step: int = -1
-        self._domain_buffer_cache: dict[tuple[int, int, bool, str], tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]] = {}
-        self._mid_input_channels_cache: dict[tuple[int, int], np.ndarray] = {}
-        self._mid_output_cache: dict[tuple[int, int], np.ndarray] = {}
-        self._mid_integral_cache: dict[tuple[int, int], np.ndarray] = {}
-        self._mid_map_cache_key = None
-        self._mid_map_cache_value: Optional[np.ndarray] = None
 
         self.frontier_stats_time = 0.0
-        self.mid_map_time = 0.0
-        self.domain_extract_time = 0.0
-        self.aggregate_time = 0.0
         self.analysis_box = AnalysisBox(
             r0=0,
             r1=1,
@@ -263,18 +238,6 @@ class CumulativeBeliefMap:
         orr, orc = self.origin_world_rc
         return r + orr, c + orc
 
-    @staticmethod
-    def _shared_artifact_value(shared_artifacts, key: str):
-        if shared_artifacts is None:
-            return None
-        if isinstance(shared_artifacts, dict):
-            return shared_artifacts.get(key)
-        return getattr(shared_artifacts, key, None)
-
-    def _invalidate_map_build_caches(self) -> None:
-        self._mid_map_cache_key = None
-        self._mid_map_cache_value = None
-
     def _invalidate_frontier_stats_cache(self) -> None:
         self._latest_frontier_stats = None
 
@@ -284,13 +247,11 @@ class CumulativeBeliefMap:
     def _invalidate_map_state_caches(self) -> None:
         self._invalidate_frontier_stats_cache()
         self._invalidate_obstacle_cache()
-        self._invalidate_map_build_caches()
 
     def _invalidate_visit_cache(self) -> None:
         self._cached_visit_log_map = None
         self._cached_visit_log_max = 0.0
         self._visit_cache_step = -1
-        self._invalidate_map_build_caches()
 
     def _update_analysis_box(self) -> None:
         known = (self.map != INVISIBLE)
@@ -320,148 +281,6 @@ class CumulativeBeliefMap:
             known_c0=known_c0,
             known_c1=known_c1,
         )
-
-    def _get_domain_buffers(
-        self,
-        domain_h: int,
-        domain_w: int,
-        include_visit: bool,
-        visit_dtype: np.dtype | type[np.generic] | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-        visit_dtype_use = np.dtype(np.int32 if visit_dtype is None else visit_dtype)
-        key = (int(domain_h), int(domain_w), bool(include_visit), visit_dtype_use.str)
-        cached = self._domain_buffer_cache.get(key)
-        if cached is None:
-            sampled_map = np.empty((domain_h, domain_w), dtype=np.int8)
-            sampled_frontier = np.empty((domain_h, domain_w), dtype=bool)
-            sampled_visit = np.empty((domain_h, domain_w), dtype=visit_dtype_use) if include_visit else None
-            cached = (sampled_map, sampled_frontier, sampled_visit)
-            self._domain_buffer_cache[key] = cached
-        return cached
-
-    def _make_mid_map_cache_key(
-        self,
-        agent_state: Tuple[int, int],
-        cfg: MidMapConfig,
-    ) -> tuple[int, int, int, int, int, int, int, int, int, int, int]:
-        return (
-            int(self.step_count),
-            int(agent_state[0]),
-            int(agent_state[1]),
-            int(cfg.mid_map_shape[0]),
-            int(cfg.mid_map_shape[1]),
-            int(cfg.world_window_shape[0]),
-            int(cfg.world_window_shape[1]),
-            int(self.map.shape[0]),
-            int(self.map.shape[1]),
-            int(self.origin_world_rc[0]),
-            int(self.origin_world_rc[1]),
-        )
-
-    @staticmethod
-    def _aggregate_density(flat_bin: np.ndarray, n_bins: int, values_2d: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
-        denom = np.bincount(flat_bin, minlength=n_bins).astype(np.float32)
-        denom = np.maximum(denom, 1.0)
-        sums = np.bincount(flat_bin, weights=values_2d.reshape(-1).astype(np.float32), minlength=n_bins)
-        return (sums / denom).reshape(out_h, out_w)
-
-    @staticmethod
-    def _grid_bin_edges(size: int, bins: int) -> np.ndarray:
-        idx = np.arange(int(bins) + 1, dtype=np.int32)
-        return ((idx * int(size)) // int(bins)).astype(np.int32)
-
-    @staticmethod
-    def _integral_channels(channels: np.ndarray) -> np.ndarray:
-        channels_f = np.asarray(channels, dtype=np.float32)
-        padded = np.pad(channels_f, ((0, 0), (1, 0), (1, 0)), mode="constant", constant_values=0.0)
-        return padded.cumsum(axis=1, dtype=np.float32).cumsum(axis=2, dtype=np.float32)
-
-    @staticmethod
-    def _aggregate_edge_data(src_h: int, src_w: int, out_h: int, out_w: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        key = (int(src_h), int(src_w), int(out_h), int(out_w))
-        cached = CumulativeBeliefMap._aggregate_edge_cache.get(key)
-        if cached is None:
-            row_edges = CumulativeBeliefMap._grid_bin_edges(src_h, out_h)
-            col_edges = CumulativeBeliefMap._grid_bin_edges(src_w, out_w)
-            denom = np.maximum(
-                1,
-                np.diff(row_edges).astype(np.int32)[:, None] * np.diff(col_edges).astype(np.int32)[None, :],
-            ).astype(np.float32)
-            cached = (row_edges, col_edges, denom)
-            CumulativeBeliefMap._aggregate_edge_cache[key] = cached
-        return cached
-
-    @staticmethod
-    def _aggregate_channels_to_grid(channels: np.ndarray, out_h: int, out_w: int) -> np.ndarray:
-        out = np.empty((int(channels.shape[0]), int(out_h), int(out_w)), dtype=np.float32)
-        prefix = np.empty((int(channels.shape[0]), int(channels.shape[1]) + 1, int(channels.shape[2]) + 1), dtype=np.float32)
-        CumulativeBeliefMap._aggregate_channels_to_grid_into(channels, out, prefix)
-        return out
-
-    @staticmethod
-    def _aggregate_channels_to_grid_into(
-        channels: np.ndarray,
-        out: np.ndarray,
-        prefix: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        ch = int(channels.shape[0])
-        src_h = int(channels.shape[1])
-        src_w = int(channels.shape[2])
-        out_h = int(out.shape[1])
-        out_w = int(out.shape[2])
-        if out.shape != (ch, out_h, out_w):
-            raise ValueError(f"aggregate output shape mismatch: got {out.shape}")
-
-        row_edges, col_edges, denom = CumulativeBeliefMap._aggregate_edge_data(src_h, src_w, out_h, out_w)
-        prefix_use = prefix
-        if prefix_use is None:
-            prefix_use = np.empty((ch, src_h + 1, src_w + 1), dtype=np.float32)
-        elif prefix_use.shape != (ch, src_h + 1, src_w + 1):
-            raise ValueError(
-                "aggregate prefix shape mismatch: "
-                f"expected {(ch, src_h + 1, src_w + 1)}, got {prefix_use.shape}"
-            )
-
-        prefix_use[:, 0, :] = 0.0
-        prefix_use[:, :, 0] = 0.0
-        prefix_use[:, 1:, 1:] = np.asarray(channels, dtype=np.float32)
-        np.cumsum(prefix_use[:, 1:, 1:], axis=1, dtype=np.float32, out=prefix_use[:, 1:, 1:])
-        np.cumsum(prefix_use[:, 1:, 1:], axis=2, dtype=np.float32, out=prefix_use[:, 1:, 1:])
-
-        for channel_idx in range(ch):
-            corners = prefix_use[channel_idx][row_edges[:, None], col_edges[None, :]]
-            sums = corners[1:, 1:] - corners[:-1, 1:] - corners[1:, :-1] + corners[:-1, :-1]
-            np.divide(sums, denom, out=out[channel_idx], casting="unsafe")
-        return out
-
-    def _get_mid_input_channels_buffer(self, world_h: int, world_w: int) -> np.ndarray:
-        key = (int(world_h), int(world_w))
-        cached = self._mid_input_channels_cache.get(key)
-        if cached is None:
-            cached = np.empty((MID_MAP_CHANNEL_COUNT, int(world_h), int(world_w)), dtype=np.float32)
-            self._mid_input_channels_cache[key] = cached
-        return cached
-
-    def _get_mid_output_buffer(self, mid_h: int, mid_w: int) -> np.ndarray:
-        key = (int(mid_h), int(mid_w))
-        cached = self._mid_output_cache.get(key)
-        if cached is None:
-            cached = np.empty((MID_MAP_CHANNEL_COUNT, int(mid_h), int(mid_w)), dtype=np.float32)
-            self._mid_output_cache[key] = cached
-        return cached
-
-    def _get_mid_integral_buffer(self, world_h: int, world_w: int) -> np.ndarray:
-        key = (int(world_h), int(world_w))
-        cached = self._mid_integral_cache.get(key)
-        if cached is None:
-            cached = np.empty((MID_MAP_CHANNEL_COUNT, int(world_h) + 1, int(world_w) + 1), dtype=np.float32)
-            self._mid_integral_cache[key] = cached
-        return cached
-
-        prefix = CumulativeBeliefMap._integral_channels(channels)
-        corners = prefix[:, row_edges[:, None], col_edges[None, :]]
-        sums = corners[:, 1:, 1:] - corners[:, :-1, 1:] - corners[:, 1:, :-1] + corners[:, :-1, :-1]
-        return (sums / denom[None, :, :]).astype(np.float32, copy=False)
 
     @staticmethod
     def _clip_dirty_rect(rect: DirtyRect, shape: tuple[int, int]) -> Optional[DirtyRect]:
@@ -759,8 +578,8 @@ class CumulativeBeliefMap:
         frontier := known_free cells adjacent to orthogonally connected unknown
         cells in current belief map.
         Frontier semantics are rule-based and independent of truth-side
-        reachability. Higher-level value assessment is handled downstream by the
-        frontier token builder.
+        reachability. Higher-level semantic organization is handled downstream
+        by the shared semantic layer.
 
         Normal path returns the incrementally maintained frontier cache.
         refresh=True is a debug/full-recompute path and is not used by the
@@ -778,7 +597,7 @@ class CumulativeBeliefMap:
         """
         Return frontier-related reusable statistics with caching.
 
-        These are summary auxiliaries for map/token channels and do not alter
+        These are summary auxiliaries for shared semantic consumers and do not alter
         canonical frontier membership.
         """
         if (
@@ -849,205 +668,7 @@ class CumulativeBeliefMap:
         self._cached_obstacle_integral = prefix
         return prefix
 
-    def _world_overlap_slices(
-        self,
-        domain_min_r: int,
-        domain_max_r: int,
-        domain_min_c: int,
-        domain_max_c: int,
-    ) -> Optional[Tuple[slice, slice, slice, slice]]:
-        src_min_r = int(self.origin_world_rc[0])
-        src_min_c = int(self.origin_world_rc[1])
-        src_max_r = src_min_r + int(self.map.shape[0]) - 1
-        src_max_c = src_min_c + int(self.map.shape[1]) - 1
-
-        ov_min_r = max(int(domain_min_r), src_min_r)
-        ov_max_r = min(int(domain_max_r), src_max_r)
-        ov_min_c = max(int(domain_min_c), src_min_c)
-        ov_max_c = min(int(domain_max_c), src_max_c)
-        if ov_min_r > ov_max_r or ov_min_c > ov_max_c:
-            return None
-
-        src_rows = slice(ov_min_r - src_min_r, ov_max_r - src_min_r + 1)
-        src_cols = slice(ov_min_c - src_min_c, ov_max_c - src_min_c + 1)
-        dst_rows = slice(ov_min_r - int(domain_min_r), ov_max_r - int(domain_min_r) + 1)
-        dst_cols = slice(ov_min_c - int(domain_min_c), ov_max_c - int(domain_min_c) + 1)
-        return src_rows, src_cols, dst_rows, dst_cols
-
-    def _extract_domain_arrays(
-        self,
-        domain_min_r: int,
-        domain_max_r: int,
-        domain_min_c: int,
-        domain_max_c: int,
-        frontier_map: Optional[np.ndarray],
-        include_visit: bool,
-        visit_source: Optional[np.ndarray] = None,
-        sampled_map_out: Optional[np.ndarray] = None,
-        sampled_frontier_out: Optional[np.ndarray] = None,
-        sampled_visit_out: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
-        t0 = time.perf_counter() if self.enable_timing else 0.0
-        domain_h = int(domain_max_r - domain_min_r + 1)
-        domain_w = int(domain_max_c - domain_min_c + 1)
-
-        sampled_map = sampled_map_out
-        if sampled_map is None:
-            sampled_map = np.empty((domain_h, domain_w), dtype=np.int8)
-        elif sampled_map.shape != (domain_h, domain_w):
-            raise ValueError(
-                f"sampled_map_out shape mismatch: expected {(domain_h, domain_w)}, got {sampled_map.shape}"
-            )
-        sampled_map.fill(INVISIBLE)
-
-        sampled_frontier: Optional[np.ndarray] = sampled_frontier_out
-        if frontier_map is not None or sampled_frontier is not None:
-            if sampled_frontier is None:
-                sampled_frontier = np.empty((domain_h, domain_w), dtype=bool)
-            elif sampled_frontier.shape != (domain_h, domain_w):
-                raise ValueError(
-                    "sampled_frontier_out shape mismatch: "
-                    f"expected {(domain_h, domain_w)}, got {sampled_frontier.shape}"
-                )
-            sampled_frontier.fill(False)
-
-        sampled_visit: Optional[np.ndarray]
-        visit_source_use = self.visit_count if visit_source is None else visit_source
-        if include_visit:
-            sampled_visit = sampled_visit_out
-            if sampled_visit is None:
-                sampled_visit = np.empty((domain_h, domain_w), dtype=visit_source_use.dtype)
-            elif sampled_visit.shape != (domain_h, domain_w):
-                raise ValueError(
-                    f"sampled_visit_out shape mismatch: expected {(domain_h, domain_w)}, got {sampled_visit.shape}"
-                )
-            sampled_visit.fill(0)
-        else:
-            sampled_visit = None
-
-        overlap = self._world_overlap_slices(domain_min_r, domain_max_r, domain_min_c, domain_max_c)
-        if overlap is not None:
-            src_rows, src_cols, dst_rows, dst_cols = overlap
-            sampled_map[dst_rows, dst_cols] = self.map[src_rows, src_cols]
-            if frontier_map is not None and sampled_frontier is not None:
-                sampled_frontier[dst_rows, dst_cols] = frontier_map[src_rows, src_cols]
-            if sampled_visit is not None:
-                sampled_visit[dst_rows, dst_cols] = visit_source_use[src_rows, src_cols]
-
-        if self.enable_timing:
-            self.domain_extract_time += time.perf_counter() - t0
-
-        return sampled_map, sampled_frontier, sampled_visit
-
-    def build_mid_map(
-        self,
-        agent_state: Tuple[int, int],
-        config: Optional[MidMapConfig] = None,
-        frontier_u8: Optional[np.ndarray] = None,
-        frontier_stats: Optional[FrontierDerivedStats] = None,
-        shared_artifacts=None,
-    ) -> np.ndarray:
-        """
-        Build fixed-size agent-centered mid map with channel-first layout:
-            shape = [4, H_m, W_m]
-
-        Fixed channel order is MID_MAP_CHANNELS:
-            unknown_density
-            known_obstacle_density
-            coarse_visit_density
-            frontier_density
-
-        This remains a fixed-range mid map:
-            cumulative belief -> fixed world window -> coarse aggregation -> fixed mid map
-        It is not a token replacement: frontier_density provides a coarse
-        regional entrance-distribution background, while the token branch keeps
-        the sparse frontier-candidate summary.
-        """
-        t0 = time.perf_counter() if self.enable_timing else 0.0
-        cfg = config if config is not None else MidMapConfig()
-        hm, wm = int(cfg.mid_map_shape[0]), int(cfg.mid_map_shape[1])
-        wh, ww = int(cfg.world_window_shape[0]), int(cfg.world_window_shape[1])
-
-        if hm <= 0 or wm <= 0 or wh <= 0 or ww <= 0:
-            raise ValueError("mid_map_shape and world_window_shape must be positive")
-
-        ar, ac = int(agent_state[0]), int(agent_state[1])
-        r_min = ar - (wh // 2)
-        c_min = ac - (ww // 2)
-        r_max = r_min + wh - 1
-        c_max = c_min + ww - 1
-
-        cache_key = self._make_mid_map_cache_key(agent_state, cfg)
-        if cache_key == self._mid_map_cache_key and self._mid_map_cache_value is not None:
-            return self._mid_map_cache_value
-
-        visit_log_map, visit_log_max = self.get_visit_log_map(refresh=False)
-        frontier_stats_use = frontier_stats
-        if frontier_stats_use is None:
-            frontier_stats_use = self._shared_artifact_value(shared_artifacts, "frontier_stats")
-
-        frontier_u8_use = frontier_u8
-        if frontier_u8_use is None:
-            frontier_u8_use = self._shared_artifact_value(shared_artifacts, "frontier_u8")
-
-        if frontier_stats_use is None:
-            frontier_stats_use = self.get_frontier_derived_stats(refresh=False, frontier_u8=frontier_u8_use)
-
-        sampled_map_buf, sampled_frontier_buf, sampled_visit_log_buf = self._get_domain_buffers(
-            wh,
-            ww,
-            include_visit=True,
-            visit_dtype=np.float32,
-        )
-        sampled_map, sampled_frontier, sampled_visit_log = self._extract_domain_arrays(
-            r_min,
-            r_max,
-            c_min,
-            c_max,
-            frontier_map=frontier_stats_use.frontier_bool,
-            include_visit=True,
-            visit_source=visit_log_map,
-            sampled_map_out=sampled_map_buf,
-            sampled_frontier_out=sampled_frontier_buf,
-            sampled_visit_out=sampled_visit_log_buf,
-        )
-
-        input_channels = self._get_mid_input_channels_buffer(wh, ww)
-        input_channels[0, :, :] = (sampled_map == INVISIBLE)
-        input_channels[1, :, :] = (sampled_map == OBSTACLE)
-        if visit_log_max > 0.0:
-            np.divide(sampled_visit_log, np.float32(visit_log_max), out=input_channels[2, :, :], casting="unsafe")
-        else:
-            input_channels[2, :, :].fill(0.0)
-        input_channels[3, :, :] = np.asarray(sampled_frontier, dtype=np.float32)
-
-        agg_t0 = time.perf_counter() if self.enable_timing else 0.0
-        aggregated_scratch = self._get_mid_output_buffer(hm, wm)
-        aggregated = self._aggregate_channels_to_grid_into(
-            input_channels,
-            aggregated_scratch,
-            prefix=self._get_mid_integral_buffer(wh, ww),
-        )
-        if self.enable_timing:
-            self.aggregate_time += time.perf_counter() - agg_t0
-
-        # Method split:
-        # near = local geometry + short-term recency + global normalized position context
-        # mid = regional unknown/obstacle structure + coarse visitation memory
-        #     + coarse frontier-density background
-        # token = sparse frontier candidate representation
-        mid_map = aggregated.copy()
-
-        self._mid_map_cache_key = cache_key
-        self._mid_map_cache_value = mid_map
-        if self.enable_timing:
-            self.mid_map_time += time.perf_counter() - t0
-        return mid_map
-
     def get_timing_stats(self) -> dict[str, float]:
         return {
             "frontier_stats_time": float(self.frontier_stats_time),
-            "mid_map_time": float(self.mid_map_time),
-            "domain_extract_time": float(self.domain_extract_time),
-            "aggregate_time": float(self.aggregate_time),
         }

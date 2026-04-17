@@ -10,15 +10,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from env.core_cummap import MID_MAP_CHANNEL_COUNT
 from env.frontier_token_builder import FRONTIER_REGION_TOKEN_FIELD_COUNT
+
+
+LEGACY_RASTER_BRANCH_CHANNEL_COUNT = 4
 
 
 @dataclass(frozen=True)
 class GlobalSideEncoderConfig:
     """Configuration for the split global-side encoder."""
 
-    mid_map_channels: int = MID_MAP_CHANNEL_COUNT
+    mid_map_channels: int = LEGACY_RASTER_BRANCH_CHANNEL_COUNT
     frontier_token_input_dim: int = FRONTIER_REGION_TOKEN_FIELD_COUNT
     map_base_dim: int = 64
     map_vec_dim: int = 128
@@ -462,7 +464,7 @@ class GlobalSideEncoder(nn.Module):
 
 def _smoke_test() -> None:
     cfg = GlobalSideEncoderConfig(
-        mid_map_channels=MID_MAP_CHANNEL_COUNT,
+        mid_map_channels=LEGACY_RASTER_BRANCH_CHANNEL_COUNT,
         frontier_token_input_dim=FRONTIER_REGION_TOKEN_FIELD_COUNT,
         global_context_dim=256,
     )
@@ -470,7 +472,7 @@ def _smoke_test() -> None:
     model.eval()
 
     bsz = 4
-    mid_map = torch.rand(bsz, MID_MAP_CHANNEL_COUNT, 24, 24)
+    mid_map = torch.rand(bsz, LEGACY_RASTER_BRANCH_CHANNEL_COUNT, 24, 24)
     frontier_tokens = torch.rand(bsz, 32, FRONTIER_REGION_TOKEN_FIELD_COUNT)
     frontier_token_mask = torch.ones(bsz, 32, dtype=torch.bool)
     frontier_token_mask[0, :] = False

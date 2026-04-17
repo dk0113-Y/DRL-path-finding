@@ -21,12 +21,13 @@
 ## 当前主线说明
 
 - 当前训练 / 评估 / final_probe 主链已经不再使用旧的 `near / mid / token` 三分支语义。
-- 当前主输入主线是：
+- 当前真实训练输入主线是 shared semantic dual-state 架构：
   - `SharedSemanticLayer`
-  - `Advantage State`（local decision canvas）
-  - `Value State`（Accessible Unknown Block tree）
+  - `Advantage State`（local decision canvas / advantage canvas）
+  - `Value State`（Accessible Unknown Block tree / value block tree）
   - `Semantic Dueling Head`
-- 仓库里仍保留部分旧模块文件作为历史参考或底层算子来源，但它们不再是当前训练主路径。
+- 当前网络实际接收的状态张量为 `advantage_canvas`、`value_block_features`、`value_entry_features`、`value_block_mask`、`value_entry_mask`。
+- Some legacy files may remain in the repository for historical reference, but they are not part of the current training path.
 
 ## 代码结构
 
@@ -42,16 +43,6 @@
   - 地图生成、局部观测、belief map、shared semantic layer、advantage/value 状态构造。
 - `training/`
   - collector、replay buffer、learner、evaluator、logger、plotting。
-
-当前主线之外的历史参考模块包括但不限于：
-
-- `env/frontier_token_builder.py`
-- `env/local_state_builder.py`
-- `encoders/global_encoder.py`
-- `encoders/local_encoder.py`
-- `heads/q_head.py`
-
-这些文件目前不作为训练入口的主语义解释路径。
 
 ## 训练流程概览
 
