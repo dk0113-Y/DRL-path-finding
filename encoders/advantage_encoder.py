@@ -148,8 +148,8 @@ class AdvantageCanvasEncoder(nn.Module):
             return action_state
 
         aux: Dict[str, torch.Tensor] = {
-            "advantage_canvas_frontier_block_area_mean": canvas[:, 3].mean(dim=(1, 2)),
-            "advantage_canvas_visit_pressure_mean": canvas[:, 4].mean(dim=(1, 2)),
-            "advantage_canvas_trajectory_mean": canvas[:, 5].mean(dim=(1, 2)),
+            "advantage_canvas_frontier_block_area_mean": canvas[:, 2].mean(dim=(1, 2)),
+            "advantage_canvas_visit_pressure_mean": canvas[:, 3].mean(dim=(1, 2)),
+            "advantage_canvas_trajectory_mean": canvas[:, 4].mean(dim=(1, 2)),
         }
         return action_state, aux

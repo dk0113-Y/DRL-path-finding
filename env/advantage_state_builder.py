@@ -11,7 +11,6 @@ from env.shared_semantic_layer import SharedSemanticSnapshot
 
 
 ADVANTAGE_CANVAS_CHANNELS = (
-    "unknown",
     "free",
     "obstacle",
     "frontier_block_area_map",
@@ -150,9 +149,8 @@ class AdvantageStateBuilder:
             sampled_map[inside] = cum_map.map[arr_rows[inside], arr_cols[inside]]
             sampled_visit[inside] = cum_map.visit_count[arr_rows[inside], arr_cols[inside]].astype(np.float32)
 
-        canvas[0] = (sampled_map == INVISIBLE)
-        canvas[1] = (sampled_map == EMPTY)
-        canvas[2] = (sampled_map == OBSTACLE)
+        canvas[0] = (sampled_map == EMPTY)
+        canvas[1] = (sampled_map == OBSTACLE)
 
         agent_arr = cum_map.world_to_array(agent_state)
         total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
@@ -161,7 +159,7 @@ class AdvantageStateBuilder:
             for frontier_cluster in block.frontier_clusters:
                 self._paint_geometry_value_to_local_canvas(
                     frontier_cluster.frontier_geometry,
-                    canvas[3],
+                    canvas[2],
                     value=block_area_ratio,
                     agent_arr=agent_arr,
                     local_shape=local_shape,
@@ -170,7 +168,7 @@ class AdvantageStateBuilder:
         revisit_count = np.maximum(sampled_visit - 1.0, 0.0).astype(np.float32, copy=False)
         visit_log_denominator = float(np.log1p(max(1e-6, float(self.config.visit_count_log_saturation))))
         visit_count_log_norm = np.log1p(revisit_count).astype(np.float32, copy=False) / max(1e-6, visit_log_denominator)
-        canvas[4] = np.clip(visit_count_log_norm, 0.0, 1.0).astype(np.float32, copy=False)
+        canvas[3] = np.clip(visit_count_log_norm, 0.0, 1.0).astype(np.float32, copy=False)
 
         history_limit = max(1, int(self.config.trajectory_history_steps))
         raw_history = list(recent_trajectory_positions or ())
@@ -183,17 +181,17 @@ class AdvantageStateBuilder:
         decayed_history_arr = [cum_map.world_to_array(world_rc) for world_rc in decayed_history]
         self._paint_recent_trajectory_to_local_canvas(
             decayed_history_arr,
-            canvas[5],
+            canvas[4],
             current_agent_arr=agent_arr,
             local_shape=local_shape,
         )
 
         window_area = float(max(1, local_shape[0] * local_shape[1]))
-        frontier_visible_mask = canvas[3] > 0.0
+        frontier_visible_mask = canvas[2] > 0.0
         frontier_visible = np.count_nonzero(frontier_visible_mask)
         meta = {
             "local_frontier_coverage": float(frontier_visible) / window_area,
-            "local_frontier_block_area_mean": float(canvas[3][frontier_visible_mask].mean()) if frontier_visible > 0 else 0.0,
+            "local_frontier_block_area_mean": float(canvas[2][frontier_visible_mask].mean()) if frontier_visible > 0 else 0.0,
         }
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0
