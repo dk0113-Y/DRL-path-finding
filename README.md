@@ -72,6 +72,7 @@ python train_q_agent.py --device cuda
 - `enable_channels_last = False`
 - `enable_tf32 = True`
 - `enable_cudnn_benchmark = True`
+- `final_greedy_episodes = 100`
 
 快速 smoke 测试：
 
@@ -94,6 +95,17 @@ python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup
   - 训练停止条件改为 `total_train_episodes`。
   - 周期 eval / 训练 step snapshot / stdout train print 可分别由 `eval_interval_episodes`、`log_interval_episodes`、`train_print_interval_episodes` 控制。
   - `warmup_episodes` 在该模式下作为正式 warmup 入口；单图内部步数上限仍由 `max_episode_steps` 控制。
+
+## Formal protocol / final_probe
+
+当前 formal protocol revision 为 `formal_last_checkpoint_v2_3`。
+
+- 当前默认 formal lane 的 held-out `final_probe` 为 `final_greedy_episodes=100`。
+- 不显式传入 `--final-greedy-episodes` 时，主训练脚本和 VSCode 默认正式训练 preset 都使用 100 episodes。
+- 历史 `formal_last_checkpoint_v2_2` lane 使用过 16-episode final_probe；这些结果保留为历史 evidence。
+- `final_greedy_episodes` 是 frozen comparability field，新旧 episode 数和协议 revision 会自然进入不同 strict comparability lane，不能简单混写为同一正式可比组。
+
+`tools/supplementary_multi_checkpoint_probe.py` 仍保留为 `supplementary_confidence_check` 工具。它适合用于多 checkpoint 同 seed 对比、非默认 episode 数检查、恢复性评估和额外置信度分析；但 100-episode held-out 评估本身已经是当前默认 formal final_probe，不再天然等同于 supplementary evidence。
 
 训练 episode 现在也支持固定 seed 序列：
 
@@ -137,6 +149,7 @@ python train_q_agent.py --strict-reproducibility
 - `--scan-radius`
 - `--reward-info-scale`
 - `--eval-interval-env-steps`
+- `--final-greedy-episodes`
 
 ## 依赖
 

@@ -15,7 +15,9 @@ from training.rewarding import STALL_DIAGNOSTIC_WINDOW
 
 SCHEMA_VERSION = "formal_train_artifacts/v3"
 DEFAULT_MAIN_BASELINE_IDENTIFIER = "4.9_30万轮基线"
-CURRENT_FORMAL_PROTOCOL_REVISION = "formal_last_checkpoint_v2_2"
+CURRENT_FORMAL_PROTOCOL_REVISION = "formal_last_checkpoint_v2_3"
+CURRENT_DEFAULT_FORMAL_FINAL_PROBE_EPISODES = 100
+HISTORICAL_FORMAL_FINAL_PROBE_EPISODES = 16
 
 RUNTIME_ONLY_FIELDS = (
     "enable_amp",
@@ -957,6 +959,17 @@ def build_config_snapshot(
                 "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_final_probe_toggle_else_runtime_seed_stream",
                 "seed_toggle_field": "use_fixed_eval_seeds",
                 "seed_toggle_note": "legacy field name retained; it now controls final_probe held-out seeding only",
+                "run_final_greedy_episodes": config_dict.get("final_greedy_episodes"),
+                "current_default_formal_final_probe_episodes": CURRENT_DEFAULT_FORMAL_FINAL_PROBE_EPISODES,
+                "historical_formal_final_probe_episodes": HISTORICAL_FORMAL_FINAL_PROBE_EPISODES,
+                "strict_comparability_field": "final_greedy_episodes",
+                "protocol_upgrade_note": (
+                    "Historical formal lanes used a 16-episode final_probe. "
+                    "The current default formal lane uses a 100-episode final_probe. "
+                    "Because final_greedy_episodes is frozen in comparability and the protocol revision changed, "
+                    "old 16-episode results remain historical evidence and must not be mixed as the same strict "
+                    "comparable lane with new 100-episode results."
+                ),
                 "csv_file": "logs/final_probe.csv",
             },
             "reward_semantics": {
@@ -1400,6 +1413,10 @@ def build_historical_baseline_summary(
         "Historical runs before formal snapshots may lack config_snapshot.json and benchmark_summary.json.",
         "Bootstrap grouping falls back to final env_steps plus train/final CSV header signatures when exact comparability metadata is unavailable.",
         "Current formal_train accepts only the last checkpoint via held-out final_probe; periodic eval and best checkpoints are legacy diagnostics only.",
+        (
+            "Historical formal lanes used a 16-episode final_probe; current default formal lanes use a "
+            "100-episode final_probe and enter a separate strict comparability protocol lane."
+        ),
     ]
     if insufficient_history:
         notes.append(

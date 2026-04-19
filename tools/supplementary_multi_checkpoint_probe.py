@@ -31,8 +31,9 @@ from training.evaluator import GreedyEvaluator
 
 SCRIPT_ROLE = "supplementary_confidence_check"
 SUPPLEMENTARY_NOTE = (
-    "This is a supplementary held-out diagnostic and does not overwrite the formal "
-    "final_probe verdict under the 16-episode formal comparable lane."
+    "This is a supplementary held-out diagnostic for multi-checkpoint, non-default episode-count, "
+    "recovery, or extra-confidence analysis. It does not overwrite the current formal final_probe; "
+    "100-episode held-out evaluation is now the default formal lane rather than supplementary-only evidence."
 )
 
 CHANNEL_LAYOUTS: dict[int, tuple[str, ...]] = {
@@ -229,7 +230,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run supplementary held-out greedy evaluation for multiple last.pt checkpoints. "
-            "This does not overwrite formal run artifacts."
+            "This does not overwrite formal run artifacts; the current formal final_probe default is 100 episodes."
         )
     )
     parser.add_argument(
@@ -244,7 +245,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Text file containing one checkpoint path per line. Blank lines and # comments are ignored.",
     )
-    parser.add_argument("--episodes", type=int, default=100, help="Greedy evaluation episodes per checkpoint.")
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=100,
+        help=(
+            "Greedy evaluation episodes per checkpoint. Default matches the current formal final_probe, "
+            "but this tool remains supplementary because it can compare extra checkpoints or non-default counts."
+        ),
+    )
     parser.add_argument("--seed-base", type=int, default=20261323, help="First held-out episode seed.")
     parser.add_argument("--device", type=str, default="cuda", help="Evaluation device, e.g. cuda or cpu.")
     parser.add_argument(

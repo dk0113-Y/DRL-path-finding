@@ -85,7 +85,7 @@ class TrainConfig:
     log_interval_episodes: int = 10
 
     recent_episode_window: int = 100
-    final_greedy_episodes: int = 16
+    final_greedy_episodes: int = 100
     train_print_interval_episodes: int = 20
     use_fixed_train_episode_seeds: bool = True
     fixed_train_episode_seed_base: int = 20259323
@@ -395,6 +395,7 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"timing_log_interval={int(cfg.timing_log_interval)} "
         f"train_print_interval={int(cfg.train_print_interval)} "
         f"log_interval={int(cfg.log_interval)} "
+        f"formal_final_probe_episodes={int(cfg.final_greedy_episodes)} "
         f"note=\"{_describe_profiling_mode(cfg, run_mode)}\""
     )
     print(f"[startup] timing_flags {timing_flag_text}")
@@ -1388,7 +1389,15 @@ def parse_args() -> TrainConfig:
     p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
 
     p.add_argument("--recent-episode-window", type=int, default=100)
-    p.add_argument("--final-greedy-episodes", type=int, default=16)
+    p.add_argument(
+        "--final-greedy-episodes",
+        type=int,
+        default=100,
+        help=(
+            "Held-out greedy episodes for the formal final_probe. "
+            "Default 100 under formal_last_checkpoint_v2_3."
+        ),
+    )
     p.add_argument(
         "--use-fixed-train-episode-seeds",
         action=argparse.BooleanOptionalAction,
@@ -1794,7 +1803,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         epsilon_end=0.05,
         epsilon_decay_steps=240_000,
         recent_episode_window=100,
-        final_greedy_episodes=16,
+        final_greedy_episodes=100,
         train_print_interval_episodes=20,
         use_fixed_train_episode_seeds=True,
         fixed_train_episode_seed_base=20259323,
