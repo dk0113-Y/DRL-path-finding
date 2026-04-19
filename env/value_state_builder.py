@@ -12,10 +12,6 @@ from env.shared_semantic_layer import SharedSemanticSnapshot
 VALUE_BLOCK_FEATURES = (
     "block_area_ratio",
     "frontier_cluster_count",
-    "representative_delta_r_ratio",
-    "representative_delta_c_ratio",
-    "representative_entry_width_ratio",
-    "representative_support_obstacle_density",
 )
 VALUE_ENTRY_FEATURES = (
     "delta_r_ratio",
@@ -54,10 +50,12 @@ class ValueStateBuilder:
     Unknown blocks are the primary units. Frontier clusters remain attached as
     children under each block and are never flattened into a single shared token
     list. Block sorting is only used for stable tensor packing, not expert
-    prioritization. Block summaries carry direct area/count statistics plus the
-    nearest representative frontier-anchor summary. Frontier clusters carry
-    local entry geometry, while SupportGeometry is reduced to a local
-    obstacle-density descriptor.
+    prioritization. Learning-facing block features carry only block-level
+    scalars: area ratio and child entry count. Block-entry correspondence is
+    carried by the nested tensor structure itself: entry_features[block_slot, ...]
+    are the child entries of that block. Block features should not manually
+    duplicate child-entry identity. Frontier clusters carry local entry geometry,
+    while SupportGeometry is reduced to a local obstacle-density descriptor.
     """
 
     def __init__(self, config: Optional[ValueStateConfig] = None):
@@ -131,12 +129,6 @@ class ValueStateBuilder:
             block_mask[block_slot] = True
             block_features[block_slot, 0] = np.float32(float(block.block_area) / total_unknown_area)
             block_features[block_slot, 1] = np.float32(float(block.frontier_cluster_count))
-            block_features[block_slot, 2] = np.float32(float(block.representative_delta_r) / delta_r_scale)
-            block_features[block_slot, 3] = np.float32(float(block.representative_delta_c) / delta_c_scale)
-            block_features[block_slot, 4] = np.float32(
-                float(block.representative_entry_width) / entry_width_scale
-            )
-            block_features[block_slot, 5] = np.float32(float(block.representative_support_obstacle_density))
 
             for entry_slot, frontier_cluster in enumerate(block.frontier_clusters[:max_entries]):
                 entry_mask[block_slot, entry_slot] = True

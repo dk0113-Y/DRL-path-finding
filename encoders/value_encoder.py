@@ -54,9 +54,14 @@ class ValueTreeEncoder(nn.Module):
     Hierarchical value encoder.
 
     Tree shape:
-      direct block summary (area/count + representative frontier summary)
-        -> child entry clusters are aggregated within each block
+      direct block scalars (area/count)
+        -> child entry clusters are encoded and aggregated within each block
         -> block representations are aggregated into the final value state
+
+    The block-entry correspondence is expressed by the nested tensor layout:
+    entry_features[:, block_slot, ...] are the children of block_features[:, block_slot, :].
+    The encoder intentionally learns from the full child entry set instead of a
+    single selected child entrance copied into block-level features.
     """
 
     def __init__(self, cfg: Optional[ValueEncoderConfig] = None):

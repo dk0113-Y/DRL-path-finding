@@ -131,22 +131,19 @@
 
 由 `ValueStateBuilder` 将语义树整理为 block-tree tensor state。
 
-#### Block 特征（6 维）
+#### Block 特征（2 维）
 
 1. `block_area_ratio`
 2. `frontier_cluster_count`
-3. `representative_delta_r_ratio`
-4. `representative_delta_c_ratio`
-5. `representative_entry_width_ratio`
-6. `representative_support_obstacle_density`
 
 这些特征表达的是 UnknownBlock 层的直接摘要信息：
 
 - 这块未知区域占全部可达未知面积的比例
 - 该块当前挂了多少个 pure frontier clusters
-- 距离 agent 最近的 representative frontier 在行/列方向上的相对位置
-- 该 representative frontier 的入口宽度
-- 该 representative frontier 对应 known-side support box 的障碍密度
+
+block 节点不再携带单一代表入口 / 代表前沿信息。
+block-entry 对应关系由层级张量结构表达：`entry_features[block_slot, ...]`
+就是该 block 的子入口集合，学习侧 block 特征不再手工复制 child-entry identity。
 
 #### Entry / Frontier 特征（4 维）
 
@@ -157,8 +154,8 @@
 
 来源分工：
 
-- 前 4 维来自 `FrontierCluster`
-- 后 2 维来自 `SupportGeometry`
+- 前 3 维来自 `FrontierCluster`
+- 第 4 维来自 `SupportGeometry`
 
 因此当前 value 分支中的“entry feature”其实已经不是旧意义上的复合 entry，而是：
 
@@ -221,8 +218,8 @@
 
 当前维度：
 
-- `D_block = 7`
-- `D_entry = 6`
+- `D_block = 2`
+- `D_entry = 4`
 
 编码器：`encoders/value_encoder.py` 中的 `ValueTreeEncoder`
 

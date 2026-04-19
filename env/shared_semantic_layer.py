@@ -227,11 +227,6 @@ class UnknownBlock:
     frontier_clusters: tuple[FrontierCluster, ...]
     block_area: int
     frontier_cluster_count: int
-    representative_frontier_index: int
-    representative_delta_r: float
-    representative_delta_c: float
-    representative_entry_width: float
-    representative_support_obstacle_density: float
 
     @property
     def rows(self) -> np.ndarray:
@@ -402,8 +397,8 @@ class SharedSemanticLayer:
 
     UnknownBlock groups one or more frontier clusters through frontier-first
     unknown-side grouping and only carries lightweight parent-level summaries:
-    area, frontier-cluster count, and the nearest representative frontier
-    anchor summary.
+    area and frontier-cluster count. Detailed access semantics stay on child
+    FrontierCluster records.
 
     FrontierCluster is an 8-connected pure frontier-cell cluster and carries the
     local entry geometry seen by the model. frontier_geometry remains an
@@ -712,13 +707,6 @@ class SharedSemanticLayer:
                     ),
                 )
             )
-            representative_frontier = min(
-                frontier_clusters,
-                key=lambda cluster: (
-                    float(cluster.anchor_distance),
-                    int(cluster.frontier_index),
-                ),
-            )
             accessible_blocks.append(
                 UnknownBlock(
                     block_index=int(block_index),
@@ -726,13 +714,6 @@ class SharedSemanticLayer:
                     frontier_clusters=frontier_clusters,
                     block_area=int(block_geometry.count),
                     frontier_cluster_count=int(len(frontier_clusters)),
-                    representative_frontier_index=int(representative_frontier.frontier_index),
-                    representative_delta_r=float(representative_frontier.delta_r),
-                    representative_delta_c=float(representative_frontier.delta_c),
-                    representative_entry_width=float(representative_frontier.entry_width),
-                    representative_support_obstacle_density=float(
-                        representative_frontier.support_obstacle_density
-                    ),
                 )
             )
 
@@ -776,13 +757,6 @@ def build_semantic_visualization_payload(snapshot: SharedSemanticSnapshot) -> di
                 "cols": np.asarray(block.cols, dtype=np.int32).copy(),
                 "block_area": int(block.block_area),
                 "frontier_cluster_count": int(block.frontier_cluster_count),
-                "representative_frontier_index": int(block.representative_frontier_index),
-                "representative_delta_r": float(block.representative_delta_r),
-                "representative_delta_c": float(block.representative_delta_c),
-                "representative_entry_width": float(block.representative_entry_width),
-                "representative_support_obstacle_density": float(
-                    block.representative_support_obstacle_density
-                ),
                 "frontier_clusters": [
                     {
                         "frontier_index": int(cluster.frontier_index),

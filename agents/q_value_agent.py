@@ -68,8 +68,13 @@ class ExplorationQNetwork(nn.Module):
     Data flow:
        advantage_canvas (local occupancy/frontier canvas + revisit pressure + short trajectory decay)
          -> advantage encoder -> per-action advantage states
-       value block-tree (6D block summary + 4D frontier entries) -> value encoder -> state value context
+       value block-tree (block-level scalars + child frontier-entry set)
+         -> value encoder -> state value context
        {value_state, advantage_state} -> dueling head -> Q(s, a)
+
+    Value block features contain only block-level scalars. Detailed access
+    semantics are provided exclusively by the entry set, and parent-child
+    binding is expressed by the hierarchical tensor layout.
     """
 
     def __init__(self, cfg: Optional[ExplorationQConfig] = None):
