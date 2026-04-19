@@ -1,6 +1,6 @@
 # DRL-path-finding
 
-这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前主线已经收口到“共享语义双状态架构”：从随机地图生成、局部观测、累计 belief map、共享环境语义解析，到 DDQN 训练、周期评估、checkpoint 保存与可选离线绘图，形成了一整套训练闭环。
+这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前主线已经收口到“共享语义双状态架构”：从随机地图生成、局部观测、累计 belief map、共享环境语义解析，到 DDQN 训练、last checkpoint final_probe、formal artifact 写出与可选离线绘图，形成了一整套正式训练闭环。
 
 ## 当前主要功能
 
@@ -14,8 +14,8 @@
   - value 分支读取 block-tree 结构化状态；
   - 再由语义分离的 dueling head 输出 Q 值。
 - 使用 Double DQN + n-step transition 的方式训练。
-- 训练过程中默认记录 CSV 日志、周期 greedy evaluation、保存 `last.pt` / `best.pt`。
-- 正式训练 run 结束后会额外写出结构化 formal artifact，供 exchange/control-plane 直接消费。
+- 训练过程中默认记录 train / final_probe CSV 日志，并保存 formal `last.pt`。
+- 正式训练 run 结束后会对 `last.pt`（若可用）或 online last network 执行 held-out `final_probe`，并写出结构化 formal artifact，供 exchange/control-plane 直接消费。
 - 训练结束后的离线绘图、轨迹图导出、额外可视化产物属于可选开关，当前默认关闭以降低 wall-clock 开销。
 
 ## 当前主线说明
@@ -32,7 +32,7 @@
 ## 代码结构
 
 - `train_q_agent.py`
-  - 主训练入口，负责参数配置、系统组装、训练循环、评估、checkpoint 与可选绘图。
+  - 主训练入口，负责参数配置、系统组装、训练循环、formal last checkpoint、final_probe 与可选绘图。
 - `agents/`
   - Q 网络与状态适配逻辑。
 - `encoders/`
@@ -53,18 +53,19 @@
 5. `StateTensorAdapter` 将 advantage canvas 和 value block-tree 转成网络输入张量。
 6. `TransitionCollector` 用 epsilon-greedy 与环境交互，并写入 replay buffer。
 7. `DDQNLearner` 从 replay 中采样，执行 Double DQN 更新。
-8. `GreedyEvaluator` 周期性评估当前策略。
-9. `CSVMetricLogger`、`CheckpointManager`、`generate_all_plots()` 输出结果。
+8. 训练结束后保存 formal `checkpoints/last.pt`。
+9. `GreedyEvaluator` 对 `last.pt`（若可用）或 online last network 执行 held-out `final_probe`。
+10. `CSVMetricLogger` 与 `training.formal_artifacts` 写出 CSV、formal structured JSON 和可选绘图。
 
 ## 运行方式
 
-推荐的常规主训练命令：
+推荐的常规正式训练命令：
 
-```bash
-python train_q_agent.py --device cuda
+```powershell
+python .\train_q_agent.py --device cuda
 ```
 
-这条命令对应当前默认主训练基线：
+这条命令对应当前默认主训练基线，并会在不显式传入 `--final-greedy-episodes` 时使用 100-episode formal final_probe：
 
 - `enable_amp = False`
 - `enable_inference_amp = False`
@@ -76,24 +77,24 @@ python train_q_agent.py --device cuda
 
 快速 smoke 测试：
 
-```bash
-python train_q_agent.py --smoke --device cpu
+```powershell
+python .\train_q_agent.py --smoke --device cpu
 ```
 
-常用 profiling 命令：
+常用 profiling 命令（用于性能排查，不作为正式 comparable run）：
 
-```bash
-python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup-steps 4000 --eval-interval-env-steps 24000 --eval-episodes 4 --final-greedy-episodes 1 --timing-log-interval 4000 --episode-print-interval 0 --no-save-eval-trajectories --no-save-train-representative-trajectories --no-save-final-probe-trajectories --no-generate-plots-on-finish
+```powershell
+python .\train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup-steps 4000 --final-greedy-episodes 1 --timing-log-interval 4000 --episode-print-interval 0 --no-save-train-representative-trajectories --no-save-final-probe-trajectories --no-generate-plots-on-finish
 ```
 
 当前正式支持两种训练 budget 组织方式：
 
 - `budget_mode=env_steps`
-  - 兼容旧主线；训练停止、周期 eval 与 step-level log 仍按 `total_env_steps` / `eval_interval_env_steps` / `log_interval` 组织。
+  - 训练停止与 step-level train snapshot 按 `total_env_steps` / `log_interval` 组织。
   - `warmup_steps` 在该模式下继续有效。
 - `budget_mode=episodes`
   - 训练停止条件改为 `total_train_episodes`。
-  - 周期 eval / 训练 step snapshot / stdout train print 可分别由 `eval_interval_episodes`、`log_interval_episodes`、`train_print_interval_episodes` 控制。
+  - 训练 step snapshot / stdout train print 可分别由 `log_interval_episodes`、`train_print_interval_episodes` 控制。
   - `warmup_episodes` 在该模式下作为正式 warmup 入口；单图内部步数上限仍由 `max_episode_steps` 控制。
 
 ## Formal protocol / final_probe
@@ -123,8 +124,8 @@ python train_q_agent.py --device cuda --profile --total-env-steps 24000 --warmup
 
 如需进一步压缩运行时数值路径的不确定性，可选开启：
 
-```bash
-python train_q_agent.py --strict-reproducibility
+```powershell
+python .\train_q_agent.py --strict-reproducibility
 ```
 
 该开关会尽量使用 deterministic runtime guard，并在 CUDA 下关闭 `cudnn_benchmark` 与 TF32。它是可选增强项，不替代固定 train episode seed 序列。
@@ -141,14 +142,15 @@ python train_q_agent.py --strict-reproducibility
 - `--budget-mode`
 - `--total-train-episodes`
 - `--warmup-episodes`
-- `--eval-interval-episodes`
+- `--log-interval-episodes`
+- `--train-print-interval-episodes`
 - `--use-fixed-train-episode-seeds`
 - `--fixed-train-episode-seed-base`
 - `--batch-size`
 - `--rows` `--cols`
 - `--scan-radius`
 - `--reward-info-scale`
-- `--eval-interval-env-steps`
+- `--log-interval`
 - `--final-greedy-episodes`
 
 ## 依赖
@@ -168,20 +170,21 @@ python train_q_agent.py --strict-reproducibility
 
 默认运行结果会写到 `outputs/`。其中通常包含：
 
-- `logs/`：训练与评估 CSV，以及 formal structured JSON
-- `checkpoints/`：`last.pt`、`best.pt`
+- `logs/`：训练 CSV、`final_probe.csv`，以及 formal structured JSON
+- `checkpoints/`：当前 formal 主线保存 `last.pt`
 - `plots/`：离线生成的指标曲线，仅在启用相关开关时生成
-- `trajectories/`：评估轨迹图，仅在启用相关开关时生成
+- `trajectories/`：训练或 final_probe 轨迹图，仅在启用相关开关时生成
 
 正式训练的 `logs/` 目录当前会额外生成：
 
 - `metric_snapshot.json`
-  - 统一导出 `recent_train`、`last_eval`、`best_eval`、`final_probe`
+  - 统一导出 `recent_train`、`final_probe`，并在 legacy diagnostic CSV 存在时补充 `last_eval`、`best_eval`
   - 包含主指标、次指标、稳定性指标、semantic monitoring 汇总
-  - 同时记录 best / last checkpoint 对应的 train-episode 索引（如果可得）
+  - 当前正式 acceptance object 是 `final_probe`；`last_eval` / `best_eval` 仅在 legacy diagnostic CSV 存在时作为历史诊断上下文出现
+  - 同时记录 last checkpoint 对应的 train-episode 索引（如果可得）
 - `benchmark_summary.json`
-  - 导出总运行时、运行模式、runtime/timing 开关、可用 timing summary、`env_steps_to_best`
-  - 在 episode-budget 模式下也会导出 `budget_mode`、`train_episodes_to_best`、`total_train_episodes_completed`
+  - 导出总运行时、运行模式、runtime/timing 开关、可用 timing summary
+  - 在 episode-budget 模式下也会导出 `budget_mode`、`total_train_episodes_completed`；`*_to_best` 字段仅是 legacy compatibility / diagnostic placeholder，不参与 formal acceptance
 - `config_snapshot.json`
   - 导出完整训练配置、git sha、comparability 相关字段、`observed_run_contract`
 - `artifact_index.json`
@@ -196,16 +199,16 @@ python train_q_agent.py --strict-reproducibility
 - `final_train_episode_idx`
 - `train_episodes_header`
 - `train_steps_header`
-- `eval_metrics_header`
+- `eval_metrics_header`（legacy diagnostic header；当前主线 run 通常为空）
 - `final_probe_header`
 
-这些字段来自真实当前 run 的产物，不依赖历史 backfill。
+当前主线 run 通常没有 `logs/eval_metrics.csv` 或 `checkpoints/best.pt`；这些字段和 legacy diagnostic artifact 兼容历史 run / backfill 语境，不参与当前 formal acceptance。当前正式结论以 `checkpoints/last.pt` 对应的 100-episode `final_probe` 为准。
 
 如果需要对历史 runs 做 formal backfill 与 bootstrap 阈值汇总，可执行：
 
-```bash
-python tools/backfill_formal_run_artifacts.py
-python tools/generate_historical_baseline_summary.py
+```powershell
+python .\tools\backfill_formal_run_artifacts.py
+python .\tools\generate_historical_baseline_summary.py
 ```
 
 第二条命令会生成：
