@@ -68,13 +68,16 @@ class ExplorationQNetwork(nn.Module):
     Data flow:
        advantage_canvas (local occupancy/frontier canvas + revisit pressure + short trajectory decay)
          -> advantage encoder -> per-action advantage states
-       value block-tree (block-level scalars + child frontier-entry set)
-         -> value encoder -> state value context
+       value block-tree (parent block scalars + child frontier-entry set)
+         -> block-conditioned child encoder -> state value context
        {value_state, advantage_state} -> dueling head -> Q(s, a)
 
-    Value block features contain only block-level scalars. Detailed access
-    semantics are provided exclusively by the entry set, and parent-child
-    binding is expressed by the hierarchical tensor layout.
+    The value branch first encodes parent block semantics, lets child entries
+    interact within the same block, uses parent-conditioned soft aggregation to
+    summarize child access cues, applies a parent-grounded gated block update,
+    encodes global block-block context, and forms value_state through state-query
+    weighted pooling. It no longer relies on child self-scoring or mean/max
+    fallback pooling.
     """
 
     def __init__(self, cfg: Optional[ExplorationQConfig] = None):
