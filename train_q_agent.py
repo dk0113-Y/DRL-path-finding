@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Mapping
 
 import numpy as np
 import torch
@@ -74,7 +75,7 @@ class TrainConfig:
     max_entries_per_block: int = 8
 
     budget_mode: str = "env_steps"
-    total_env_steps: int = 300_000
+    total_env_steps: int = 500_000
     total_train_episodes: int = 600
     warmup_steps: int = 4_000
     warmup_episodes: int = 0
@@ -91,6 +92,14 @@ class TrainConfig:
     fixed_train_episode_seed_base: int = 20259323
     use_fixed_eval_seeds: bool = True  # Legacy name retained; now this toggle only controls fixed final_probe seeds.
     fixed_final_probe_seed_base: int = 20261323
+    enable_best_checkpoint_selection: bool = True
+    best_checkpoint_selection_start_env_steps: int = 300_000
+    best_checkpoint_selection_interval_env_steps: int = 20_000
+    best_checkpoint_validation_episodes: int = 24
+    best_checkpoint_topk_recheck: int = 3
+    best_checkpoint_recheck_episodes: int = 50
+    use_fixed_model_select_seeds: bool = True
+    fixed_model_select_seed_base: int = 20262323
 
     replay_capacity: int = 100_000
     batch_size: int = 128
@@ -105,8 +114,8 @@ class TrainConfig:
     target_update_interval: int = 1_000
 
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 240_000
+    epsilon_end: float = 0.03
+    epsilon_decay_steps: int = 400_000
 
     max_episode_steps: int = 600  # tune with map scale as needed
     coverage_stop_threshold: float = 0.95
@@ -385,6 +394,9 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"device={cfg.device} "
         f"profiling_enabled={profiling_enabled} "
         f"budget_mode={budget_mode} "
+        f"total_env_steps={int(cfg.total_env_steps)} "
+        f"epsilon_decay_steps={int(cfg.epsilon_decay_steps)} "
+        f"epsilon_end={float(cfg.epsilon_end):.4f} "
         f"train_amp={bool(cfg.enable_amp)} "
         f"torch_compile={bool(cfg.enable_torch_compile)} "
         f"strict_reproducibility={bool(cfg.strict_reproducibility)} "
@@ -396,6 +408,7 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"train_print_interval={int(cfg.train_print_interval)} "
         f"log_interval={int(cfg.log_interval)} "
         f"formal_final_probe_episodes={int(cfg.final_greedy_episodes)} "
+        f"best_checkpoint_selection={bool(cfg.enable_best_checkpoint_selection)} "
         f"note=\"{_describe_profiling_mode(cfg, run_mode)}\""
     )
     print(f"[startup] timing_flags {timing_flag_text}")
@@ -645,6 +658,93 @@ def build_system(cfg: TrainConfig):
     return online_net, target_net, replay, collector, learner, evaluator
 
 
+def _best_model_select_score(row: Mapping[str, Any]) -> tuple[float, float, float]:
+    """
+    Fixed checkpoint-selection rule.
+
+    Validation and recheck candidates are ranked by success_rate first, then
+    coverage, then reward. The rule intentionally ignores final-test seeds;
+    model selection uses its own dedicated seed set.
+    """
+
+    def metric(name: str) -> float:
+        value = row.get(name)
+        if value is None:
+            value = row.get(f"eval_{name}")
+        try:
+            return float(value)
+        except Exception:
+            return float("-inf")
+
+    return (
+        metric("success_rate"),
+        metric("mean_coverage"),
+        metric("mean_reward"),
+    )
+
+
+def _relative_checkpoint_path(run_dir: Path, checkpoint_path: Path) -> str:
+    try:
+        return Path(checkpoint_path).resolve().relative_to(run_dir.resolve()).as_posix()
+    except Exception:
+        return Path(checkpoint_path).as_posix()
+
+
+def _load_checkpoint_into_model(model: torch.nn.Module, checkpoint_path: Path, device: str) -> dict[str, Any]:
+    payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(payload["online_state_dict"])
+    return payload
+
+
+def _build_eval_row(
+    *,
+    tag: str,
+    source: str,
+    budget_mode: str,
+    env_steps: int,
+    episode_idx: int,
+    train_episode_idx: int,
+    completed_train_episodes: int,
+    learner_steps: int,
+    eval_result: Mapping[str, Any],
+    checkpoint_path: str,
+    seed_base: int | None,
+    selection_rank: int | None = None,
+) -> dict[str, object]:
+    row = {
+        "tag": tag,
+        "source": source,
+        "budget_mode": budget_mode,
+        "env_steps": int(env_steps),
+        "episode_idx": int(episode_idx),
+        "train_episode_idx": int(train_episode_idx),
+        "completed_train_episodes": int(completed_train_episodes),
+        "learner_steps": int(learner_steps),
+        "checkpoint_path": str(checkpoint_path),
+        "seed_base": None if seed_base is None else int(seed_base),
+        "selection_rank": None if selection_rank is None else int(selection_rank),
+        "eval_episodes": int(eval_result["eval_episodes"]),
+        "eval_mean_reward": float(eval_result["eval_mean_reward"]),
+        "eval_mean_coverage": float(eval_result["eval_mean_coverage"]),
+        "eval_success_rate": float(eval_result["eval_success_rate"]),
+        "eval_mean_episode_length": float(eval_result["eval_mean_episode_length"]),
+        "eval_mean_repeat_visit_ratio": float(eval_result["eval_mean_repeat_visit_ratio"]),
+        **{
+            f"eval_mean_{metric_name}": float(eval_result[f"eval_mean_{metric_name}"])
+            for metric_name in EVAL_SEMANTIC_METRIC_NAMES
+        },
+        **{
+            f"eval_mean_{field}": float(eval_result[f"eval_mean_{field}"])
+            for field in REWARD_BREAKDOWN_FIELDS
+        },
+        **{
+            f"eval_mean_{field}": float(eval_result[f"eval_mean_{field}"])
+            for field in REWARD_EVENT_SUMMARY_FIELDS
+        },
+    }
+    return row
+
+
 def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     run_start_time = time.perf_counter()
     set_seed(int(cfg.seed))
@@ -669,6 +769,17 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     trajectory_plot_paths: list[Path] = []
     train_trace_episodes: list[dict] = []
     episode_print_interval = int(max(0, cfg.episode_print_interval))
+    model_select_rows: list[dict[str, object]] = []
+    best_recheck_rows: list[dict[str, object]] = []
+    best_validation_row: dict[str, object] | None = None
+    final_best_selection_row: dict[str, object] | None = None
+    last_checkpoint_diagnostic_row: dict[str, object] | None = None
+    best_checkpoint_path: Path | None = None
+    enable_best_selection = bool(cfg.enable_best_checkpoint_selection)
+    model_select_seed_base = (
+        int(cfg.fixed_model_select_seed_base) if bool(cfg.use_fixed_model_select_seeds) else None
+    )
+    final_probe_seed_base = int(cfg.fixed_final_probe_seed_base) if bool(cfg.use_fixed_eval_seeds) else None
 
     def completed_train_episodes() -> int:
         return int(train_phase_episodes)
@@ -794,6 +905,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     next_timing_log_step = (
         timing_log_interval if timing_log_interval > 0 else int(cfg.total_env_steps) + 1
     )
+    model_select_interval = int(max(1, cfg.best_checkpoint_selection_interval_env_steps))
+    next_model_select_step = int(max(0, cfg.best_checkpoint_selection_start_env_steps))
+    if not enable_best_selection:
+        next_model_select_step = int(cfg.total_env_steps) + model_select_interval + 1
 
     def emit_train_snapshot(eps: float, *, should_log: bool, should_print_train: bool) -> None:
         rec = summarize_recent_episodes(recent_eps)
@@ -845,6 +960,80 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
                 f"recent_succ={step_row['recent_success_rate']:.4f} "
                 f"recent_blocks={step_row['recent_accessible_block_count']:.2f}"
             )
+
+    def run_model_select_validation(trigger_env_steps: int) -> dict[str, object]:
+        nonlocal best_validation_row, best_checkpoint_path
+
+        candidate_path = ckpt.save_model_select_candidate(
+            online_net,
+            learner,
+            env_steps=int(env_steps),
+            train_episode_idx=int(train_phase_episodes),
+            train_config=cfg,
+            selection_metadata={
+                "selection_phase": "periodic_validation",
+                "trigger_env_steps": int(trigger_env_steps),
+                "seed_base": model_select_seed_base,
+                "episodes": int(max(1, cfg.best_checkpoint_validation_episodes)),
+            },
+        )
+        validation = evaluator.evaluate(
+            online_net,
+            num_episodes=int(max(1, cfg.best_checkpoint_validation_episodes)),
+            seed_base=model_select_seed_base,
+        )
+        row = _build_eval_row(
+            tag="model_select_eval",
+            source="periodic_validation",
+            budget_mode=budget_mode,
+            env_steps=int(env_steps),
+            episode_idx=int(collector.total_episodes),
+            train_episode_idx=int(collector.total_episodes),
+            completed_train_episodes=int(train_phase_episodes),
+            learner_steps=int(learner.learn_steps),
+            eval_result=validation,
+            checkpoint_path=_relative_checkpoint_path(run_dir, candidate_path),
+            seed_base=model_select_seed_base,
+        )
+        row["trigger_env_steps"] = int(trigger_env_steps)
+        logger.log_model_select_eval(row)
+        model_select_rows.append(row)
+
+        if best_validation_row is None or _best_model_select_score(row) > _best_model_select_score(best_validation_row):
+            best_validation_row = row
+            best_checkpoint_path = ckpt.save_best_from_checkpoint(
+                candidate_path,
+                selection_metadata={
+                    "selection_phase": "periodic_validation_preliminary_best",
+                    "selection_rule": "success_rate_then_coverage_then_reward",
+                    "selection_row": row,
+                },
+            )
+            best_marker = "new_best"
+        else:
+            best_marker = "kept_best"
+        print(
+            "[model_select] "
+            f"{best_marker} trigger_env={int(trigger_env_steps)} env_steps={int(env_steps)} "
+            f"episodes={row['eval_episodes']} success={row['eval_success_rate']:.4f} "
+            f"coverage={row['eval_mean_coverage']:.4f} reward={row['eval_mean_reward']:.4f}"
+        )
+        return row
+
+    def maybe_run_model_select_validation() -> None:
+        nonlocal next_model_select_step
+        if not enable_best_selection:
+            return
+        if int(env_steps) < int(next_model_select_step):
+            return
+        trigger_env_steps = int(next_model_select_step)
+        # If a rollout crosses more than one validation boundary, evaluate the
+        # current checkpoint once and advance past all missed boundaries. Default
+        # formal settings collect in 16-step chunks, so planned 20k boundaries are
+        # reached exactly.
+        run_model_select_validation(trigger_env_steps)
+        while int(next_model_select_step) <= int(env_steps):
+            next_model_select_step += model_select_interval
 
     if timing_summary_enabled and timing_log_interval > 0:
         while env_steps >= next_timing_log_step:
@@ -900,6 +1089,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
             if should_log or should_print_train:
                 emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
+            maybe_run_model_select_validation()
     else:
         while env_steps < int(cfg.total_env_steps):
             eps = linear_epsilon(env_steps, cfg)
@@ -942,6 +1132,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
             if should_log or should_print_train:
                 emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
+            maybe_run_model_select_validation()
 
     last_ckpt_path = ckpt.save_last(
         online_net,
@@ -951,50 +1142,123 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         train_config=cfg,
     )
 
-    probe_source = "online_last"
-    if last_ckpt_path.exists():
-        payload = torch.load(last_ckpt_path, map_location=cfg.device, weights_only=False)
-        online_net.load_state_dict(payload["online_state_dict"])
-        probe_source = "last_checkpoint"
+    if enable_best_selection and not any(int(row.get("env_steps", -1)) == int(env_steps) for row in model_select_rows):
+        if int(env_steps) >= int(cfg.best_checkpoint_selection_start_env_steps):
+            run_model_select_validation(int(env_steps))
 
-    final_probe_seed_base = int(cfg.fixed_final_probe_seed_base) if bool(cfg.use_fixed_eval_seeds) else None
+    if not model_select_rows:
+        # Short smoke runs or explicitly disabled selection still publish best.pt
+        # as the formal object by promoting last.pt without consuming extra
+        # model-selection episodes.
+        best_checkpoint_path = ckpt.save_best_from_checkpoint(
+            last_ckpt_path,
+            selection_metadata={
+                "selection_phase": "fallback_last_checkpoint_no_model_select_eval",
+                "selection_rule": "no_validation_candidates_available",
+            },
+        )
+        final_best_selection_row = {
+            "tag": "best_recheck_eval",
+            "source": "fallback_last_checkpoint_no_model_select_eval",
+            "env_steps": int(env_steps),
+            "checkpoint_path": _relative_checkpoint_path(run_dir, last_ckpt_path),
+            "selection_rank": None,
+        }
+        last_checkpoint_diagnostic_row = final_best_selection_row
+    else:
+        topk = int(max(1, cfg.best_checkpoint_topk_recheck))
+        ranked_candidates = sorted(model_select_rows, key=_best_model_select_score, reverse=True)
+        top_candidates = ranked_candidates[: min(topk, len(ranked_candidates))]
+        for rank, candidate_row in enumerate(top_candidates, start=1):
+            candidate_path = run_dir / str(candidate_row["checkpoint_path"])
+            _load_checkpoint_into_model(online_net, candidate_path, cfg.device)
+            recheck = evaluator.evaluate(
+                online_net,
+                num_episodes=int(max(1, cfg.best_checkpoint_recheck_episodes)),
+                seed_base=model_select_seed_base,
+            )
+            recheck_row = _build_eval_row(
+                tag="best_recheck_eval",
+                source="topk_model_select_recheck",
+                budget_mode=budget_mode,
+                env_steps=int(candidate_row["env_steps"]),
+                episode_idx=int(candidate_row["episode_idx"]),
+                train_episode_idx=int(candidate_row["train_episode_idx"]),
+                completed_train_episodes=int(candidate_row["completed_train_episodes"]),
+                learner_steps=int(candidate_row["learner_steps"]),
+                eval_result=recheck,
+                checkpoint_path=str(candidate_row["checkpoint_path"]),
+                seed_base=model_select_seed_base,
+                selection_rank=rank,
+            )
+            recheck_row["model_select_eval_success_rate"] = float(candidate_row["eval_success_rate"])
+            recheck_row["model_select_eval_mean_coverage"] = float(candidate_row["eval_mean_coverage"])
+            recheck_row["model_select_eval_mean_reward"] = float(candidate_row["eval_mean_reward"])
+            logger.log_best_recheck_eval(recheck_row)
+            best_recheck_rows.append(recheck_row)
+            print(
+                "[best_recheck] "
+                f"rank={rank} env_steps={recheck_row['env_steps']} episodes={recheck_row['eval_episodes']} "
+                f"success={recheck_row['eval_success_rate']:.4f} "
+                f"coverage={recheck_row['eval_mean_coverage']:.4f} reward={recheck_row['eval_mean_reward']:.4f}"
+            )
+
+        final_best_selection_row = max(best_recheck_rows, key=_best_model_select_score)
+        best_candidate_path = run_dir / str(final_best_selection_row["checkpoint_path"])
+        best_checkpoint_path = ckpt.save_best_from_checkpoint(
+            best_candidate_path,
+            selection_metadata={
+                "selection_phase": "topk_recheck_final_best",
+                "selection_rule": "success_rate_then_coverage_then_reward",
+                "selection_row": final_best_selection_row,
+                "topk_recheck": int(topk),
+                "validation_candidate_count": int(len(model_select_rows)),
+            },
+        )
+
+        last_checkpoint_matches = [
+            row for row in best_recheck_rows
+            if int(row.get("env_steps", -1)) == int(env_steps)
+        ]
+        if last_checkpoint_matches:
+            last_checkpoint_diagnostic_row = last_checkpoint_matches[-1]
+        else:
+            last_validation_matches = [
+                row for row in model_select_rows
+                if int(row.get("env_steps", -1)) == int(env_steps)
+            ]
+            last_checkpoint_diagnostic_row = last_validation_matches[-1] if last_validation_matches else None
+
+    if best_checkpoint_path is None:
+        raise RuntimeError("best checkpoint path was not resolved before final formal test")
+
+    best_payload = _load_checkpoint_into_model(online_net, best_checkpoint_path, cfg.device)
+    best_env_steps = int(best_payload.get("env_steps", env_steps))
+    best_train_episode_idx = int(best_payload.get("train_episode_idx", train_phase_episodes))
+    probe_source = "best_checkpoint"
     probe = evaluator.evaluate(
         online_net,
         num_episodes=int(max(1, cfg.final_greedy_episodes)),
         seed_base=final_probe_seed_base,
     )
-    probe_row = {
-        "tag": "final_probe",
-        "source": probe_source,
-        "budget_mode": budget_mode,
-        "env_steps": int(env_steps),
-        "episode_idx": int(collector.total_episodes),
-        "train_episode_idx": int(collector.total_episodes),
-        "completed_train_episodes": int(train_phase_episodes),
-        "learner_steps": int(learner.learn_steps),
-        "eval_episodes": int(probe["eval_episodes"]),
-        "eval_mean_reward": float(probe["eval_mean_reward"]),
-        "eval_mean_coverage": float(probe["eval_mean_coverage"]),
-        "eval_success_rate": float(probe["eval_success_rate"]),
-        "eval_mean_episode_length": float(probe["eval_mean_episode_length"]),
-        "eval_mean_repeat_visit_ratio": float(probe["eval_mean_repeat_visit_ratio"]),
-        **{
-            f"eval_mean_{metric_name}": float(probe[f"eval_mean_{metric_name}"])
-            for metric_name in EVAL_SEMANTIC_METRIC_NAMES
-        },
-        **{
-            f"eval_mean_{field}": float(probe[f"eval_mean_{field}"])
-            for field in REWARD_BREAKDOWN_FIELDS
-        },
-        **{
-            f"eval_mean_{field}": float(probe[f"eval_mean_{field}"])
-            for field in REWARD_EVENT_SUMMARY_FIELDS
-        },
-    }
+    probe_row = _build_eval_row(
+        tag="final_probe",
+        source=probe_source,
+        budget_mode=budget_mode,
+        env_steps=best_env_steps,
+        episode_idx=int(collector.total_episodes),
+        train_episode_idx=best_train_episode_idx,
+        completed_train_episodes=int(train_phase_episodes),
+        learner_steps=int(learner.learn_steps),
+        eval_result=probe,
+        checkpoint_path=_relative_checkpoint_path(run_dir, best_checkpoint_path),
+        seed_base=final_probe_seed_base,
+    )
     logger.log_final_probe(probe_row)
     print(
         "[final_probe] "
-        f"source={probe_source} env_steps={probe_row['env_steps']} episodes={probe_row['eval_episodes']} "
+        f"source={probe_source} checkpoint={probe_row['checkpoint_path']} "
+        f"env_steps={probe_row['env_steps']} episodes={probe_row['eval_episodes']} "
         f"train_eps={int(train_phase_episodes)} "
         f"mean_reward={probe_row['eval_mean_reward']:.4f} mean_cov={probe_row['eval_mean_coverage']:.4f} "
         f"success_rate={probe_row['eval_success_rate']:.4f} mean_len={probe_row['eval_mean_episode_length']:.2f} "
@@ -1127,7 +1391,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
     print(
         "final_probe: "
-        f"source={probe_source}, reward={probe_row['eval_mean_reward']:.4f}, "
+        f"source={probe_source}, checkpoint={probe_row['checkpoint_path']}, reward={probe_row['eval_mean_reward']:.4f}, "
         f"coverage={probe_row['eval_mean_coverage']:.4f}, "
         f"success={probe_row['eval_success_rate']:.4f}, "
         f"length={probe_row['eval_mean_episode_length']:.2f}, "
@@ -1135,8 +1399,11 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     )
 
     print(f"checkpoint_last: {last_ckpt_path}")
+    print(f"checkpoint_best: {best_checkpoint_path}")
     print(f"train_episode_csv: {logger.train_episode_csv}")
     print(f"final_probe_csv: {logger.final_probe_csv}")
+    print(f"model_select_eval_csv: {logger.model_select_eval_csv}")
+    print(f"best_recheck_eval_csv: {logger.best_recheck_eval_csv}")
     print(f"train_step_csv: {logger.train_step_csv}")
     if len(generated_plots) > 0:
         print(f"plots_dir: {run_dir / 'plots'}")
@@ -1150,6 +1417,8 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         final_probe_row=probe_row,
         last_checkpoint_env_steps=int(env_steps),
         last_checkpoint_train_episode_idx=int(train_phase_episodes),
+        best_checkpoint_env_steps=best_env_steps,
+        best_checkpoint_train_episode_idx=best_train_episode_idx,
         final_probe_source=probe_source,
         total_runtime_sec=float(total_runtime_sec),
         total_runtime_hms=total_runtime_hms,
@@ -1158,6 +1427,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         replay=replay,
         state_adapter=collector.state_adapter,
         source_of_truth_repo=str(Path(__file__).resolve().parent),
+        model_select_rows=model_select_rows,
+        best_recheck_rows=best_recheck_rows,
+        best_checkpoint_selection_row=final_best_selection_row,
+        last_checkpoint_diagnostic_row=last_checkpoint_diagnostic_row,
     )
     print(f"metric_snapshot_json: {structured_artifacts['metric_snapshot']}")
     print(f"benchmark_summary_json: {structured_artifacts['benchmark_summary']}")
@@ -1167,7 +1440,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
 
 def parse_args() -> TrainConfig:
-    p = argparse.ArgumentParser(description="Double DQN training with final last-checkpoint formal evaluation")
+    p = argparse.ArgumentParser(description="Double DQN training with best-checkpoint formal evaluation")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
@@ -1369,7 +1642,7 @@ def parse_args() -> TrainConfig:
     )
 
     p.add_argument("--budget-mode", type=str, choices=("env_steps", "episodes"), default="env_steps")
-    p.add_argument("--total-env-steps", type=int, default=300_000)
+    p.add_argument("--total-env-steps", type=int, default=500_000)
     p.add_argument("--total-train-episodes", type=int, default=600)
     p.add_argument("--warmup-steps", type=int, default=4_000)
     p.add_argument("--warmup-episodes", type=int, default=0)
@@ -1385,8 +1658,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--learning-rate", type=float, default=1.0e-4)
 
     p.add_argument("--epsilon-start", type=float, default=1.0)
-    p.add_argument("--epsilon-end", type=float, default=0.05)
-    p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
+    p.add_argument("--epsilon-end", type=float, default=0.03)
+    p.add_argument("--epsilon-decay-steps", type=int, default=400_000)
 
     p.add_argument("--recent-episode-window", type=int, default=100)
     p.add_argument(
@@ -1394,8 +1667,8 @@ def parse_args() -> TrainConfig:
         type=int,
         default=100,
         help=(
-            "Held-out greedy episodes for the formal final_probe. "
-            "Default 100 under formal_last_checkpoint_v2_3."
+            "Held-out greedy episodes for the formal final_probe on best.pt. "
+            "Default 100 under the best-checkpoint protocol."
         ),
     )
     p.add_argument(
@@ -1421,6 +1694,29 @@ def parse_args() -> TrainConfig:
         type=int,
         default=20261323,
         help="Base seed for the final-probe evaluation map set.",
+    )
+    p.add_argument(
+        "--enable-best-checkpoint-selection",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable formal periodic validation, top-k recheck, and best.pt selection.",
+    )
+    p.add_argument("--best-checkpoint-selection-start-env-steps", type=int, default=300_000)
+    p.add_argument("--best-checkpoint-selection-interval-env-steps", type=int, default=20_000)
+    p.add_argument("--best-checkpoint-validation-episodes", type=int, default=24)
+    p.add_argument("--best-checkpoint-topk-recheck", type=int, default=3)
+    p.add_argument("--best-checkpoint-recheck-episodes", type=int, default=50)
+    p.add_argument(
+        "--use-fixed-model-select-seeds",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the dedicated model-selection seed set for validation and recheck.",
+    )
+    p.add_argument(
+        "--fixed-model-select-seed-base",
+        type=int,
+        default=20262323,
+        help="Base seed for checkpoint validation; intentionally separate from final_probe seeds.",
     )
 
     p.add_argument("--log-interval", type=int, default=500)
@@ -1578,6 +1874,14 @@ def parse_args() -> TrainConfig:
             fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
             use_fixed_eval_seeds=True,
             fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
+            enable_best_checkpoint_selection=bool(args.enable_best_checkpoint_selection),
+            best_checkpoint_selection_start_env_steps=60,
+            best_checkpoint_selection_interval_env_steps=60,
+            best_checkpoint_validation_episodes=1,
+            best_checkpoint_topk_recheck=1,
+            best_checkpoint_recheck_episodes=1,
+            use_fixed_model_select_seeds=bool(args.use_fixed_model_select_seeds),
+            fixed_model_select_seed_base=int(args.fixed_model_select_seed_base),
             log_interval=20,
             log_interval_episodes=max(0, args.log_interval_episodes),
             max_episode_steps=80,
@@ -1663,6 +1967,14 @@ def parse_args() -> TrainConfig:
         fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
         use_fixed_eval_seeds=bool(args.use_fixed_eval_seeds),
         fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
+        enable_best_checkpoint_selection=bool(args.enable_best_checkpoint_selection),
+        best_checkpoint_selection_start_env_steps=max(0, args.best_checkpoint_selection_start_env_steps),
+        best_checkpoint_selection_interval_env_steps=max(1, args.best_checkpoint_selection_interval_env_steps),
+        best_checkpoint_validation_episodes=max(1, args.best_checkpoint_validation_episodes),
+        best_checkpoint_topk_recheck=max(1, args.best_checkpoint_topk_recheck),
+        best_checkpoint_recheck_episodes=max(1, args.best_checkpoint_recheck_episodes),
+        use_fixed_model_select_seeds=bool(args.use_fixed_model_select_seeds),
+        fixed_model_select_seed_base=int(args.fixed_model_select_seed_base),
         log_interval=args.log_interval,
         log_interval_episodes=max(0, args.log_interval_episodes),
         rows=args.rows,
@@ -1784,7 +2096,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         max_accessible_blocks=16,
         max_entries_per_block=8,
         budget_mode="env_steps",
-        total_env_steps=300_000,
+        total_env_steps=500_000,
         total_train_episodes=600,
         warmup_steps=4_000,
         warmup_episodes=0,
@@ -1800,8 +2112,8 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         target_update_interval=1_000,
         grad_clip_norm=10.0,
         epsilon_start=1.0,
-        epsilon_end=0.05,
-        epsilon_decay_steps=240_000,
+        epsilon_end=0.03,
+        epsilon_decay_steps=400_000,
         recent_episode_window=100,
         final_greedy_episodes=100,
         train_print_interval_episodes=20,
@@ -1809,6 +2121,14 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         fixed_train_episode_seed_base=20259323,
         use_fixed_eval_seeds=True,
         fixed_final_probe_seed_base=20261323,
+        enable_best_checkpoint_selection=True,
+        best_checkpoint_selection_start_env_steps=300_000,
+        best_checkpoint_selection_interval_env_steps=20_000,
+        best_checkpoint_validation_episodes=24,
+        best_checkpoint_topk_recheck=3,
+        best_checkpoint_recheck_episodes=50,
+        use_fixed_model_select_seeds=True,
+        fixed_model_select_seed_base=20262323,
         log_interval=500,
         log_interval_episodes=10,
         max_episode_steps=600,
@@ -1850,6 +2170,11 @@ def _smoke_test() -> None:
         min_replay_size=16,
         target_update_interval=10,
         final_greedy_episodes=1,
+        best_checkpoint_selection_start_env_steps=60,
+        best_checkpoint_selection_interval_env_steps=60,
+        best_checkpoint_validation_episodes=1,
+        best_checkpoint_topk_recheck=1,
+        best_checkpoint_recheck_episodes=1,
         log_interval=20,
         max_episode_steps=60,
     )

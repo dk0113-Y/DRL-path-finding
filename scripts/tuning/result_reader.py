@@ -142,7 +142,7 @@ def _eval_score(row: dict[str, str]) -> tuple[float, float, float, float]:
     success_score = float(success) if isinstance(success, (int, float)) else float("-inf")
     coverage_score = float(coverage) if isinstance(coverage, (int, float)) else float("-inf")
     length_score = -float(length) if isinstance(length, (int, float)) else float("-inf")
-    return (reward_score, success_score, coverage_score, length_score)
+    return (success_score, coverage_score, reward_score, length_score)
 
 
 def _select_best_eval_row(rows: list[dict[str, str]]) -> dict[str, str] | None:
@@ -184,6 +184,7 @@ def _checkpoint_summary(run_dir: Path) -> dict[str, Any]:
         "best_checkpoint_path": str(best_path) if best_path.exists() else None,
         "last_checkpoint_path": str(last_path) if last_path.exists() else None,
         "best_checkpoint_eval_metrics": None,
+        "best_checkpoint_selection_metadata": None,
         "best_checkpoint_train_config": None,
         "last_checkpoint_train_config": None,
         "checkpoint_read_error": None,
@@ -196,6 +197,7 @@ def _checkpoint_summary(run_dir: Path) -> dict[str, Any]:
             errors.append(f"best.pt: {error}")
         elif payload is not None:
             summary["best_checkpoint_eval_metrics"] = payload.get("eval_metrics")
+            summary["best_checkpoint_selection_metadata"] = payload.get("selection_metadata")
             summary["best_checkpoint_train_config"] = _extract_checkpoint_train_config(payload)
 
     if last_path.exists():
@@ -251,6 +253,8 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
     checkpoints_dir = run_dir / "checkpoints"
     final_probe_path = logs_dir / "final_probe.csv"
     eval_metrics_path = logs_dir / "eval_metrics.csv"
+    model_select_eval_path = logs_dir / "model_select_eval.csv"
+    best_recheck_eval_path = logs_dir / "best_recheck_eval.csv"
     train_steps_path = logs_dir / "train_steps.csv"
     train_episodes_path = logs_dir / "train_episodes.csv"
     best_checkpoint_path = checkpoints_dir / "best.pt"
@@ -258,19 +262,26 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
 
     final_probe_rows = _read_csv_rows(final_probe_path)
     eval_rows = _read_csv_rows(eval_metrics_path)
+    model_select_rows = _read_csv_rows(model_select_eval_path)
+    best_recheck_rows = _read_csv_rows(best_recheck_eval_path)
     train_step_rows = _read_csv_rows(train_steps_path)
     train_episode_rows = _read_csv_rows(train_episodes_path)
 
     has_valid_probe = _has_valid_final_probe(final_probe_rows)
     has_eval = bool(eval_rows)
+    has_model_select = bool(model_select_rows)
+    has_recheck = bool(best_recheck_rows)
+    has_best_checkpoint = best_checkpoint_path.exists()
     has_last_checkpoint = last_checkpoint_path.exists()
-    artifacts_complete = run_dir.exists() and has_valid_probe and has_last_checkpoint
+    artifacts_complete = run_dir.exists() and has_valid_probe and has_best_checkpoint and has_last_checkpoint
 
     missing_bits: list[str] = []
     if not run_dir.exists():
         missing_bits.append("run_dir_missing")
     if not has_valid_probe:
         missing_bits.append("final_probe_missing_or_invalid")
+    if not has_best_checkpoint:
+        missing_bits.append("best_checkpoint_missing")
     if not has_last_checkpoint:
         missing_bits.append("last_checkpoint_missing")
 
@@ -287,6 +298,10 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         "final_probe_row_count": len(final_probe_rows),
         "eval_metrics_csv": str(eval_metrics_path),
         "eval_metrics_row_count": len(eval_rows),
+        "model_select_eval_csv": str(model_select_eval_path),
+        "model_select_eval_row_count": len(model_select_rows),
+        "best_recheck_eval_csv": str(best_recheck_eval_path),
+        "best_recheck_eval_row_count": len(best_recheck_rows),
         "train_steps_csv": str(train_steps_path),
         "train_steps_row_count": len(train_step_rows),
         "train_episodes_csv": str(train_episodes_path),
@@ -294,7 +309,18 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         "best_checkpoint_exists": best_checkpoint_path.exists(),
         "last_checkpoint_exists": last_checkpoint_path.exists(),
         "periodic_eval_available": has_eval,
+        "model_select_eval_available": has_model_select,
+        "best_recheck_eval_available": has_recheck,
     }
+    best_eval_source_rows = best_recheck_rows if best_recheck_rows else (model_select_rows if model_select_rows else eval_rows)
+    final_probe_env_steps = _to_scalar(final_probe_rows[-1].get("env_steps")) if final_probe_rows else None
+    last_eval_source_rows = (
+        [
+            row for row in best_eval_source_rows
+            if _to_scalar(row.get("env_steps")) == final_probe_env_steps
+        ]
+        if final_probe_env_steps is not None else []
+    )
 
     return RunResult(
         run_dir=run_dir,
@@ -302,8 +328,8 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         status_reason=status_reason,
         return_code=return_code,
         final_probe=_extract_metrics(final_probe_rows[-1] if final_probe_rows else None, FINAL_PROBE_KEYS),
-        best_eval=_extract_metrics(_select_best_eval_row(eval_rows), EVAL_KEYS),
-        last_eval=_extract_metrics(eval_rows[-1] if eval_rows else None, EVAL_KEYS),
+        best_eval=_extract_metrics(_select_best_eval_row(best_eval_source_rows), EVAL_KEYS),
+        last_eval=_extract_metrics((last_eval_source_rows[-1] if last_eval_source_rows else (eval_rows[-1] if eval_rows else None)), EVAL_KEYS),
         train_recent=_extract_metrics(train_step_rows[-1] if train_step_rows else None, TRAIN_RECENT_KEYS),
         checkpoint=checkpoint_summary,
         file_status=file_status,

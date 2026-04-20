@@ -16,6 +16,8 @@ class CSVMetricLogger:
         self.train_episode_csv = self.log_dir / "train_episodes.csv"
         self.final_probe_csv = self.log_dir / "final_probe.csv"
         self.train_step_csv = self.log_dir / "train_steps.csv"
+        self.model_select_eval_csv = self.log_dir / "model_select_eval.csv"
+        self.best_recheck_eval_csv = self.log_dir / "best_recheck_eval.csv"
 
     @staticmethod
     def _append_row(path: Path, row: Mapping[str, object]) -> None:
@@ -34,3 +36,9 @@ class CSVMetricLogger:
 
     def log_train_step(self, row: Mapping[str, object]) -> None:
         self._append_row(self.train_step_csv, row)
+
+    def log_model_select_eval(self, row: Mapping[str, object]) -> None:
+        self._append_row(self.model_select_eval_csv, row)
+
+    def log_best_recheck_eval(self, row: Mapping[str, object]) -> None:
+        self._append_row(self.best_recheck_eval_csv, row)

@@ -9,7 +9,7 @@ python train_q_agent.py ^
   --run-name phase3_adapt_perf_priority ^
   --device cuda ^
   --budget-mode env_steps ^
-  --total-env-steps 300000 ^
+  --total-env-steps 500000 ^
   --warmup-steps 4000 ^
   --collect-steps-per-iter 16 ^
   --learner-updates-per-iter 2 ^
@@ -22,8 +22,8 @@ python train_q_agent.py ^
   --learning-rate 1e-4 ^
   --target-update-interval 1000 ^
   --epsilon-start 1.0 ^
-  --epsilon-end 0.05 ^
-  --epsilon-decay-steps 240000 ^
+  --epsilon-end 0.03 ^
+  --epsilon-decay-steps 400000 ^
   --rows 40 ^
   --cols 60 ^
   --obs-size 6 ^
@@ -60,7 +60,7 @@ python train_q_agent.py ^
   --run-name phase3_adapt_smooth_priority ^
   --device cuda ^
   --budget-mode env_steps ^
-  --total-env-steps 300000 ^
+  --total-env-steps 500000 ^
   --warmup-steps 4000 ^
   --collect-steps-per-iter 16 ^
   --learner-updates-per-iter 2 ^
@@ -73,8 +73,8 @@ python train_q_agent.py ^
   --learning-rate 1e-4 ^
   --target-update-interval 1000 ^
   --epsilon-start 1.0 ^
-  --epsilon-end 0.05 ^
-  --epsilon-decay-steps 240000 ^
+  --epsilon-end 0.03 ^
+  --epsilon-decay-steps 400000 ^
   --rows 40 ^
   --cols 60 ^
   --obs-size 6 ^

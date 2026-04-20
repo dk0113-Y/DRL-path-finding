@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline-run-dir")
     parser.add_argument("--baseline-run-prefix")
     parser.add_argument("--entry-cap", type=int, default=8)
-    parser.add_argument("--total-env-steps", type=int, default=300000)
+    parser.add_argument("--total-env-steps", type=int, default=500000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(

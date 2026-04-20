@@ -13,9 +13,9 @@ from typing import Any, Mapping
 
 from training.rewarding import STALL_DIAGNOSTIC_WINDOW
 
-SCHEMA_VERSION = "formal_train_artifacts/v3"
+SCHEMA_VERSION = "formal_train_artifacts/v4"
 DEFAULT_MAIN_BASELINE_IDENTIFIER = "4.9_30万轮基线"
-CURRENT_FORMAL_PROTOCOL_REVISION = "formal_last_checkpoint_v2_3"
+CURRENT_FORMAL_PROTOCOL_REVISION = "formal_best_checkpoint_v3"
 CURRENT_DEFAULT_FORMAL_FINAL_PROBE_EPISODES = 100
 HISTORICAL_FORMAL_FINAL_PROBE_EPISODES = 16
 
@@ -79,6 +79,14 @@ FROZEN_COMPARABILITY_FIELDS = (
     "fixed_train_episode_seed_base",
     "use_fixed_eval_seeds",
     "fixed_final_probe_seed_base",
+    "enable_best_checkpoint_selection",
+    "best_checkpoint_selection_start_env_steps",
+    "best_checkpoint_selection_interval_env_steps",
+    "best_checkpoint_validation_episodes",
+    "best_checkpoint_topk_recheck",
+    "best_checkpoint_recheck_episodes",
+    "use_fixed_model_select_seeds",
+    "fixed_model_select_seed_base",
     "replay_capacity",
     "batch_size",
     "min_replay_size",
@@ -154,6 +162,21 @@ RECENT_CORE_FIELD_MAP = {
     "success_rate": "recent_success_rate",
     "episode_length": "recent_mean_episode_length",
     "repeat_visit_ratio": "recent_mean_repeat_visit_ratio",
+}
+
+TRAIN_DYNAMICS_SLOPE_FIELDS = {
+    "reward": "recent_mean_reward",
+    "coverage": "recent_mean_coverage",
+    "success_rate": "recent_success_rate",
+    "episode_length": "recent_mean_episode_length",
+    "repeat_visit_ratio": "recent_mean_repeat_visit_ratio",
+    "accessible_block_count": "recent_accessible_block_count",
+    "total_frontier_cluster_count": "recent_total_frontier_cluster_count",
+    "stall_trigger_count": "recent_stall_trigger_count",
+    "zero_info_step_count": "recent_zero_info_step_count",
+    "turn_180_count": "recent_turn_180_count",
+    "recent_revisit_penalty_sum": "recent_recent_revisit_penalty_sum",
+    "terminal_bonus_sum": "recent_terminal_bonus_sum",
 }
 
 EVAL_CORE_FIELD_MAP = {
@@ -387,13 +410,15 @@ def _normalize_eval_like(row: Mapping[str, Any] | None, *, source_name: str) -> 
     }
 
 
-def _best_eval_score(row: Mapping[str, Any]) -> tuple[float, float]:
+def _best_eval_score(row: Mapping[str, Any]) -> tuple[float, float, float]:
     normalized = _apply_row_aliases(row)
     success = _to_scalar(normalized.get("eval_success_rate"))
     coverage = _to_scalar(normalized.get("eval_mean_coverage"))
+    reward = _to_scalar(normalized.get("eval_mean_reward"))
     success_value = float(success) if isinstance(success, (int, float)) else float("-inf")
     coverage_value = float(coverage) if isinstance(coverage, (int, float)) else float("-inf")
-    return (success_value, coverage_value)
+    reward_value = float(reward) if isinstance(reward, (int, float)) else float("-inf")
+    return (success_value, coverage_value, reward_value)
 
 
 def select_best_eval_row(eval_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -420,12 +445,13 @@ def _build_unified_metric_table(metric_blocks: Mapping[str, Mapping[str, Any]]) 
     def metric_table(metric_names: Mapping[str, str], getter) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for metric_name, direction in metric_names.items():
+            values = {
+                source_name: getter(block, metric_name)
+                for source_name, block in metric_blocks.items()
+            }
             payload[metric_name] = {
                 "direction": direction,
-                "recent_train": getter(metric_blocks["recent_train"], metric_name),
-                "final_probe": getter(metric_blocks["final_probe"], metric_name),
-                "last_eval": getter(metric_blocks["last_eval"], metric_name),
-                "best_eval": getter(metric_blocks["best_eval"], metric_name),
+                **values,
             }
         return payload
 
@@ -437,12 +463,13 @@ def _build_unified_metric_table(metric_blocks: Mapping[str, Mapping[str, Any]]) 
 
     semantic_payload = {}
     for metric_name in sorted(semantic_keys):
+        values = {
+            source_name: _to_scalar(block.get("semantic_monitoring", {}).get(metric_name))
+            for source_name, block in metric_blocks.items()
+        }
         semantic_payload[metric_name] = {
             "direction": "context_dependent_monitoring",
-            "recent_train": _to_scalar(metric_blocks["recent_train"].get("semantic_monitoring", {}).get(metric_name)),
-            "final_probe": _to_scalar(metric_blocks["final_probe"].get("semantic_monitoring", {}).get(metric_name)),
-            "last_eval": _to_scalar(metric_blocks["last_eval"].get("semantic_monitoring", {}).get(metric_name)),
-            "best_eval": _to_scalar(metric_blocks["best_eval"].get("semantic_monitoring", {}).get(metric_name)),
+            **values,
         }
 
     return {
@@ -493,6 +520,63 @@ def _late_stage_variance(rows: list[dict[str, Any]], metric_key: str) -> float |
     if len(values) == 1:
         return 0.0
     return float(statistics.pvariance(values))
+
+
+def _env_step_range(rows: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    values = [
+        float(value)
+        for row in rows
+        for value in [_to_scalar(_apply_row_aliases(row).get("env_steps"))]
+        if isinstance(value, (int, float))
+    ]
+    if not values:
+        return None, None
+    return min(values), max(values)
+
+
+def _rows_between_env_steps(rows: list[dict[str, Any]], start: float, end: float) -> list[dict[str, Any]]:
+    selected = []
+    for row in rows:
+        env_steps = _to_scalar(_apply_row_aliases(row).get("env_steps"))
+        if isinstance(env_steps, (int, float)) and float(start) <= float(env_steps) <= float(end):
+            selected.append(row)
+    return selected
+
+
+def _train_dynamics_phase_windows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    if not rows:
+        return {"full": [], "early": [], "mid": [], "late": [], "last_window": []}
+    start, end = _env_step_range(rows)
+    if start is None or end is None or end <= start:
+        return {"full": rows, "early": rows, "mid": [], "late": [], "last_window": _late_stage_window(rows)}
+    width = float(end) - float(start)
+    early_end = float(start) + width / 3.0
+    mid_end = float(start) + (2.0 * width / 3.0)
+    last_window_start = max(float(start), float(end) - max(50_000.0, width * 0.20))
+    return {
+        "full": rows,
+        "early": _rows_between_env_steps(rows, float(start), early_end),
+        "mid": _rows_between_env_steps(rows, early_end, mid_end),
+        "late": _rows_between_env_steps(rows, mid_end, float(end)),
+        "last_window": _rows_between_env_steps(rows, last_window_start, float(end)),
+    }
+
+
+def _build_train_slope_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    windows = _train_dynamics_phase_windows(rows)
+    payload: dict[str, Any] = {}
+    for window_name, window_rows in windows.items():
+        start, end = _env_step_range(window_rows)
+        payload[window_name] = {
+            "row_count": len(window_rows),
+            "start_env_steps": start,
+            "end_env_steps": end,
+            "slope_per_1000_env_steps": {
+                metric_name: _linear_slope_per_1k_env_steps(window_rows, field_name)
+                for metric_name, field_name in TRAIN_DYNAMICS_SLOPE_FIELDS.items()
+            },
+        }
+    return payload
 
 
 def _threshold_reach_steps(
@@ -586,6 +670,32 @@ def _build_train_final_consistency_summary(
     }
 
 
+def _build_eval_gap_summary(
+    best_eval: Mapping[str, Any],
+    last_eval: Mapping[str, Any],
+) -> dict[str, Any]:
+    best_metrics = best_eval.get("metrics", {}) if isinstance(best_eval, Mapping) else {}
+    last_metrics = last_eval.get("metrics", {}) if isinstance(last_eval, Mapping) else {}
+    details: dict[str, Any] = {}
+    for metric_name in TRAIN_FINAL_CONSISTENCY_DIRECTIONS:
+        best_value = _to_scalar(best_metrics.get(metric_name))
+        last_value = _to_scalar(last_metrics.get(metric_name))
+        details[metric_name] = {
+            "best": best_value,
+            "last": last_value,
+            "best_minus_last": (
+                float(best_value) - float(last_value)
+                if isinstance(best_value, (int, float)) and isinstance(last_value, (int, float))
+                else None
+            ),
+        }
+    return {
+        "role": "diagnostic_training_endpoint_drift_only",
+        "direction_note": "Positive best_minus_last is better for reward/coverage/success; negative is better for episode_length/repeat_visit_ratio.",
+        "details": details,
+    }
+
+
 def _build_training_dynamics_summary(
     *,
     train_step_rows: list[dict[str, Any]],
@@ -594,6 +704,7 @@ def _build_training_dynamics_summary(
 ) -> dict[str, Any]:
     late_stage_rows = _late_stage_window(train_step_rows)
     consistency_summary = _build_train_final_consistency_summary(recent_train, final_probe)
+    phase_slope_summary = _build_train_slope_summary(train_step_rows)
     return {
         "final_window_stats": {
             "recent_mean_reward": _metric_from_block(recent_train, "reward"),
@@ -630,6 +741,7 @@ def _build_training_dynamics_summary(
             "late_stage_variance_repeat_visit_ratio": _late_stage_variance(late_stage_rows, "recent_mean_repeat_visit_ratio"),
         },
         "train_final_consistency": consistency_summary,
+        "phase_slope_summary": phase_slope_summary,
         "late_stage_window": {
             "definition": "last_25_percent_of_train_step_logging_rows_min_4_rows",
             "row_count": len(late_stage_rows),
@@ -639,9 +751,10 @@ def _build_training_dynamics_summary(
         },
         "definitions": {
             "growth_rate_unit": "least_squares_slope_per_1000_env_steps_over_late_stage_window",
+            "phase_slope_summary_unit": "least_squares_slope_per_1000_env_steps; includes full/early/mid/late/last_window for future training-first comparisons",
             "reward_threshold_note": "threshold_reach_steps_reward_custom is intentionally left null in v2 because a stable formal reward threshold has not been fixed.",
             "late_stage_variance_window": "last_25_percent_of_train_step_logging_rows_min_4_rows",
-            "formal_acceptance_note": "training_dynamics_summary is ranking and diagnostic context only; formal acceptance still uses final_probe of the last checkpoint.",
+            "formal_acceptance_note": "future comparisons should prioritize training dynamics first; final formal acceptance still comes from best.pt held-out final test.",
         },
         "notes": consistency_summary.get("notes", []),
     }
@@ -672,6 +785,8 @@ def build_observed_run_contract(
         "final_train_episode_idx": final_train_episode_idx,
         "train_episodes_header": _read_csv_header(logs_dir / "train_episodes.csv"),
         "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
+        "model_select_eval_header": _read_csv_header(logs_dir / "model_select_eval.csv"),
+        "best_recheck_eval_header": _read_csv_header(logs_dir / "best_recheck_eval.csv"),
         "final_probe_header": _read_csv_header(logs_dir / "final_probe.csv"),
     }
 
@@ -683,13 +798,39 @@ def build_metric_snapshot(
     final_probe_row: Mapping[str, Any] | None,
     last_checkpoint_env_steps: int | None,
     last_checkpoint_train_episode_idx: int | None,
+    best_checkpoint_env_steps: int | None,
+    best_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
     source_of_truth_repo: str,
     last_eval_row: Mapping[str, Any] | None = None,
     best_eval_row: Mapping[str, Any] | None = None,
+    model_select_rows: list[Mapping[str, Any]] | None = None,
+    best_recheck_rows: list[Mapping[str, Any]] | None = None,
+    best_checkpoint_selection_row: Mapping[str, Any] | None = None,
+    last_checkpoint_diagnostic_row: Mapping[str, Any] | None = None,
     insufficient_evidence_flags: list[str] | None = None,
 ) -> dict[str, Any]:
     logs_dir = run_dir / "logs"
+    model_select_csv_rows = _read_csv_rows(logs_dir / "model_select_eval.csv")
+    best_recheck_csv_rows = _read_csv_rows(logs_dir / "best_recheck_eval.csv")
+    model_select_rows = list(model_select_rows or model_select_csv_rows)
+    best_recheck_rows = list(best_recheck_rows or best_recheck_csv_rows)
+    if best_checkpoint_selection_row is None and best_recheck_rows:
+        best_checkpoint_selection_row = select_best_eval_row([dict(row) for row in best_recheck_rows])
+    if best_checkpoint_selection_row is None and model_select_rows:
+        best_checkpoint_selection_row = select_best_eval_row([dict(row) for row in model_select_rows])
+    if last_checkpoint_diagnostic_row is None:
+        last_candidates = [
+            row for row in best_recheck_rows
+            if _to_scalar(_apply_row_aliases(row).get("env_steps")) == last_checkpoint_env_steps
+        ]
+        if not last_candidates:
+            last_candidates = [
+                row for row in model_select_rows
+                if _to_scalar(_apply_row_aliases(row).get("env_steps")) == last_checkpoint_env_steps
+            ]
+        last_checkpoint_diagnostic_row = last_candidates[-1] if last_candidates else None
+
     eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
     if last_eval_row is None and eval_rows:
         last_eval_row = eval_rows[-1]
@@ -698,10 +839,22 @@ def build_metric_snapshot(
 
     recent_train = _normalize_recent_train(recent_train_row)
     final_probe = _normalize_eval_like(final_probe_row, source_name="logs/final_probe.csv")
-    last_eval = _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv") if last_eval_row else {}
-    best_eval = _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval") if best_eval_row else {}
+    model_select_best = (
+        _normalize_eval_like(select_best_eval_row([dict(row) for row in model_select_rows]), source_name="logs/model_select_eval.csv::best")
+        if model_select_rows else {}
+    )
+    best_recheck_best = (
+        _normalize_eval_like(best_checkpoint_selection_row, source_name="logs/best_recheck_eval.csv::selected_best")
+        if best_checkpoint_selection_row else {}
+    )
+    diagnostic_last_checkpoint = (
+        _normalize_eval_like(last_checkpoint_diagnostic_row, source_name="logs/model_select_or_recheck.csv::last_checkpoint")
+        if last_checkpoint_diagnostic_row else {}
+    )
+    legacy_last_eval = _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv") if last_eval_row else {}
+    legacy_best_eval = _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval") if best_eval_row else {}
     best_checkpoint_exists = (run_dir / "checkpoints" / "best.pt").exists()
-    legacy_context_available = bool(eval_rows) or bool(last_eval) or bool(best_eval) or best_checkpoint_exists
+    legacy_context_available = bool(eval_rows) or bool(legacy_last_eval) or bool(legacy_best_eval)
     train_step_rows = _read_csv_rows(logs_dir / "train_steps.csv")
     training_dynamics_summary = _build_training_dynamics_summary(
         train_step_rows=train_step_rows,
@@ -713,30 +866,62 @@ def build_metric_snapshot(
     metric_blocks = {
         "recent_train": recent_train,
         "final_probe": final_probe,
-        "last_eval": last_eval,
-        "best_eval": best_eval,
+        "model_select_best": model_select_best,
+        "best_recheck_best": best_recheck_best,
+        "diagnostic_last_checkpoint": diagnostic_last_checkpoint,
     }
 
     payload = {
         "schema_version": SCHEMA_VERSION,
         "artifact_type": "metric_snapshot",
         "experiment_mode": "formal_train",
+        "formal_protocol_revision": CURRENT_FORMAL_PROTOCOL_REVISION,
         "source_of_truth_repo": source_of_truth_repo,
         "run_dir": str(run_dir.resolve()),
         "generated_at": _now_iso(),
         "recent_train": recent_train,
+        "checkpoint_validation_summary": {
+            "artifact_source": "logs/model_select_eval.csv",
+            "row_count": len(model_select_rows),
+            "selection_rule": "success_rate_then_coverage_then_reward",
+            "seed_base": _to_scalar((model_select_rows[0] if model_select_rows else {}).get("seed_base")),
+            "episodes_per_eval": _to_scalar((model_select_rows[0] if model_select_rows else {}).get("eval_episodes")),
+            "best_periodic_validation": model_select_best,
+        },
+        "best_checkpoint_selection_summary": {
+            "artifact_source": "logs/best_recheck_eval.csv",
+            "row_count": len(best_recheck_rows),
+            "selection_rule": "success_rate_then_coverage_then_reward",
+            "seed_base": _to_scalar((best_recheck_rows[0] if best_recheck_rows else {}).get("seed_base")),
+            "episodes_per_recheck": _to_scalar((best_recheck_rows[0] if best_recheck_rows else {}).get("eval_episodes")),
+            "selected_best": best_recheck_best,
+            "best_checkpoint_env_steps": best_checkpoint_env_steps,
+            "best_checkpoint_train_episode_idx": best_checkpoint_train_episode_idx,
+            "best_checkpoint_path": "checkpoints/best.pt",
+        },
         "final_probe": final_probe,
+        "diagnostic_last_checkpoint_summary": {
+            "role": "diagnostic_only_training_endpoint",
+            "checkpoint_path": "checkpoints/last.pt",
+            "env_steps": last_checkpoint_env_steps,
+            "train_episode_idx": last_checkpoint_train_episode_idx,
+            "evaluation_reuse_rule": "reuse_500k_checkpoint_validation_or_topk_recheck_when_available; no separate last.pt final test",
+            "diagnostic_eval": diagnostic_last_checkpoint,
+        },
+        "best_vs_last_gap_summary": _build_eval_gap_summary(best_recheck_best, diagnostic_last_checkpoint),
         "training_dynamics_summary": training_dynamics_summary,
         "train_final_consistency_summary": consistency_summary,
         "recent_train_support_summary": consistency_summary,
         "last_checkpoint_env_steps": last_checkpoint_env_steps,
         "last_checkpoint_train_episode_idx": last_checkpoint_train_episode_idx,
+        "best_checkpoint_env_steps": best_checkpoint_env_steps,
+        "best_checkpoint_train_episode_idx": best_checkpoint_train_episode_idx,
         "final_probe_source": final_probe_source,
         "formal_final_object": {
-            "checkpoint_path": "checkpoints/last.pt",
+            "checkpoint_path": "checkpoints/best.pt",
             "network_source": final_probe_source,
-            "env_steps": last_checkpoint_env_steps,
-            "train_episode_idx": last_checkpoint_train_episode_idx,
+            "env_steps": best_checkpoint_env_steps,
+            "train_episode_idx": best_checkpoint_train_episode_idx,
             "evaluation_artifact": "logs/final_probe.csv",
             "role": "formal_acceptance_object",
         },
@@ -749,6 +934,7 @@ def build_metric_snapshot(
                 "repeat_visit_ratio",
             ],
             "training_dynamics_quality": [
+                "phase_slope_summary",
                 "recent_mean_reward",
                 "recent_mean_coverage",
                 "recent_success_rate",
@@ -766,13 +952,13 @@ def build_metric_snapshot(
     if legacy_context_available:
         payload["legacy_diagnostic_context"] = {
             "periodic_eval_available": bool(eval_rows),
-            "best_checkpoint_exists": best_checkpoint_exists,
+            "legacy_best_checkpoint_exists": best_checkpoint_exists,
             "role": "legacy_diagnostic_only",
         }
-        if last_eval:
-            payload["last_eval"] = last_eval
-        if best_eval:
-            payload["best_eval"] = best_eval
+        if legacy_last_eval:
+            payload["legacy_last_eval"] = legacy_last_eval
+        if legacy_best_eval:
+            payload["legacy_best_eval"] = legacy_best_eval
     return payload
 
 
@@ -837,11 +1023,15 @@ def build_benchmark_summary(
     total_runtime_sec: float | None,
     total_runtime_hms: str | None,
     total_train_episodes_completed: int | None,
+    source_of_truth_repo: str,
+    best_checkpoint_env_steps: int | None = None,
+    last_checkpoint_env_steps: int | None = None,
+    model_selection_eval_count: int | None = None,
+    recheck_eval_count: int | None = None,
     collector: Any | None = None,
     learner: Any | None = None,
     replay: Any | None = None,
     state_adapter: Any | None = None,
-    source_of_truth_repo: str,
     insufficient_evidence_flags: list[str] | None = None,
 ) -> dict[str, Any]:
     config_dict = _serialize_config(cfg) or {}
@@ -873,9 +1063,13 @@ def build_benchmark_summary(
         "timing_switches": timing_flags,
         "timing_summary": timing_summary,
         "budget_mode": config_dict.get("budget_mode"),
-        "diagnostic_env_steps_to_best": None,
+        "best_checkpoint_env_steps": best_checkpoint_env_steps,
+        "last_checkpoint_env_steps": last_checkpoint_env_steps,
+        "model_selection_eval_count": model_selection_eval_count,
+        "recheck_eval_count": recheck_eval_count,
+        "diagnostic_env_steps_to_best": best_checkpoint_env_steps,
         "diagnostic_train_episodes_to_best": None,
-        "env_steps_to_best": None,
+        "env_steps_to_best": best_checkpoint_env_steps,
         "train_episodes_to_best": None,
         "total_train_episodes_completed": total_train_episodes_completed,
         "insufficient_evidence_flags": sorted(set(flags)),
@@ -950,27 +1144,54 @@ def build_config_snapshot(
         "evaluation_contract": {
             "protocol_revision": CURRENT_FORMAL_PROTOCOL_REVISION,
             "formal_final_object": {
-                "checkpoint_path": "checkpoints/last.pt",
-                "acceptance_target": "final_probe_of_last_checkpoint_or_online_last",
+                "checkpoint_path": "checkpoints/best.pt",
+                "acceptance_target": "held_out_final_probe_of_validation_selected_best_checkpoint",
                 "role": "formal_acceptance_object",
             },
+            "training_first_ranking_context": {
+                "role": "first_class_ranking_and_diagnostic_evidence",
+                "note": "future comparisons should inspect train dynamics, phase slopes, checkpoint validation, and best-vs-last drift before final-test interpretation",
+            },
+            "model_selection_rule": {
+                "checkpoint_path": "checkpoints/best.pt",
+                "candidate_eval_csv": "logs/model_select_eval.csv",
+                "topk_recheck_csv": "logs/best_recheck_eval.csv",
+                "selection_start_env_steps": config_dict.get("best_checkpoint_selection_start_env_steps"),
+                "selection_interval_env_steps": config_dict.get("best_checkpoint_selection_interval_env_steps"),
+                "validation_episodes": config_dict.get("best_checkpoint_validation_episodes"),
+                "topk_recheck": config_dict.get("best_checkpoint_topk_recheck"),
+                "recheck_episodes": config_dict.get("best_checkpoint_recheck_episodes"),
+                "ranking_order": ["success_rate", "coverage", "reward"],
+                "seed_toggle_field": "use_fixed_model_select_seeds",
+                "seed_base_field": "fixed_model_select_seed_base",
+                "seed_base": config_dict.get("fixed_model_select_seed_base"),
+                "seed_set_role": "checkpoint_validation_only",
+            },
             "final_probe_rule": {
-                "source": "last_checkpoint_if_available_else_online_last",
+                "source": "best_checkpoint_only",
                 "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_final_probe_toggle_else_runtime_seed_stream",
                 "seed_toggle_field": "use_fixed_eval_seeds",
-                "seed_toggle_note": "legacy field name retained; it now controls final_probe held-out seeding only",
+                "seed_toggle_note": "legacy field name retained; it controls final held-out test seeds only and must not be reused for model selection",
+                "seed_base_field": "fixed_final_probe_seed_base",
+                "seed_base": config_dict.get("fixed_final_probe_seed_base"),
+                "seed_set_role": "final_formal_test_only",
                 "run_final_greedy_episodes": config_dict.get("final_greedy_episodes"),
                 "current_default_formal_final_probe_episodes": CURRENT_DEFAULT_FORMAL_FINAL_PROBE_EPISODES,
                 "historical_formal_final_probe_episodes": HISTORICAL_FORMAL_FINAL_PROBE_EPISODES,
                 "strict_comparability_field": "final_greedy_episodes",
                 "protocol_upgrade_note": (
-                    "Historical formal lanes used a 16-episode final_probe. "
-                    "The current default formal lane uses a 100-episode final_probe. "
-                    "Because final_greedy_episodes is frozen in comparability and the protocol revision changed, "
-                    "old 16-episode results remain historical evidence and must not be mixed as the same strict "
-                    "comparable lane with new 100-episode results."
+                    "This protocol selects best.pt with a dedicated model-selection seed set, then runs the "
+                    "100-episode held-out final_probe only on best.pt with a separate final-test seed set. "
+                    "Historical last-checkpoint lanes remain historical evidence and must not be mixed into this "
+                    "strict comparable lane."
                 ),
                 "csv_file": "logs/final_probe.csv",
+            },
+            "diagnostic_last_checkpoint": {
+                "checkpoint_path": "checkpoints/last.pt",
+                "role": "diagnostic_only_training_endpoint",
+                "evaluation_reuse_rule": "reuse the 500k checkpoint validation or top-k recheck result when present; do not run a separate final test for last.pt",
+                "gap_summary_role": "last-vs-best drift diagnostics only",
             },
             "reward_semantics": {
                 "info_norm_rule": {
@@ -1004,13 +1225,10 @@ def build_config_snapshot(
                 },
                 "zero_info_step_count_role": "raw diagnostic event count; not a reward term",
             },
-            "recent_train_role": "training_screening_and_ranking_support_only",
+            "recent_train_role": "training_first_ranking_context",
             "automatic_tuning_ranking_basis": {
-                "final_network_outcome": {
-                    "primary": ["success_rate", "coverage", "reward"],
-                    "secondary": ["episode_length", "repeat_visit_ratio"],
-                },
                 "training_dynamics_quality": [
+                    "phase_slope_summary",
                     "recent_mean_reward",
                     "recent_mean_coverage",
                     "recent_success_rate",
@@ -1019,20 +1237,17 @@ def build_config_snapshot(
                     "growth_rate",
                     "threshold_reach_steps",
                     "late_stage_variance",
-                    "train_final_consistency",
+                    "best_vs_last_gap_summary",
                 ],
+                "final_best_checkpoint_outcome": {
+                    "primary": ["success_rate", "coverage", "reward"],
+                    "secondary": ["episode_length", "repeat_visit_ratio"],
+                },
             },
-            "legacy_diagnostic_artifacts": {
-                "periodic_eval": {
-                    "role": "legacy_diagnostic_only",
-                    "csv_file": "logs/eval_metrics.csv",
-                    "included_in_new_main_flow": False,
-                },
-                "best_checkpoint": {
-                    "role": "legacy_diagnostic_only",
-                    "checkpoint_path": "checkpoints/best.pt",
-                    "included_in_new_main_flow": False,
-                },
+            "structured_artifacts": {
+                "model_select_eval": "logs/model_select_eval.csv",
+                "best_recheck_eval": "logs/best_recheck_eval.csv",
+                "final_probe_best": "logs/final_probe.csv",
             },
         },
         "insufficient_evidence_flags": sorted(set(flags)),
@@ -1076,6 +1291,19 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
             for path in sorted(trajectories_dir.rglob("*"))
             if path.is_file()
         )
+    model_select_checkpoint_records = []
+    model_select_dir = run_dir / "checkpoints" / "model_select"
+    if model_select_dir.exists():
+        model_select_checkpoint_records.extend(
+            {
+                "path": path.relative_to(run_dir).as_posix(),
+                "exists": True,
+                "required": False,
+                "category": "model_selection_candidate_checkpoint",
+            }
+            for path in sorted(model_select_dir.glob("*.pt"))
+            if path.is_file()
+        )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1086,12 +1314,15 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
         "csv": [
             _artifact_record(run_dir, "logs/train_steps.csv", required=True, category="csv"),
             _artifact_record(run_dir, "logs/train_episodes.csv", required=True, category="csv"),
+            _artifact_record(run_dir, "logs/model_select_eval.csv", required=True, category="model_selection_csv"),
+            _artifact_record(run_dir, "logs/best_recheck_eval.csv", required=True, category="model_selection_csv"),
             _artifact_record(run_dir, "logs/final_probe.csv", required=True, category="csv"),
             _artifact_record(run_dir, "logs/eval_metrics.csv", required=False, category="legacy_diagnostic_csv"),
         ],
         "checkpoints": [
-            _artifact_record(run_dir, "checkpoints/last.pt", required=True, category="checkpoint"),
-            _artifact_record(run_dir, "checkpoints/best.pt", required=False, category="legacy_diagnostic_checkpoint"),
+            _artifact_record(run_dir, "checkpoints/best.pt", required=True, category="formal_primary_checkpoint"),
+            _artifact_record(run_dir, "checkpoints/last.pt", required=True, category="diagnostic_endpoint_checkpoint"),
+            *model_select_checkpoint_records,
         ],
         "structured_summaries": [
             _artifact_record(run_dir, "logs/metric_snapshot.json", required=True, category="structured_summary"),
@@ -1117,6 +1348,8 @@ def build_training_summary_text(
     final_probe = metric_snapshot.get("final_probe", {})
     training_dynamics_summary = metric_snapshot.get("training_dynamics_summary", {})
     consistency_summary = metric_snapshot.get("train_final_consistency_summary", {})
+    best_selection = metric_snapshot.get("best_checkpoint_selection_summary", {})
+    last_diag = metric_snapshot.get("diagnostic_last_checkpoint_summary", {})
 
     def line_for(block: Mapping[str, Any], label: str) -> str:
         metrics = block.get("metrics", {})
@@ -1138,12 +1371,15 @@ def build_training_summary_text(
         f"total_runtime_hms: {benchmark_summary.get('total_runtime_hms')}",
         f"total_train_episodes_completed: {benchmark_summary.get('total_train_episodes_completed')}",
         line_for(recent_train, "recent_train"),
-        line_for(final_probe, "final_probe"),
+        line_for(final_probe, "final_probe_best"),
         f"train_final_consistency_verdict: {consistency_summary.get('verdict')}",
         f"training_dynamics_final_window: {training_dynamics_summary.get('final_window_stats')}",
         f"training_dynamics_growth_rates: {training_dynamics_summary.get('growth_rates')}",
+        f"best_checkpoint_env_steps: {metric_snapshot.get('best_checkpoint_env_steps')}",
+        f"best_checkpoint_selection_summary: {best_selection}",
         f"last_checkpoint_env_steps: {metric_snapshot.get('last_checkpoint_env_steps')}",
         f"last_checkpoint_train_episode_idx: {metric_snapshot.get('last_checkpoint_train_episode_idx')}",
+        f"diagnostic_last_checkpoint_summary: {last_diag}",
         f"final_probe_source: {metric_snapshot.get('final_probe_source')}",
     ]
     return "\n".join(lines) + "\n"
@@ -1159,6 +1395,8 @@ def write_formal_run_artifacts(
     last_checkpoint_env_steps: int | None,
     last_checkpoint_train_episode_idx: int | None,
     final_probe_source: str,
+    best_checkpoint_env_steps: int | None = None,
+    best_checkpoint_train_episode_idx: int | None = None,
     total_runtime_sec: float | None = None,
     total_runtime_hms: str | None = None,
     collector: Any | None = None,
@@ -1169,6 +1407,10 @@ def write_formal_run_artifacts(
     extra_insufficient_evidence_flags: list[str] | None = None,
     last_eval_row: Mapping[str, Any] | None = None,
     best_eval_row: Mapping[str, Any] | None = None,
+    model_select_rows: list[Mapping[str, Any]] | None = None,
+    best_recheck_rows: list[Mapping[str, Any]] | None = None,
+    best_checkpoint_selection_row: Mapping[str, Any] | None = None,
+    last_checkpoint_diagnostic_row: Mapping[str, Any] | None = None,
 ) -> dict[str, Path]:
     run_dir = run_dir.resolve()
     source_repo = source_of_truth_repo or str(run_dir.parents[1])
@@ -1180,10 +1422,16 @@ def write_formal_run_artifacts(
         final_probe_row=final_probe_row,
         last_checkpoint_env_steps=last_checkpoint_env_steps,
         last_checkpoint_train_episode_idx=last_checkpoint_train_episode_idx,
+        best_checkpoint_env_steps=best_checkpoint_env_steps,
+        best_checkpoint_train_episode_idx=best_checkpoint_train_episode_idx,
         final_probe_source=final_probe_source,
         source_of_truth_repo=source_repo,
         last_eval_row=last_eval_row,
         best_eval_row=best_eval_row,
+        model_select_rows=model_select_rows,
+        best_recheck_rows=best_recheck_rows,
+        best_checkpoint_selection_row=best_checkpoint_selection_row,
+        last_checkpoint_diagnostic_row=last_checkpoint_diagnostic_row,
         insufficient_evidence_flags=flags,
     )
     benchmark_summary = build_benchmark_summary(
@@ -1193,6 +1441,10 @@ def write_formal_run_artifacts(
         total_runtime_sec=total_runtime_sec,
         total_runtime_hms=total_runtime_hms,
         total_train_episodes_completed=_to_scalar((recent_train_row or {}).get("completed_train_episodes")),
+        best_checkpoint_env_steps=best_checkpoint_env_steps,
+        last_checkpoint_env_steps=last_checkpoint_env_steps,
+        model_selection_eval_count=len(model_select_rows or []),
+        recheck_eval_count=len(best_recheck_rows or []),
         collector=collector,
         learner=learner,
         replay=replay,
@@ -1257,13 +1509,19 @@ def build_run_record_from_artifacts(run_dir: Path) -> dict[str, Any] | None:
     train_steps_rows = _read_csv_rows(logs_dir / "train_steps.csv")
     final_probe_rows = _read_csv_rows(logs_dir / "final_probe.csv")
     eval_rows = _read_csv_rows(logs_dir / "eval_metrics.csv")
+    model_select_rows = _read_csv_rows(logs_dir / "model_select_eval.csv")
+    best_recheck_rows = _read_csv_rows(logs_dir / "best_recheck_eval.csv")
     if not train_steps_rows or not final_probe_rows:
         return None
 
     recent_train_row = train_steps_rows[-1]
     final_probe_row = final_probe_rows[-1]
     last_eval_row = eval_rows[-1] if eval_rows else None
-    best_eval_row = select_best_eval_row(eval_rows) if eval_rows else None
+    best_eval_row = select_best_eval_row(best_recheck_rows) if best_recheck_rows else (
+        select_best_eval_row(model_select_rows) if model_select_rows else (
+            select_best_eval_row(eval_rows) if eval_rows else None
+        )
+    )
     checkpoint_dir = run_dir / "checkpoints"
 
     insufficient_flags: list[str] = []
@@ -1293,7 +1551,9 @@ def build_run_record_from_artifacts(run_dir: Path) -> dict[str, Any] | None:
         "recent_train": _normalize_recent_train(recent_train_row),
         "final_probe": _normalize_eval_like(final_probe_row, source_name="logs/final_probe.csv"),
         "last_eval": _normalize_eval_like(last_eval_row, source_name="logs/eval_metrics.csv") if last_eval_row else {},
-        "best_eval": _normalize_eval_like(best_eval_row, source_name="logs/eval_metrics.csv::best_eval") if best_eval_row else {},
+        "best_eval": _normalize_eval_like(best_eval_row, source_name="logs/best_recheck_or_model_select.csv::best_eval") if best_eval_row else {},
+        "model_select_eval_count": len(model_select_rows),
+        "best_recheck_eval_count": len(best_recheck_rows),
         "best_checkpoint_exists": (checkpoint_dir / "best.pt").exists(),
         "last_checkpoint_exists": (checkpoint_dir / "last.pt").exists(),
         "plots_present": (run_dir / "plots").exists(),
@@ -1412,7 +1672,7 @@ def build_historical_baseline_summary(
     notes = [
         "Historical runs before formal snapshots may lack config_snapshot.json and benchmark_summary.json.",
         "Bootstrap grouping falls back to final env_steps plus train/final CSV header signatures when exact comparability metadata is unavailable.",
-        "Current formal_train accepts only the last checkpoint via held-out final_probe; periodic eval and best checkpoints are legacy diagnostics only.",
+        "Current formal_train selects checkpoints with a dedicated model-selection seed set, promotes best.pt, and runs held-out final_probe only on best.pt.",
         (
             "Historical formal lanes used a 16-episode final_probe; current default formal lanes use a "
             "100-episode final_probe and enter a separate strict comparability protocol lane."

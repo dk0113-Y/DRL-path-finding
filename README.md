@@ -1,6 +1,6 @@
 # DRL-path-finding
 
-这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前主线已经收口到“共享语义双状态架构”：从随机地图生成、局部观测、累计 belief map、共享环境语义解析，到 DDQN 训练、last checkpoint final_probe、formal artifact 写出与可选离线绘图，形成了一整套正式训练闭环。
+这是一个基于 PyTorch 的栅格地图自主探索强化学习工程。项目当前主线已经收口到“共享语义双状态架构”：从随机地图生成、局部观测、累计 belief map、共享环境语义解析，到 DDQN 训练、checkpoint validation、best-checkpoint final_probe、formal artifact 写出与可选离线绘图，形成了一整套正式训练闭环。
 
 ## 当前主要功能
 
@@ -14,8 +14,8 @@
   - value 分支读取 block-tree 结构化状态；
   - 再由语义分离的 dueling head 输出 Q 值。
 - 使用 Double DQN + n-step transition 的方式训练。
-- 训练过程中默认记录 train / final_probe CSV 日志，并保存 formal `last.pt`。
-- 正式训练 run 结束后会对 `last.pt`（若可用）或 online last network 执行 held-out `final_probe`，并写出结构化 formal artifact，供 exchange/control-plane 直接消费。
+- 训练过程中默认记录 train / model-selection / recheck / final_probe CSV 日志，并保存 formal `best.pt` 与 diagnostic `last.pt`。
+- 正式训练 run 使用专用 model-selection seed set 周期性评估候选 checkpoint，top-k recheck 后选择 `best.pt`，再只对 `best.pt` 执行 held-out `final_probe`，并写出结构化 formal artifact，供 exchange/control-plane 直接消费。
 - 训练结束后的离线绘图、轨迹图导出、额外可视化产物属于可选开关，当前默认关闭以降低 wall-clock 开销。
 
 ## 当前主线说明
@@ -32,7 +32,7 @@
 ## 代码结构
 
 - `train_q_agent.py`
-  - 主训练入口，负责参数配置、系统组装、训练循环、formal last checkpoint、final_probe 与可选绘图。
+  - 主训练入口，负责参数配置、系统组装、训练循环、checkpoint validation、best.pt 选择、best-only final_probe 与可选绘图。
 - `agents/`
   - Q 网络与状态适配逻辑。
 - `encoders/`
@@ -53,9 +53,10 @@
 5. `StateTensorAdapter` 将 advantage canvas 和 value block-tree 转成网络输入张量。
 6. `TransitionCollector` 用 epsilon-greedy 与环境交互，并写入 replay buffer。
 7. `DDQNLearner` 从 replay 中采样，执行 Double DQN 更新。
-8. 训练结束后保存 formal `checkpoints/last.pt`。
-9. `GreedyEvaluator` 对 `last.pt`（若可用）或 online last network 执行 held-out `final_probe`。
-10. `CSVMetricLogger` 与 `training.formal_artifacts` 写出 CSV、formal structured JSON 和可选绘图。
+8. 从默认 300k env steps 开始，每 20k steps 对当前 online net 做 checkpoint validation，并保存候选 checkpoint。
+9. 训练结束后保存 diagnostic `checkpoints/last.pt`，对 validation top-k 候选做 recheck，并将最终胜出者保存为 formal `checkpoints/best.pt`。
+10. `GreedyEvaluator` 只对 `best.pt` 执行独立 held-out `final_probe`；`last.pt` 仅作为训练终点诊断对象。
+11. `CSVMetricLogger` 与 `training.formal_artifacts` 写出 CSV、formal structured JSON 和可选绘图。
 
 ## 运行方式
 
@@ -73,6 +74,10 @@ python .\train_q_agent.py --device cuda
 - `enable_channels_last = False`
 - `enable_tf32 = True`
 - `enable_cudnn_benchmark = True`
+- `total_env_steps = 500000`
+- `epsilon_decay_steps = 400000`
+- `epsilon_end = 0.03`
+- `enable_best_checkpoint_selection = True`
 - `final_greedy_episodes = 100`
 
 快速 smoke 测试：
@@ -99,12 +104,18 @@ python .\train_q_agent.py --device cuda --profile --total-env-steps 24000 --warm
 
 ## Formal protocol / final_probe
 
-当前 formal protocol revision 为 `formal_last_checkpoint_v2_3`。
+当前 formal protocol revision 为 `formal_best_checkpoint_v3`。
 
-- 当前默认 formal lane 的 held-out `final_probe` 为 `final_greedy_episodes=100`。
-- 不显式传入 `--final-greedy-episodes` 时，主训练脚本和 VSCode 默认正式训练 preset 都使用 100 episodes。
-- 历史 `formal_last_checkpoint_v2_2` lane 使用过 16-episode final_probe；这些结果保留为历史 evidence。
-- `final_greedy_episodes` 是 frozen comparability field，新旧 episode 数和协议 revision 会自然进入不同 strict comparability lane，不能简单混写为同一正式可比组。
+- 当前默认正式训练预算为 `total_env_steps=500000`。
+- 训练 epsilon 调度为 `epsilon_start=1.0`，`epsilon_decay_steps=400000`，`epsilon_end=0.03`。训练阶段保留低但非零的 exploration tail；评估阶段仍使用 greedy policy。
+- Training dynamics 现在是 first-class ranking evidence。后续对比应优先审查 full/early/mid/late/last-window 训练趋势，再解释 final formal test。
+- 从 `best_checkpoint_selection_start_env_steps=300000` 开始，每 `best_checkpoint_selection_interval_env_steps=20000` 做一次 checkpoint validation。
+- checkpoint validation 使用 `GreedyEvaluator`、`best_checkpoint_validation_episodes=24`，seed set 来自 `fixed_model_select_seed_base=20262323`。
+- 训练结束后从 validation 全部候选中选出 top-k（默认 3），在同一 model-selection seed set 上用 `best_checkpoint_recheck_episodes=50` recheck，按 `success_rate -> coverage -> reward` 固定规则选择 `checkpoints/best.pt`。
+- final formal test 只对 `checkpoints/best.pt` 执行，使用独立 held-out final-test seed set：`fixed_final_probe_seed_base=20261323`，默认 `final_greedy_episodes=100`。
+- `checkpoints/last.pt` 仍保存，但仅是 diagnostic-only training endpoint；last-vs-best gap 只用于诊断训练末段漂移，不主导 formal acceptance。
+- `fixed_model_select_seed_base` 与 `fixed_final_probe_seed_base` 必须分离，不能复用 final-test seed set 做 checkpoint selection。
+- 历史 `formal_last_checkpoint_*` lane 使用 last checkpoint final_probe；这些结果保留为 historical evidence，不能和 `formal_best_checkpoint_v3` 混写为同一 strict comparability lane。
 
 `tools/supplementary_multi_checkpoint_probe.py` 仍保留为 `supplementary_confidence_check` 工具。它适合用于多 checkpoint 同 seed 对比、非默认 episode 数检查、恢复性评估和额外置信度分析；但 100-episode held-out 评估本身已经是当前默认 formal final_probe，不再天然等同于 supplementary evidence。
 
@@ -146,6 +157,14 @@ python .\train_q_agent.py --strict-reproducibility
 - `--train-print-interval-episodes`
 - `--use-fixed-train-episode-seeds`
 - `--fixed-train-episode-seed-base`
+- `--enable-best-checkpoint-selection`
+- `--best-checkpoint-selection-start-env-steps`
+- `--best-checkpoint-selection-interval-env-steps`
+- `--best-checkpoint-validation-episodes`
+- `--best-checkpoint-topk-recheck`
+- `--best-checkpoint-recheck-episodes`
+- `--use-fixed-model-select-seeds`
+- `--fixed-model-select-seed-base`
 - `--batch-size`
 - `--rows` `--cols`
 - `--scan-radius`
@@ -170,23 +189,24 @@ python .\train_q_agent.py --strict-reproducibility
 
 默认运行结果会写到 `outputs/`。其中通常包含：
 
-- `logs/`：训练 CSV、`final_probe.csv`，以及 formal structured JSON
-- `checkpoints/`：当前 formal 主线保存 `last.pt`
+- `logs/`：训练 CSV、`model_select_eval.csv`、`best_recheck_eval.csv`、`final_probe.csv`，以及 formal structured JSON
+- `checkpoints/`：当前 formal 主线保存 `best.pt`；`last.pt` 保留为训练终点诊断对象；`checkpoints/model_select/` 保存 validation 候选
 - `plots/`：离线生成的指标曲线，仅在启用相关开关时生成
 - `trajectories/`：训练或 final_probe 轨迹图，仅在启用相关开关时生成
 
 正式训练的 `logs/` 目录当前会额外生成：
 
 - `metric_snapshot.json`
-  - 统一导出 `recent_train`、`final_probe`，并在 legacy diagnostic CSV 存在时补充 `last_eval`、`best_eval`
+  - 统一导出 `recent_train`、checkpoint validation summary、best checkpoint selection summary、`final_probe`，并补充 diagnostic last-checkpoint summary
   - 包含主指标、次指标、稳定性指标、semantic monitoring 汇总
-  - 当前正式 acceptance object 是 `final_probe`；`last_eval` / `best_eval` 仅在 legacy diagnostic CSV 存在时作为历史诊断上下文出现
-  - 同时记录 last checkpoint 对应的 train-episode 索引（如果可得）
+  - 当前正式 acceptance object 是 `best.pt` 上的 `final_probe`
+  - 同时记录 best checkpoint 与 last checkpoint 对应的 env steps / train-episode 索引
+  - 包含 full/early/mid/late/last-window training dynamics slope-friendly summary，以及 best-vs-last gap summary
 - `benchmark_summary.json`
   - 导出总运行时、运行模式、runtime/timing 开关、可用 timing summary
-  - 在 episode-budget 模式下也会导出 `budget_mode`、`total_train_episodes_completed`；`*_to_best` 字段仅是 legacy compatibility / diagnostic placeholder，不参与 formal acceptance
+  - 导出 `best_checkpoint_env_steps`、`last_checkpoint_env_steps`、model-selection eval count、recheck eval count
 - `config_snapshot.json`
-  - 导出完整训练配置、git sha、comparability 相关字段、`observed_run_contract`
+  - 导出完整训练配置、git sha、comparability 相关字段、`observed_run_contract` 和新的 evaluation contract
 - `artifact_index.json`
   - 列出本 run 实际存在的 csv / checkpoint / structured summary / plots / trajectories
 - `training_summary.txt`
@@ -199,10 +219,11 @@ python .\train_q_agent.py --strict-reproducibility
 - `final_train_episode_idx`
 - `train_episodes_header`
 - `train_steps_header`
-- `eval_metrics_header`（legacy diagnostic header；当前主线 run 通常为空）
+- `model_select_eval_header`
+- `best_recheck_eval_header`
 - `final_probe_header`
 
-当前主线 run 通常没有 `logs/eval_metrics.csv` 或 `checkpoints/best.pt`；这些字段和 legacy diagnostic artifact 兼容历史 run / backfill 语境，不参与当前 formal acceptance。当前正式结论以 `checkpoints/last.pt` 对应的 100-episode `final_probe` 为准。
+当前正式结论以 `checkpoints/best.pt` 对应的 held-out `final_probe` 为准。`checkpoints/last.pt` 的结果只复用 500k checkpoint 在 validation / recheck 中已有的评估结果，不再额外单独跑 final test。
 
 如果需要对历史 runs 做 formal backfill 与 bootstrap 阈值汇总，可执行：
 
