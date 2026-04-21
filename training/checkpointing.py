@@ -9,14 +9,13 @@ import torch
 
 
 class CheckpointManager:
-    """Manage formal checkpoints for the best-selected checkpoint protocol."""
+    """Manage formal checkpoints for training and post-hoc selection protocols."""
 
     def __init__(self, run_dir: Path):
         self.run_dir = Path(run_dir)
         self.ckpt_dir = self.run_dir / "checkpoints"
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
         self.model_select_dir = self.ckpt_dir / "model_select"
-        self.model_select_dir.mkdir(parents=True, exist_ok=True)
         self.last_path = self.ckpt_dir / "last.pt"
         self.best_path = self.ckpt_dir / "best.pt"
 
@@ -80,7 +79,31 @@ class CheckpointManager:
     ) -> Path:
         """Save a checkpoint candidate that can later participate in top-k recheck."""
 
+        self.model_select_dir.mkdir(parents=True, exist_ok=True)
         path = self.model_select_dir / f"env_{int(env_steps):09d}.pt"
+        payload = self._build_payload(
+            online_net,
+            learner,
+            env_steps,
+            train_episode_idx=train_episode_idx,
+            train_config=train_config,
+            selection_metadata=selection_metadata,
+        )
+        torch.save(payload, path)
+        return path
+
+    def save_periodic_checkpoint(
+        self,
+        online_net,
+        learner,
+        env_steps: int,
+        train_episode_idx: int | None = None,
+        train_config=None,
+        selection_metadata: Dict[str, object] | None = None,
+    ) -> Path:
+        """Save a train-only periodic checkpoint for post-hoc candidate selection."""
+
+        path = self.ckpt_dir / f"ckpt_step_{int(env_steps)}.pt"
         payload = self._build_payload(
             online_net,
             learner,

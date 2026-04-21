@@ -25,6 +25,12 @@ from training.formal_artifacts import write_formal_run_artifacts
 from training.learner import DDQNLearner, DDQNLearnerConfig
 from training.logger import CSVMetricLogger
 from training.plotting import generate_all_plots
+from training.posthoc_selection import (
+    PROTOCOL_NAME as POSTHOC_PROTOCOL_NAME,
+    final_probe_rank_key,
+    select_posthoc_candidates,
+    write_posthoc_final_artifacts,
+)
 from training.replay_buffer import ReplayBuffer, ReplayBufferConfig
 from training.rewarding import REWARD_BREAKDOWN_FIELDS, REWARD_EVENT_SUMMARY_FIELDS
 from training.trajectory_plotting import save_episode_trajectory_plots, save_train_special_trajectory_plots
@@ -86,13 +92,19 @@ class TrainConfig:
     log_interval_episodes: int = 10
 
     recent_episode_window: int = 100
+    formal_protocol: str = POSTHOC_PROTOCOL_NAME
     final_greedy_episodes: int = 100
     train_print_interval_episodes: int = 20
     use_fixed_train_episode_seeds: bool = True
     fixed_train_episode_seed_base: int = 20259323
     use_fixed_eval_seeds: bool = True  # Legacy name retained; now this toggle only controls fixed final_probe seeds.
     fixed_final_probe_seed_base: int = 20261323
-    enable_best_checkpoint_selection: bool = True
+    periodic_checkpoint_interval_env_steps: int = 20_000
+    posthoc_candidate_start_env_steps: int = 200_000
+    posthoc_candidate_end_env_steps: int = 0  # 0 means "use total_env_steps".
+    posthoc_selection_window_env_steps: int = 40_000
+    posthoc_final_probe_topk: int = 3
+    enable_best_checkpoint_selection: bool = False
     best_checkpoint_selection_start_env_steps: int = 300_000
     best_checkpoint_selection_interval_env_steps: int = 20_000
     best_checkpoint_validation_episodes: int = 24
@@ -407,8 +419,12 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"timing_log_interval={int(cfg.timing_log_interval)} "
         f"train_print_interval={int(cfg.train_print_interval)} "
         f"log_interval={int(cfg.log_interval)} "
+        f"formal_protocol={_formal_protocol(cfg)} "
         f"formal_final_probe_episodes={int(cfg.final_greedy_episodes)} "
         f"best_checkpoint_selection={bool(cfg.enable_best_checkpoint_selection)} "
+        f"posthoc_checkpoint_interval={int(cfg.periodic_checkpoint_interval_env_steps)} "
+        f"posthoc_candidate_start={int(cfg.posthoc_candidate_start_env_steps)} "
+        f"posthoc_candidate_end={_resolve_posthoc_candidate_end(cfg)} "
         f"note=\"{_describe_profiling_mode(cfg, run_mode)}\""
     )
     print(f"[startup] timing_flags {timing_flag_text}")
@@ -683,6 +699,20 @@ def _best_model_select_score(row: Mapping[str, Any]) -> tuple[float, float, floa
     )
 
 
+def _formal_protocol(cfg: TrainConfig) -> str:
+    protocol = str(getattr(cfg, "formal_protocol", POSTHOC_PROTOCOL_NAME)).strip()
+    return protocol or POSTHOC_PROTOCOL_NAME
+
+
+def _use_posthoc_protocol(cfg: TrainConfig) -> bool:
+    return _formal_protocol(cfg) == POSTHOC_PROTOCOL_NAME
+
+
+def _resolve_posthoc_candidate_end(cfg: TrainConfig) -> int:
+    configured = int(getattr(cfg, "posthoc_candidate_end_env_steps", 0))
+    return int(cfg.total_env_steps) if configured <= 0 else configured
+
+
 def _relative_checkpoint_path(run_dir: Path, checkpoint_path: Path) -> str:
     try:
         return Path(checkpoint_path).resolve().relative_to(run_dir.resolve()).as_posix()
@@ -775,7 +805,19 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     final_best_selection_row: dict[str, object] | None = None
     last_checkpoint_diagnostic_row: dict[str, object] | None = None
     best_checkpoint_path: Path | None = None
-    enable_best_selection = bool(cfg.enable_best_checkpoint_selection)
+    formal_protocol = _formal_protocol(cfg)
+    use_posthoc_protocol = _use_posthoc_protocol(cfg)
+    enable_best_selection = (not use_posthoc_protocol) and bool(cfg.enable_best_checkpoint_selection)
+    posthoc_candidate_rows: list[dict[str, Any]] = []
+    posthoc_final_probe_rows: list[dict[str, object]] = []
+    posthoc_selection_result: dict[str, Any] | None = None
+    posthoc_candidate_start_step = int(max(0, cfg.posthoc_candidate_start_env_steps))
+    posthoc_candidate_end_step = _resolve_posthoc_candidate_end(cfg)
+    posthoc_checkpoint_interval = int(max(1, cfg.periodic_checkpoint_interval_env_steps))
+    posthoc_selection_window = int(max(1, cfg.posthoc_selection_window_env_steps))
+    posthoc_final_probe_topk = int(max(1, cfg.posthoc_final_probe_topk))
+    next_posthoc_checkpoint_step = int(posthoc_candidate_start_step)
+    saved_posthoc_checkpoint_steps: set[int] = set()
     model_select_seed_base = (
         int(cfg.fixed_model_select_seed_base) if bool(cfg.use_fixed_model_select_seeds) else None
     )
@@ -1035,6 +1077,43 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         while int(next_model_select_step) <= int(env_steps):
             next_model_select_step += model_select_interval
 
+    def maybe_save_posthoc_checkpoint(*, force: bool = False) -> None:
+        nonlocal next_posthoc_checkpoint_step
+        if not use_posthoc_protocol:
+            return
+        if int(env_steps) < int(posthoc_candidate_start_step):
+            return
+        if int(env_steps) > int(posthoc_candidate_end_step) and not force:
+            return
+        should_save = force or int(env_steps) >= int(next_posthoc_checkpoint_step)
+        if not should_save:
+            return
+        checkpoint_step = int(env_steps)
+        if checkpoint_step in saved_posthoc_checkpoint_steps:
+            while int(next_posthoc_checkpoint_step) <= checkpoint_step:
+                next_posthoc_checkpoint_step += posthoc_checkpoint_interval
+            return
+        checkpoint_path = ckpt.save_periodic_checkpoint(
+            online_net,
+            learner,
+            env_steps=checkpoint_step,
+            train_episode_idx=int(train_phase_episodes),
+            train_config=cfg,
+            selection_metadata={
+                "protocol_name": formal_protocol,
+                "checkpoint_role": "posthoc_train_side_candidate",
+                "training_only_checkpoint": True,
+                "note": "Saved during training without validation, recheck, or held-out probe.",
+            },
+        )
+        saved_posthoc_checkpoint_steps.add(checkpoint_step)
+        while int(next_posthoc_checkpoint_step) <= checkpoint_step:
+            next_posthoc_checkpoint_step += posthoc_checkpoint_interval
+        print(
+            "[checkpoint] "
+            f"posthoc_candidate env_steps={checkpoint_step} path={_relative_checkpoint_path(run_dir, checkpoint_path)}"
+        )
+
     if timing_summary_enabled and timing_log_interval > 0:
         while env_steps >= next_timing_log_step:
             _print_timing_summary(env_steps, collector, learner, replay, collector.state_adapter)
@@ -1089,6 +1168,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
             if should_log or should_print_train:
                 emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
+            maybe_save_posthoc_checkpoint()
             maybe_run_model_select_validation()
     else:
         while env_steps < int(cfg.total_env_steps):
@@ -1132,6 +1212,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
             if should_log or should_print_train:
                 emit_train_snapshot(eps, should_log=should_log, should_print_train=should_print_train)
+            maybe_save_posthoc_checkpoint()
             maybe_run_model_select_validation()
 
     last_ckpt_path = ckpt.save_last(
@@ -1142,128 +1223,285 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         train_config=cfg,
     )
 
-    if enable_best_selection and not any(int(row.get("env_steps", -1)) == int(env_steps) for row in model_select_rows):
-        if int(env_steps) >= int(cfg.best_checkpoint_selection_start_env_steps):
-            run_model_select_validation(int(env_steps))
+    if use_posthoc_protocol:
+        if int(env_steps) >= posthoc_candidate_start_step and int(env_steps) <= posthoc_candidate_end_step:
+            # If the configured final step is itself a scheduled boundary, this
+            # is a no-op because the loop already saved it. It never evaluates.
+            if (int(env_steps) - posthoc_candidate_start_step) % posthoc_checkpoint_interval == 0:
+                maybe_save_posthoc_checkpoint(force=True)
 
-    if not model_select_rows:
-        # Short smoke runs or explicitly disabled selection still publish best.pt
-        # as the formal object by promoting last.pt without consuming extra
-        # model-selection episodes.
-        best_checkpoint_path = ckpt.save_best_from_checkpoint(
-            last_ckpt_path,
-            selection_metadata={
-                "selection_phase": "fallback_last_checkpoint_no_model_select_eval",
-                "selection_rule": "no_validation_candidates_available",
-            },
+        posthoc_selection_result = select_posthoc_candidates(
+            run_dir=run_dir,
+            candidate_start_step=posthoc_candidate_start_step,
+            candidate_end_step=posthoc_candidate_end_step,
+            checkpoint_interval=posthoc_checkpoint_interval,
+            window_env_steps=posthoc_selection_window,
+            topk=posthoc_final_probe_topk,
         )
-        final_best_selection_row = {
-            "tag": "best_recheck_eval",
-            "source": "fallback_last_checkpoint_no_model_select_eval",
-            "env_steps": int(env_steps),
-            "checkpoint_path": _relative_checkpoint_path(run_dir, last_ckpt_path),
-            "selection_rank": None,
-        }
-        last_checkpoint_diagnostic_row = final_best_selection_row
-    else:
-        topk = int(max(1, cfg.best_checkpoint_topk_recheck))
-        ranked_candidates = sorted(model_select_rows, key=_best_model_select_score, reverse=True)
-        top_candidates = ranked_candidates[: min(topk, len(ranked_candidates))]
-        for rank, candidate_row in enumerate(top_candidates, start=1):
-            candidate_path = run_dir / str(candidate_row["checkpoint_path"])
-            _load_checkpoint_into_model(online_net, candidate_path, cfg.device)
-            recheck = evaluator.evaluate(
+        posthoc_candidate_rows = [
+            dict(row) for row in posthoc_selection_result.get("selected_candidates", [])
+        ]
+        if not posthoc_candidate_rows:
+            fallback_path = ckpt.save_periodic_checkpoint(
                 online_net,
-                num_episodes=int(max(1, cfg.best_checkpoint_recheck_episodes)),
-                seed_base=model_select_seed_base,
+                learner,
+                env_steps=int(env_steps),
+                train_episode_idx=int(train_phase_episodes),
+                train_config=cfg,
+                selection_metadata={
+                    "protocol_name": formal_protocol,
+                    "checkpoint_role": "posthoc_fallback_last_candidate",
+                    "training_only_checkpoint": True,
+                    "reason": "no_valid_periodic_posthoc_candidates",
+                },
             )
-            recheck_row = _build_eval_row(
-                tag="best_recheck_eval",
-                source="topk_model_select_recheck",
-                budget_mode=budget_mode,
-                env_steps=int(candidate_row["env_steps"]),
-                episode_idx=int(candidate_row["episode_idx"]),
-                train_episode_idx=int(candidate_row["train_episode_idx"]),
-                completed_train_episodes=int(candidate_row["completed_train_episodes"]),
-                learner_steps=int(candidate_row["learner_steps"]),
-                eval_result=recheck,
-                checkpoint_path=str(candidate_row["checkpoint_path"]),
-                seed_base=model_select_seed_base,
-                selection_rank=rank,
-            )
-            recheck_row["model_select_eval_success_rate"] = float(candidate_row["eval_success_rate"])
-            recheck_row["model_select_eval_mean_coverage"] = float(candidate_row["eval_mean_coverage"])
-            recheck_row["model_select_eval_mean_reward"] = float(candidate_row["eval_mean_reward"])
-            logger.log_best_recheck_eval(recheck_row)
-            best_recheck_rows.append(recheck_row)
             print(
-                "[best_recheck] "
-                f"rank={rank} env_steps={recheck_row['env_steps']} episodes={recheck_row['eval_episodes']} "
-                f"success={recheck_row['eval_success_rate']:.4f} "
-                f"coverage={recheck_row['eval_mean_coverage']:.4f} reward={recheck_row['eval_mean_reward']:.4f}"
+                "[warning] no valid posthoc candidates were available; "
+                f"saved fallback training-side checkpoint {_relative_checkpoint_path(run_dir, fallback_path)}"
+            )
+            posthoc_selection_result = select_posthoc_candidates(
+                run_dir=run_dir,
+                candidate_start_step=int(env_steps),
+                candidate_end_step=int(env_steps),
+                checkpoint_interval=posthoc_checkpoint_interval,
+                window_env_steps=posthoc_selection_window,
+                topk=1,
+            )
+            posthoc_candidate_rows = [
+                dict(row) for row in posthoc_selection_result.get("selected_candidates", [])
+            ]
+        if not posthoc_candidate_rows:
+            raise RuntimeError("post-hoc candidate selection produced no valid checkpoints")
+
+        candidate_probe_payloads: dict[int, Mapping[str, Any]] = {}
+        for candidate_row in posthoc_candidate_rows:
+            candidate_step = int(candidate_row["candidate_step"])
+            candidate_path = run_dir / str(candidate_row["checkpoint_path"])
+            payload = _load_checkpoint_into_model(online_net, candidate_path, cfg.device)
+            probe_result = evaluator.evaluate(
+                online_net,
+                num_episodes=int(max(1, cfg.final_greedy_episodes)),
+                seed_base=final_probe_seed_base,
+            )
+            candidate_probe_payloads[candidate_step] = probe_result
+            row = _build_eval_row(
+                tag="final_probe",
+                source="posthoc_candidate_final_probe",
+                budget_mode=budget_mode,
+                env_steps=int(payload.get("env_steps", candidate_step)),
+                episode_idx=int(collector.total_episodes),
+                train_episode_idx=int(payload.get("train_episode_idx", train_phase_episodes)),
+                completed_train_episodes=int(train_phase_episodes),
+                learner_steps=int(payload.get("learn_steps", learner.learn_steps)),
+                eval_result=probe_result,
+                checkpoint_path=str(candidate_row["checkpoint_path"]),
+                seed_base=final_probe_seed_base,
+                selection_rank=int(candidate_row.get("selection_rank") or 0),
+            )
+            row["posthoc_selection_rank"] = int(candidate_row.get("selection_rank") or 0)
+            row["posthoc_selection_score"] = float(candidate_row.get("selection_score") or 0.0)
+            row["posthoc_window_start_env_steps"] = int(candidate_row.get("window_start_env_steps") or 0)
+            row["posthoc_window_end_env_steps"] = int(candidate_row.get("window_end_env_steps") or candidate_step)
+            row["posthoc_window_row_count"] = int(candidate_row.get("window_row_count") or 0)
+            row["formal_winner"] = False
+            row["final_probe_rank"] = None
+            posthoc_final_probe_rows.append(row)
+
+        ranked_probe_rows = sorted(
+            posthoc_final_probe_rows,
+            key=lambda row: (
+                *final_probe_rank_key(row),
+                -int(row.get("posthoc_selection_rank") or 0),
+            ),
+            reverse=True,
+        )
+        winner_row = ranked_probe_rows[0]
+        for rank, row in enumerate(ranked_probe_rows, start=1):
+            row["final_probe_rank"] = rank
+            is_winner = row is winner_row
+            row["formal_winner"] = is_winner
+            row["source"] = "posthoc_final_winner" if is_winner else "posthoc_candidate_final_probe"
+            logger.log_final_probe(row)
+            print(
+                "[final_probe] "
+                f"rank={rank} source={row['source']} checkpoint={row['checkpoint_path']} "
+                f"env_steps={row['env_steps']} episodes={row['eval_episodes']} "
+                f"mean_reward={row['eval_mean_reward']:.4f} mean_cov={row['eval_mean_coverage']:.4f} "
+                f"success_rate={row['eval_success_rate']:.4f} mean_len={row['eval_mean_episode_length']:.2f}"
             )
 
-        final_best_selection_row = max(best_recheck_rows, key=_best_model_select_score)
-        best_candidate_path = run_dir / str(final_best_selection_row["checkpoint_path"])
+        best_candidate_path = run_dir / str(winner_row["checkpoint_path"])
         best_checkpoint_path = ckpt.save_best_from_checkpoint(
             best_candidate_path,
             selection_metadata={
-                "selection_phase": "topk_recheck_final_best",
-                "selection_rule": "success_rate_then_coverage_then_reward",
-                "selection_row": final_best_selection_row,
-                "topk_recheck": int(topk),
-                "validation_candidate_count": int(len(model_select_rows)),
+                "protocol_name": formal_protocol,
+                "selection_phase": "posthoc_trainselect_final_probe_winner",
+                "train_side_candidate_selection": posthoc_selection_result.get("summary", {}),
+                "final_probe_selection_rule": "success_rate_then_coverage_then_reward",
+                "winner_final_probe_row": winner_row,
             },
         )
-
-        last_checkpoint_matches = [
-            row for row in best_recheck_rows
+        best_payload = _load_checkpoint_into_model(online_net, best_checkpoint_path, cfg.device)
+        best_env_steps = int(best_payload.get("env_steps", winner_row["env_steps"]))
+        best_train_episode_idx = int(best_payload.get("train_episode_idx", winner_row["train_episode_idx"]))
+        probe_source = "posthoc_final_winner"
+        probe_row = dict(winner_row)
+        probe = dict(candidate_probe_payloads.get(best_env_steps, {}))
+        if not probe:
+            probe = dict(candidate_probe_payloads.get(int(winner_row["env_steps"]), {}))
+        final_best_selection_row = probe_row
+        last_probe_matches = [
+            row for row in posthoc_final_probe_rows
             if int(row.get("env_steps", -1)) == int(env_steps)
         ]
-        if last_checkpoint_matches:
-            last_checkpoint_diagnostic_row = last_checkpoint_matches[-1]
+        last_checkpoint_diagnostic_row = last_probe_matches[-1] if last_probe_matches else None
+
+        recent_for_posthoc = summarize_recent_episodes(recent_eps)
+        recent_for_posthoc_row = {
+            "env_steps": int(env_steps),
+            "recent_mean_reward": float(recent_for_posthoc["mean_reward"]),
+            "recent_mean_coverage": float(recent_for_posthoc["mean_coverage"]),
+            "recent_success_rate": float(recent_for_posthoc["success_rate"]),
+            "recent_mean_episode_length": float(recent_for_posthoc["mean_length"]),
+            "recent_mean_repeat_visit_ratio": float(recent_for_posthoc["mean_repeat_visit_ratio"]),
+        }
+        write_posthoc_final_artifacts(
+            run_dir=run_dir,
+            total_env_steps=int(env_steps),
+            candidate_start_step=posthoc_candidate_start_step,
+            candidate_end_step=posthoc_candidate_end_step,
+            checkpoint_interval=posthoc_checkpoint_interval,
+            selected_candidates=posthoc_candidate_rows,
+            final_probe_rows=ranked_probe_rows,
+            winner_probe_row=probe_row,
+            recent_train_row=recent_for_posthoc_row,
+            last_checkpoint_path=_relative_checkpoint_path(run_dir, last_ckpt_path),
+            best_pt_path=_relative_checkpoint_path(run_dir, best_checkpoint_path),
+            final_probe_episode_count=int(max(1, cfg.final_greedy_episodes)),
+            seed_base=final_probe_seed_base,
+        )
+    else:
+        if enable_best_selection and not any(int(row.get("env_steps", -1)) == int(env_steps) for row in model_select_rows):
+            if int(env_steps) >= int(cfg.best_checkpoint_selection_start_env_steps):
+                run_model_select_validation(int(env_steps))
+
+        if not model_select_rows:
+            # Short smoke runs or explicitly disabled legacy selection still
+            # publish best.pt by promoting last.pt without extra selection episodes.
+            best_checkpoint_path = ckpt.save_best_from_checkpoint(
+                last_ckpt_path,
+                selection_metadata={
+                    "selection_phase": "fallback_last_checkpoint_no_model_select_eval",
+                    "selection_rule": "no_validation_candidates_available",
+                },
+            )
+            final_best_selection_row = {
+                "tag": "best_recheck_eval",
+                "source": "fallback_last_checkpoint_no_model_select_eval",
+                "env_steps": int(env_steps),
+                "checkpoint_path": _relative_checkpoint_path(run_dir, last_ckpt_path),
+                "selection_rank": None,
+            }
+            last_checkpoint_diagnostic_row = final_best_selection_row
         else:
-            last_validation_matches = [
-                row for row in model_select_rows
+            topk = int(max(1, cfg.best_checkpoint_topk_recheck))
+            ranked_candidates = sorted(model_select_rows, key=_best_model_select_score, reverse=True)
+            top_candidates = ranked_candidates[: min(topk, len(ranked_candidates))]
+            for rank, candidate_row in enumerate(top_candidates, start=1):
+                candidate_path = run_dir / str(candidate_row["checkpoint_path"])
+                _load_checkpoint_into_model(online_net, candidate_path, cfg.device)
+                recheck = evaluator.evaluate(
+                    online_net,
+                    num_episodes=int(max(1, cfg.best_checkpoint_recheck_episodes)),
+                    seed_base=model_select_seed_base,
+                )
+                recheck_row = _build_eval_row(
+                    tag="best_recheck_eval",
+                    source="topk_model_select_recheck",
+                    budget_mode=budget_mode,
+                    env_steps=int(candidate_row["env_steps"]),
+                    episode_idx=int(candidate_row["episode_idx"]),
+                    train_episode_idx=int(candidate_row["train_episode_idx"]),
+                    completed_train_episodes=int(candidate_row["completed_train_episodes"]),
+                    learner_steps=int(candidate_row["learner_steps"]),
+                    eval_result=recheck,
+                    checkpoint_path=str(candidate_row["checkpoint_path"]),
+                    seed_base=model_select_seed_base,
+                    selection_rank=rank,
+                )
+                recheck_row["model_select_eval_success_rate"] = float(candidate_row["eval_success_rate"])
+                recheck_row["model_select_eval_mean_coverage"] = float(candidate_row["eval_mean_coverage"])
+                recheck_row["model_select_eval_mean_reward"] = float(candidate_row["eval_mean_reward"])
+                logger.log_best_recheck_eval(recheck_row)
+                best_recheck_rows.append(recheck_row)
+                print(
+                    "[best_recheck] "
+                    f"rank={rank} env_steps={recheck_row['env_steps']} episodes={recheck_row['eval_episodes']} "
+                    f"success={recheck_row['eval_success_rate']:.4f} "
+                    f"coverage={recheck_row['eval_mean_coverage']:.4f} reward={recheck_row['eval_mean_reward']:.4f}"
+                )
+
+            final_best_selection_row = max(best_recheck_rows, key=_best_model_select_score)
+            best_candidate_path = run_dir / str(final_best_selection_row["checkpoint_path"])
+            best_checkpoint_path = ckpt.save_best_from_checkpoint(
+                best_candidate_path,
+                selection_metadata={
+                    "selection_phase": "topk_recheck_final_best",
+                    "selection_rule": "success_rate_then_coverage_then_reward",
+                    "selection_row": final_best_selection_row,
+                    "topk_recheck": int(topk),
+                    "validation_candidate_count": int(len(model_select_rows)),
+                },
+            )
+
+            last_checkpoint_matches = [
+                row for row in best_recheck_rows
                 if int(row.get("env_steps", -1)) == int(env_steps)
             ]
-            last_checkpoint_diagnostic_row = last_validation_matches[-1] if last_validation_matches else None
+            if last_checkpoint_matches:
+                last_checkpoint_diagnostic_row = last_checkpoint_matches[-1]
+            else:
+                last_validation_matches = [
+                    row for row in model_select_rows
+                    if int(row.get("env_steps", -1)) == int(env_steps)
+                ]
+                last_checkpoint_diagnostic_row = last_validation_matches[-1] if last_validation_matches else None
 
-    if best_checkpoint_path is None:
-        raise RuntimeError("best checkpoint path was not resolved before final formal test")
+        if best_checkpoint_path is None:
+            raise RuntimeError("best checkpoint path was not resolved before final formal test")
 
-    best_payload = _load_checkpoint_into_model(online_net, best_checkpoint_path, cfg.device)
-    best_env_steps = int(best_payload.get("env_steps", env_steps))
-    best_train_episode_idx = int(best_payload.get("train_episode_idx", train_phase_episodes))
-    probe_source = "best_checkpoint"
-    probe = evaluator.evaluate(
-        online_net,
-        num_episodes=int(max(1, cfg.final_greedy_episodes)),
-        seed_base=final_probe_seed_base,
-    )
-    probe_row = _build_eval_row(
-        tag="final_probe",
-        source=probe_source,
-        budget_mode=budget_mode,
-        env_steps=best_env_steps,
-        episode_idx=int(collector.total_episodes),
-        train_episode_idx=best_train_episode_idx,
-        completed_train_episodes=int(train_phase_episodes),
-        learner_steps=int(learner.learn_steps),
-        eval_result=probe,
-        checkpoint_path=_relative_checkpoint_path(run_dir, best_checkpoint_path),
-        seed_base=final_probe_seed_base,
-    )
-    logger.log_final_probe(probe_row)
-    print(
-        "[final_probe] "
-        f"source={probe_source} checkpoint={probe_row['checkpoint_path']} "
-        f"env_steps={probe_row['env_steps']} episodes={probe_row['eval_episodes']} "
-        f"train_eps={int(train_phase_episodes)} "
-        f"mean_reward={probe_row['eval_mean_reward']:.4f} mean_cov={probe_row['eval_mean_coverage']:.4f} "
-        f"success_rate={probe_row['eval_success_rate']:.4f} mean_len={probe_row['eval_mean_episode_length']:.2f} "
-        f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
-    )
+        best_payload = _load_checkpoint_into_model(online_net, best_checkpoint_path, cfg.device)
+        best_env_steps = int(best_payload.get("env_steps", env_steps))
+        best_train_episode_idx = int(best_payload.get("train_episode_idx", train_phase_episodes))
+        probe_source = "best_checkpoint"
+        probe = evaluator.evaluate(
+            online_net,
+            num_episodes=int(max(1, cfg.final_greedy_episodes)),
+            seed_base=final_probe_seed_base,
+        )
+        probe_row = _build_eval_row(
+            tag="final_probe",
+            source=probe_source,
+            budget_mode=budget_mode,
+            env_steps=best_env_steps,
+            episode_idx=int(collector.total_episodes),
+            train_episode_idx=best_train_episode_idx,
+            completed_train_episodes=int(train_phase_episodes),
+            learner_steps=int(learner.learn_steps),
+            eval_result=probe,
+            checkpoint_path=_relative_checkpoint_path(run_dir, best_checkpoint_path),
+            seed_base=final_probe_seed_base,
+        )
+        logger.log_final_probe(probe_row)
+        print(
+            "[final_probe] "
+            f"source={probe_source} checkpoint={probe_row['checkpoint_path']} "
+            f"env_steps={probe_row['env_steps']} episodes={probe_row['eval_episodes']} "
+            f"train_eps={int(train_phase_episodes)} "
+            f"mean_reward={probe_row['eval_mean_reward']:.4f} mean_cov={probe_row['eval_mean_coverage']:.4f} "
+            f"success_rate={probe_row['eval_success_rate']:.4f} mean_len={probe_row['eval_mean_episode_length']:.2f} "
+            f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
+        )
     if bool(cfg.save_train_representative_trajectories):
         try:
             trajectory_plot_paths.extend(
@@ -1404,6 +1642,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     print(f"final_probe_csv: {logger.final_probe_csv}")
     print(f"model_select_eval_csv: {logger.model_select_eval_csv}")
     print(f"best_recheck_eval_csv: {logger.best_recheck_eval_csv}")
+    print(f"posthoc_candidate_scores_csv: {run_dir / 'logs' / 'posthoc_candidate_scores.csv'}")
+    print(f"posthoc_selection_summary_json: {run_dir / 'logs' / 'posthoc_selection_summary.json'}")
+    print(f"final_probe_summary_json: {run_dir / 'logs' / 'final_probe_summary.json'}")
+    print(f"formal_selection_manifest_json: {run_dir / 'logs' / 'formal_selection_manifest.json'}")
     print(f"train_step_csv: {logger.train_step_csv}")
     if len(generated_plots) > 0:
         print(f"plots_dir: {run_dir / 'plots'}")
@@ -1440,7 +1682,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
 
 
 def parse_args() -> TrainConfig:
-    p = argparse.ArgumentParser(description="Double DQN training with best-checkpoint formal evaluation")
+    p = argparse.ArgumentParser(description="Double DQN training with post-hoc formal checkpoint selection")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
@@ -1663,6 +1905,13 @@ def parse_args() -> TrainConfig:
 
     p.add_argument("--recent-episode-window", type=int, default=100)
     p.add_argument(
+        "--formal-protocol",
+        type=str,
+        default=POSTHOC_PROTOCOL_NAME,
+        choices=(POSTHOC_PROTOCOL_NAME, "formal_best_checkpoint_v3"),
+        help="Formal protocol lane. Default uses post-hoc train-side candidate selection.",
+    )
+    p.add_argument(
         "--final-greedy-episodes",
         type=int,
         default=100,
@@ -1695,11 +1944,21 @@ def parse_args() -> TrainConfig:
         default=20261323,
         help="Base seed for the final-probe evaluation map set.",
     )
+    p.add_argument("--periodic-checkpoint-interval-env-steps", type=int, default=20_000)
+    p.add_argument("--posthoc-candidate-start-env-steps", type=int, default=200_000)
+    p.add_argument(
+        "--posthoc-candidate-end-env-steps",
+        type=int,
+        default=0,
+        help="End of post-hoc candidate range; 0 means --total-env-steps.",
+    )
+    p.add_argument("--posthoc-selection-window-env-steps", type=int, default=40_000)
+    p.add_argument("--posthoc-final-probe-topk", type=int, default=3)
     p.add_argument(
         "--enable-best-checkpoint-selection",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable formal periodic validation, top-k recheck, and best.pt selection.",
+        default=None,
+        help="Legacy formal_best_checkpoint_v3 only: enable periodic validation, top-k recheck, and best.pt selection.",
     )
     p.add_argument("--best-checkpoint-selection-start-env-steps", type=int, default=300_000)
     p.add_argument("--best-checkpoint-selection-interval-env-steps", type=int, default=20_000)
@@ -1813,6 +2072,12 @@ def parse_args() -> TrainConfig:
         enable_tf32 = True
         enable_channels_last = True
 
+    enable_best_checkpoint_selection = (
+        bool(args.enable_best_checkpoint_selection)
+        if args.enable_best_checkpoint_selection is not None
+        else str(args.formal_protocol) == "formal_best_checkpoint_v3"
+    )
+
     if args.smoke:
         return TrainConfig(
             device=args.device,
@@ -1868,13 +2133,19 @@ def parse_args() -> TrainConfig:
             epsilon_end=args.epsilon_end,
             epsilon_decay_steps=max(1, args.epsilon_decay_steps),
             recent_episode_window=10,
+            formal_protocol=str(args.formal_protocol),
             final_greedy_episodes=1,
             train_print_interval_episodes=max(0, args.train_print_interval_episodes),
             use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
             fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
             use_fixed_eval_seeds=True,
             fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
-            enable_best_checkpoint_selection=bool(args.enable_best_checkpoint_selection),
+            periodic_checkpoint_interval_env_steps=60,
+            posthoc_candidate_start_env_steps=60,
+            posthoc_candidate_end_env_steps=0,
+            posthoc_selection_window_env_steps=60,
+            posthoc_final_probe_topk=max(1, min(3, args.posthoc_final_probe_topk)),
+            enable_best_checkpoint_selection=enable_best_checkpoint_selection,
             best_checkpoint_selection_start_env_steps=60,
             best_checkpoint_selection_interval_env_steps=60,
             best_checkpoint_validation_episodes=1,
@@ -1961,13 +2232,19 @@ def parse_args() -> TrainConfig:
         epsilon_end=args.epsilon_end,
         epsilon_decay_steps=max(1, args.epsilon_decay_steps),
         recent_episode_window=max(1, args.recent_episode_window),
+        formal_protocol=str(args.formal_protocol),
         final_greedy_episodes=max(1, args.final_greedy_episodes),
         train_print_interval_episodes=max(0, args.train_print_interval_episodes),
         use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
         fixed_train_episode_seed_base=int(args.fixed_train_episode_seed_base),
         use_fixed_eval_seeds=bool(args.use_fixed_eval_seeds),
         fixed_final_probe_seed_base=int(args.fixed_final_probe_seed_base),
-        enable_best_checkpoint_selection=bool(args.enable_best_checkpoint_selection),
+        periodic_checkpoint_interval_env_steps=max(1, args.periodic_checkpoint_interval_env_steps),
+        posthoc_candidate_start_env_steps=max(0, args.posthoc_candidate_start_env_steps),
+        posthoc_candidate_end_env_steps=max(0, args.posthoc_candidate_end_env_steps),
+        posthoc_selection_window_env_steps=max(1, args.posthoc_selection_window_env_steps),
+        posthoc_final_probe_topk=max(1, args.posthoc_final_probe_topk),
+        enable_best_checkpoint_selection=enable_best_checkpoint_selection,
         best_checkpoint_selection_start_env_steps=max(0, args.best_checkpoint_selection_start_env_steps),
         best_checkpoint_selection_interval_env_steps=max(1, args.best_checkpoint_selection_interval_env_steps),
         best_checkpoint_validation_episodes=max(1, args.best_checkpoint_validation_episodes),
@@ -2115,13 +2392,19 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         epsilon_end=0.03,
         epsilon_decay_steps=400_000,
         recent_episode_window=100,
+        formal_protocol=POSTHOC_PROTOCOL_NAME,
         final_greedy_episodes=100,
         train_print_interval_episodes=20,
         use_fixed_train_episode_seeds=True,
         fixed_train_episode_seed_base=20259323,
         use_fixed_eval_seeds=True,
         fixed_final_probe_seed_base=20261323,
-        enable_best_checkpoint_selection=True,
+        periodic_checkpoint_interval_env_steps=20_000,
+        posthoc_candidate_start_env_steps=200_000,
+        posthoc_candidate_end_env_steps=0,
+        posthoc_selection_window_env_steps=40_000,
+        posthoc_final_probe_topk=3,
+        enable_best_checkpoint_selection=False,
         best_checkpoint_selection_start_env_steps=300_000,
         best_checkpoint_selection_interval_env_steps=20_000,
         best_checkpoint_validation_episodes=24,

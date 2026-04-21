@@ -77,7 +77,12 @@ python .\train_q_agent.py --device cuda
 - `total_env_steps = 500000`
 - `epsilon_decay_steps = 400000`
 - `epsilon_end = 0.03`
-- `enable_best_checkpoint_selection = True`
+- `formal_protocol = formal_posthoc_trainselect_v1`
+- `periodic_checkpoint_interval_env_steps = 20000`
+- `posthoc_candidate_start_env_steps = 200000`
+- `posthoc_selection_window_env_steps = 40000`
+- `posthoc_final_probe_topk = 3`
+- `enable_best_checkpoint_selection = False`（仅 legacy v3 兼容路径使用）
 - `final_greedy_episodes = 100`
 
 快速 smoke 测试：
@@ -104,18 +109,19 @@ python .\train_q_agent.py --device cuda --profile --total-env-steps 24000 --warm
 
 ## Formal protocol / final_probe
 
-当前 formal protocol revision 为 `formal_best_checkpoint_v3`。
+当前 formal protocol revision 为 `formal_posthoc_trainselect_v1`。
 
 - 当前默认正式训练预算为 `total_env_steps=500000`。
 - 训练 epsilon 调度为 `epsilon_start=1.0`，`epsilon_decay_steps=400000`，`epsilon_end=0.03`。训练阶段保留低但非零的 exploration tail；评估阶段仍使用 greedy policy。
 - Training dynamics 现在是 first-class ranking evidence。后续对比应优先审查 full/early/mid/late/last-window 训练趋势，再解释 final formal test。
-- 从 `best_checkpoint_selection_start_env_steps=300000` 开始，每 `best_checkpoint_selection_interval_env_steps=20000` 做一次 checkpoint validation。
-- checkpoint validation 使用 `GreedyEvaluator`、`best_checkpoint_validation_episodes=24`，seed set 来自 `fixed_model_select_seed_base=20262323`。
-- 训练结束后从 validation 全部候选中选出 top-k（默认 3），在同一 model-selection seed set 上用 `best_checkpoint_recheck_episodes=50` recheck，按 `success_rate -> coverage -> reward` 固定规则选择 `checkpoints/best.pt`。
-- final formal test 只对 `checkpoints/best.pt` 执行，使用独立 held-out final-test seed set：`fixed_final_probe_seed_base=20261323`，默认 `final_greedy_episodes=100`。
-- `checkpoints/last.pt` 仍保存，但仅是 diagnostic-only training endpoint；last-vs-best gap 只用于诊断训练末段漂移，不主导 formal acceptance。
-- `fixed_model_select_seed_base` 与 `fixed_final_probe_seed_base` 必须分离，不能复用 final-test seed set 做 checkpoint selection。
-- 历史 `formal_last_checkpoint_*` lane 使用 last checkpoint final_probe；这些结果保留为 historical evidence，不能和 `formal_best_checkpoint_v3` 混写为同一 strict comparability lane。
+- 训练期间不跑 checkpoint validation / recheck / final probe；collector / learner 不会因为中间评估暂停。
+- 从 `posthoc_candidate_start_env_steps=200000` 开始，每 `periodic_checkpoint_interval_env_steps=20000` 只保存训练侧 checkpoint，例如 `checkpoints/ckpt_step_200000.pt`。
+- 训练结束后，post-hoc selector 只读取训练侧 artifact，在每个候选 checkpoint 前 `posthoc_selection_window_env_steps=40000` 的窗口内计算平滑指标。
+- 默认训练侧复合分数为 `0.35*reward_z + 0.25*coverage_z + 0.20*success_z - 0.10*length_z - 0.10*repeat_visit_ratio_z`，选出最多 `posthoc_final_probe_topk=3` 个候选。
+- final formal test 只对 post-hoc top-k 候选执行一次 held-out final probe，使用 `fixed_final_probe_seed_base=20261323`，默认 `final_greedy_episodes=100`。
+- held-out final probe 按 `success_rate -> coverage -> reward` 选出 formal winner，并将其复制/登记为 `checkpoints/best.pt`。
+- `checkpoints/last.pt` 仍保存，但仅是 diagnostic-only training endpoint；除非它进入 post-hoc top-k，否则不会额外单独跑 held-out final probe。
+- 历史 `formal_last_checkpoint_*` lane 与 legacy `formal_best_checkpoint_v3` lane 保留为 historical / compatibility evidence，不能和 `formal_posthoc_trainselect_v1` 混写为同一 strict comparability lane。
 
 `tools/supplementary_multi_checkpoint_probe.py` 仍保留为 `supplementary_confidence_check` 工具。它适合用于多 checkpoint 同 seed 对比、非默认 episode 数检查、恢复性评估和额外置信度分析；但 100-episode held-out 评估本身已经是当前默认 formal final_probe，不再天然等同于 supplementary evidence。
 
@@ -157,14 +163,20 @@ python .\train_q_agent.py --strict-reproducibility
 - `--train-print-interval-episodes`
 - `--use-fixed-train-episode-seeds`
 - `--fixed-train-episode-seed-base`
-- `--enable-best-checkpoint-selection`
-- `--best-checkpoint-selection-start-env-steps`
-- `--best-checkpoint-selection-interval-env-steps`
-- `--best-checkpoint-validation-episodes`
-- `--best-checkpoint-topk-recheck`
-- `--best-checkpoint-recheck-episodes`
-- `--use-fixed-model-select-seeds`
-- `--fixed-model-select-seed-base`
+- `--formal-protocol`
+- `--periodic-checkpoint-interval-env-steps`
+- `--posthoc-candidate-start-env-steps`
+- `--posthoc-candidate-end-env-steps`
+- `--posthoc-selection-window-env-steps`
+- `--posthoc-final-probe-topk`
+- `--enable-best-checkpoint-selection`（legacy `formal_best_checkpoint_v3` only）
+- `--best-checkpoint-selection-start-env-steps`（legacy only）
+- `--best-checkpoint-selection-interval-env-steps`（legacy only）
+- `--best-checkpoint-validation-episodes`（legacy only）
+- `--best-checkpoint-topk-recheck`（legacy only）
+- `--best-checkpoint-recheck-episodes`（legacy only）
+- `--use-fixed-model-select-seeds`（legacy only）
+- `--fixed-model-select-seed-base`（legacy only）
 - `--batch-size`
 - `--rows` `--cols`
 - `--scan-radius`
@@ -189,26 +201,34 @@ python .\train_q_agent.py --strict-reproducibility
 
 默认运行结果会写到 `outputs/`。其中通常包含：
 
-- `logs/`：训练 CSV、`model_select_eval.csv`、`best_recheck_eval.csv`、`final_probe.csv`，以及 formal structured JSON
-- `checkpoints/`：当前 formal 主线保存 `best.pt`；`last.pt` 保留为训练终点诊断对象；`checkpoints/model_select/` 保存 validation 候选
+- `logs/`：训练 CSV、`posthoc_candidate_scores.csv`、`final_probe.csv`，以及 formal structured JSON
+- `checkpoints/`：当前 formal 主线保存 `best.pt`；`last.pt` 保留为训练终点诊断对象；`ckpt_step_<env_steps>.pt` 保存 post-hoc 候选 checkpoint
 - `plots/`：离线生成的指标曲线，仅在启用相关开关时生成
 - `trajectories/`：训练或 final_probe 轨迹图，仅在启用相关开关时生成
 
 正式训练的 `logs/` 目录当前会额外生成：
 
 - `metric_snapshot.json`
-  - 统一导出 `recent_train`、checkpoint validation summary、best checkpoint selection summary、`final_probe`，并补充 diagnostic last-checkpoint summary
+  - 统一导出 `recent_train`、post-hoc candidate selection summary、final probe winner summary、`final_probe`，并补充 diagnostic last-checkpoint summary
   - 包含主指标、次指标、稳定性指标、semantic monitoring 汇总
   - 当前正式 acceptance object 是 `best.pt` 上的 `final_probe`
   - 同时记录 best checkpoint 与 last checkpoint 对应的 env steps / train-episode 索引
   - 包含 full/early/mid/late/last-window training dynamics slope-friendly summary，以及 best-vs-last gap summary
 - `benchmark_summary.json`
   - 导出总运行时、运行模式、runtime/timing 开关、可用 timing summary
-  - 导出 `best_checkpoint_env_steps`、`last_checkpoint_env_steps`、model-selection eval count、recheck eval count
+  - 导出 `best_checkpoint_env_steps`、`last_checkpoint_env_steps`，并确认 legacy model-selection eval count / recheck eval count 在新协议下为 0
 - `config_snapshot.json`
   - 导出完整训练配置、git sha、comparability 相关字段、`observed_run_contract` 和新的 evaluation contract
 - `artifact_index.json`
   - 列出本 run 实际存在的 csv / checkpoint / structured summary / plots / trajectories
+- `posthoc_selection_summary.json`
+  - 记录候选范围、窗口、z-score 权重、top-k 排名和全部候选训练侧指标
+- `final_probe_summary.json`
+  - 记录 top-k 候选的一次 held-out final probe 结果和 formal winner
+- `best_vs_last_gap_summary.json`
+  - 记录 formal winner 与 last checkpoint 的诊断性 gap；last 未进入 top-k 时使用训练终点 recent window 作诊断参照
+- `formal_selection_manifest.json`
+  - 记录协议名、候选范围、checkpoint interval、winner checkpoint、`best.pt` 和 `last.pt`
 - `training_summary.txt`
   - 面向人工复核的轻量文本摘要
 
@@ -219,11 +239,11 @@ python .\train_q_agent.py --strict-reproducibility
 - `final_train_episode_idx`
 - `train_episodes_header`
 - `train_steps_header`
-- `model_select_eval_header`
-- `best_recheck_eval_header`
+- `model_select_eval_header`（legacy 兼容字段；新协议下通常为空）
+- `best_recheck_eval_header`（legacy 兼容字段；新协议下通常为空）
 - `final_probe_header`
 
-当前正式结论以 `checkpoints/best.pt` 对应的 held-out `final_probe` 为准。`checkpoints/last.pt` 的结果只复用 500k checkpoint 在 validation / recheck 中已有的评估结果，不再额外单独跑 final test。
+当前正式结论以 post-hoc top-k 候选的一次 held-out `final_probe` winner 为准，并登记为 `checkpoints/best.pt`。`checkpoints/last.pt` 保留为训练终点诊断对象；除非它进入 post-hoc top-k，否则不额外单独跑 final test。
 
 如果需要对历史 runs 做 formal backfill 与 bootstrap 阈值汇总，可执行：
 

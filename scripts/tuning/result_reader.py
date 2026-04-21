@@ -119,6 +119,16 @@ def _has_valid_final_probe(rows: list[dict[str, str]]) -> bool:
     return False
 
 
+def _select_formal_final_probe_row(rows: list[dict[str, str]]) -> dict[str, str] | None:
+    for row in rows:
+        if str(row.get("formal_winner", "")).strip().lower() == "true":
+            return row
+    for row in rows:
+        if str(row.get("source", "")).strip() == "posthoc_final_winner":
+            return row
+    return rows[-1] if rows else None
+
+
 def _extract_metrics(row: dict[str, str] | None, keys: list[str]) -> dict[str, Any]:
     row = row or {}
     alias_map = {
@@ -255,6 +265,9 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
     eval_metrics_path = logs_dir / "eval_metrics.csv"
     model_select_eval_path = logs_dir / "model_select_eval.csv"
     best_recheck_eval_path = logs_dir / "best_recheck_eval.csv"
+    posthoc_candidate_scores_path = logs_dir / "posthoc_candidate_scores.csv"
+    posthoc_selection_summary_path = logs_dir / "posthoc_selection_summary.json"
+    formal_selection_manifest_path = logs_dir / "formal_selection_manifest.json"
     train_steps_path = logs_dir / "train_steps.csv"
     train_episodes_path = logs_dir / "train_episodes.csv"
     best_checkpoint_path = checkpoints_dir / "best.pt"
@@ -264,13 +277,16 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
     eval_rows = _read_csv_rows(eval_metrics_path)
     model_select_rows = _read_csv_rows(model_select_eval_path)
     best_recheck_rows = _read_csv_rows(best_recheck_eval_path)
+    posthoc_candidate_rows = _read_csv_rows(posthoc_candidate_scores_path)
     train_step_rows = _read_csv_rows(train_steps_path)
     train_episode_rows = _read_csv_rows(train_episodes_path)
+    formal_final_probe_row = _select_formal_final_probe_row(final_probe_rows)
 
     has_valid_probe = _has_valid_final_probe(final_probe_rows)
     has_eval = bool(eval_rows)
     has_model_select = bool(model_select_rows)
     has_recheck = bool(best_recheck_rows)
+    has_posthoc_selection = bool(posthoc_candidate_rows) or formal_selection_manifest_path.exists()
     has_best_checkpoint = best_checkpoint_path.exists()
     has_last_checkpoint = last_checkpoint_path.exists()
     artifacts_complete = run_dir.exists() and has_valid_probe and has_best_checkpoint and has_last_checkpoint
@@ -302,6 +318,10 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         "model_select_eval_row_count": len(model_select_rows),
         "best_recheck_eval_csv": str(best_recheck_eval_path),
         "best_recheck_eval_row_count": len(best_recheck_rows),
+        "posthoc_candidate_scores_csv": str(posthoc_candidate_scores_path),
+        "posthoc_candidate_scores_row_count": len(posthoc_candidate_rows),
+        "posthoc_selection_summary_json": str(posthoc_selection_summary_path),
+        "formal_selection_manifest_json": str(formal_selection_manifest_path),
         "train_steps_csv": str(train_steps_path),
         "train_steps_row_count": len(train_step_rows),
         "train_episodes_csv": str(train_episodes_path),
@@ -311,9 +331,12 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         "periodic_eval_available": has_eval,
         "model_select_eval_available": has_model_select,
         "best_recheck_eval_available": has_recheck,
+        "posthoc_selection_available": has_posthoc_selection,
     }
-    best_eval_source_rows = best_recheck_rows if best_recheck_rows else (model_select_rows if model_select_rows else eval_rows)
-    final_probe_env_steps = _to_scalar(final_probe_rows[-1].get("env_steps")) if final_probe_rows else None
+    best_eval_source_rows = best_recheck_rows if best_recheck_rows else (
+        model_select_rows if model_select_rows else (eval_rows if eval_rows else final_probe_rows)
+    )
+    final_probe_env_steps = _to_scalar(formal_final_probe_row.get("env_steps")) if formal_final_probe_row else None
     last_eval_source_rows = (
         [
             row for row in best_eval_source_rows
@@ -327,7 +350,7 @@ def read_run_result(run_dir: Path | str, return_code: int | None) -> RunResult:
         status=status,
         status_reason=status_reason,
         return_code=return_code,
-        final_probe=_extract_metrics(final_probe_rows[-1] if final_probe_rows else None, FINAL_PROBE_KEYS),
+        final_probe=_extract_metrics(formal_final_probe_row, FINAL_PROBE_KEYS),
         best_eval=_extract_metrics(_select_best_eval_row(best_eval_source_rows), EVAL_KEYS),
         last_eval=_extract_metrics((last_eval_source_rows[-1] if last_eval_source_rows else (eval_rows[-1] if eval_rows else None)), EVAL_KEYS),
         train_recent=_extract_metrics(train_step_rows[-1] if train_step_rows else None, TRAIN_RECENT_KEYS),
