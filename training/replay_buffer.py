@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, List, Mapping, Optional
+from typing import Any, Deque, Dict, List, Mapping, Optional
 
 import torch
 
@@ -166,6 +166,7 @@ class ReplayBuffer:
         self._pin_storage = bool(self.config.pin_memory) and torch.cuda.is_available()
         self._channels_last_on_cuda = bool(self.config.channels_last_on_cuda)
         self._timing_enabled = bool(self.config.enable_timing)
+        self._sample_staging_cache: Dict[tuple[object, ...], list[dict[str, Any]]] = {}
 
         self.add_time = 0.0
         self.sample_time = 0.0
@@ -276,6 +277,48 @@ class ReplayBuffer:
         for key in self._STORAGE_ORDER:
             self._storage[key][int(slot)].copy_(transition[key])
 
+    def _normalize_transition_batch(self, transitions: List[Mapping[str, object]]) -> Dict[str, torch.Tensor]:
+        if len(transitions) <= 0:
+            raise ValueError("transitions must be non-empty")
+        for transition in transitions:
+            for key in self._REQUIRED_KEYS:
+                if key not in transition:
+                    raise KeyError(f"missing transition key: {key}")
+
+        batch: Dict[str, torch.Tensor] = {}
+        for key, dtype, expect_dim in self._TENSOR_FIELDS:
+            values = [
+                self._squeeze_leading_batch(self._as_tensor(transition[key], dtype=dtype), expect_dim)
+                for transition in transitions
+            ]
+            batch[key] = torch.stack(values, dim=0)
+        for key, dtype in self._SCALAR_FIELDS:
+            values = [self._as_tensor(transition[key], dtype=dtype).reshape(()) for transition in transitions]
+            batch[key] = torch.stack(values, dim=0)
+        return batch
+
+    def _write_batch_to_storage(self, start_slot: int, batch: Dict[str, torch.Tensor]) -> int:
+        count = int(next(iter(batch.values())).shape[0])
+        if count <= 0:
+            return int(start_slot)
+
+        write_start = int(start_slot)
+        if count > self.capacity:
+            keep = int(self.capacity)
+            offset = count - keep
+            batch = {key: value.narrow(0, offset, keep) for key, value in batch.items()}
+            count = keep
+            write_start = (int(start_slot) + offset) % self.capacity
+
+        first_count = min(count, self.capacity - write_start)
+        second_count = count - first_count
+        for key in self._STORAGE_ORDER:
+            source = batch[key]
+            self._storage[key].narrow(0, write_start, first_count).copy_(source.narrow(0, 0, first_count))
+            if second_count > 0:
+                self._storage[key].narrow(0, 0, second_count).copy_(source.narrow(0, first_count, second_count))
+        return (write_start + count) % self.capacity
+
     def add(self, transition: Mapping[str, object]) -> None:
         t0 = time.perf_counter() if self._timing_enabled else 0.0
         norm = self._normalize_transition(transition)
@@ -296,21 +339,49 @@ class ReplayBuffer:
             return
 
         t0 = time.perf_counter() if self._timing_enabled else 0.0
-        pos = int(self.pos)
-        for transition in transitions:
-            norm = self._normalize_transition(transition)
-            if not self._initialized:
-                self._init_storage(norm)
-            self._write_transition_to_slot(pos, norm)
-            pos = (pos + 1) % self.capacity
+        batch = self._normalize_transition_batch(transitions)
+        if not self._initialized:
+            sample = {key: value[0] for key, value in batch.items()}
+            self._init_storage(sample)
 
-        self.pos = pos
+        self.pos = self._write_batch_to_storage(int(self.pos), batch)
         self.size = min(self.size + int(count), self.capacity)
         if self._timing_enabled:
             self.add_time += time.perf_counter() - t0
 
     def can_sample(self, batch_size: int) -> bool:
         return self.size >= int(batch_size)
+
+    def _get_sample_staging_tensor(
+        self,
+        key: str,
+        shape: tuple[int, ...],
+        dtype: torch.dtype,
+        pin_memory: bool,
+    ) -> tuple[torch.Tensor, tuple[object, ...], int]:
+        spec = (str(key), tuple(int(v) for v in shape), dtype, bool(pin_memory))
+        entries = self._sample_staging_cache.setdefault(spec, [])
+        for idx, entry in enumerate(entries):
+            event = entry.get("event")
+            if event is None or bool(event.query()):
+                entry["event"] = None
+                return entry["tensor"], spec, idx
+
+        tensor = self._alloc_batch_tensor(shape, dtype=dtype, pin_memory=pin_memory)
+        entries.append({"tensor": tensor, "event": None})
+        return tensor, spec, len(entries) - 1
+
+    def _mark_staging_in_use(self, used_slots: list[tuple[tuple[object, ...], int]], device: torch.device) -> None:
+        if len(used_slots) <= 0 or device.type != "cuda" or not torch.cuda.is_available():
+            return
+        stream = torch.cuda.current_stream(device)
+        event = torch.cuda.Event()
+        event.record(stream)
+        for spec, slot_idx in used_slots:
+            entries = self._sample_staging_cache.get(spec)
+            if entries is None or slot_idx >= len(entries):
+                continue
+            entries[slot_idx]["event"] = event
 
     def sample(self, batch_size: int, device: Optional[torch.device] = None) -> Dict[str, torch.Tensor]:
         if batch_size <= 0:
@@ -327,13 +398,16 @@ class ReplayBuffer:
         idx = torch.randint(0, self.size, (batch_size,), device="cpu", dtype=torch.long)
 
         out: Dict[str, torch.Tensor] = {}
+        used_staging_slots: list[tuple[tuple[object, ...], int]] = []
         for key, storage_tensor in self._storage.items():
             if use_pinned_batch:
-                gathered = self._alloc_batch_tensor(
+                gathered, spec, slot_idx = self._get_sample_staging_tensor(
+                    key,
                     (batch_size, *storage_tensor.shape[1:]),
                     dtype=storage_tensor.dtype,
                     pin_memory=True,
                 )
+                used_staging_slots.append((spec, slot_idx))
                 torch.index_select(storage_tensor, 0, idx, out=gathered)
             else:
                 gathered = storage_tensor.index_select(0, idx)
@@ -347,6 +421,8 @@ class ReplayBuffer:
 
             t0 = time.perf_counter() if self._timing_enabled else 0.0
             out = {key: value.to(target_device, non_blocking=non_blocking) for key, value in out.items()}
+            if use_pinned_batch and non_blocking:
+                self._mark_staging_in_use(used_staging_slots, target_device)
             if self._channels_last_on_cuda and target_device.type == "cuda":
                 for key in self._CHANNELS_LAST_FIELDS:
                     out[key] = out[key].contiguous(memory_format=torch.channels_last)

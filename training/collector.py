@@ -5,6 +5,7 @@ import time
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional
 
 import numpy as np
@@ -262,7 +263,10 @@ class TransitionCollector:
         self._trajectory_positions = (
             [(int(self.agent[0]), int(self.agent[1]))] if self._record_episode_artifacts else []
         )
-        self._episode_semantic_records: list[dict[str, float]] = []
+        self._episode_semantic_sums = {field: 0.0 for field in SEMANTIC_EPISODE_FIELDS}
+        self._episode_semantic_counts = {field: 0 for field in SEMANTIC_EPISODE_FIELDS}
+        self._episode_semantic_finite_counts = {field: 0 for field in SEMANTIC_EPISODE_FIELDS}
+        self._episode_semantic_count = 0
         t0 = time.perf_counter() if self._timing_enabled else 0.0
         self._current_state_tensors, self._current_state_meta = self._build_state_tensors()
         if self._timing_enabled:
@@ -320,9 +324,28 @@ class TransitionCollector:
         meta = self._current_state_meta
         if not isinstance(meta, dict):
             return
-        self._episode_semantic_records.append(
-            {field: float(meta.get(field, float("nan"))) for field in SEMANTIC_EPISODE_FIELDS}
-        )
+        self._episode_semantic_count += 1
+        for field in SEMANTIC_EPISODE_FIELDS:
+            value = float(meta.get(field, float("nan")))
+            if math.isnan(value):
+                continue
+            self._episode_semantic_sums[field] += value
+            self._episode_semantic_counts[field] += 1
+            if math.isfinite(value):
+                self._episode_semantic_finite_counts[field] += 1
+
+    def _summarize_episode_semantics(self) -> dict[str, float]:
+        if int(self._episode_semantic_count) <= 0:
+            return {field: float("nan") for field in SEMANTIC_EPISODE_FIELDS}
+
+        out: dict[str, float] = {}
+        for field in SEMANTIC_EPISODE_FIELDS:
+            count = int(self._episode_semantic_counts.get(field, 0))
+            if count <= 0 or int(self._episode_semantic_finite_counts.get(field, 0)) <= 0:
+                out[field] = float("nan")
+            else:
+                out[field] = float(self._episode_semantic_sums[field] / float(count))
+        return out
 
     @staticmethod
     def _build_action_mask(
@@ -683,7 +706,7 @@ class TransitionCollector:
                         "done_reason": str(done_reason),
                         "episode_seed": completed_episode_seed,
                         "map_fingerprint": completed_map_fingerprint,
-                        **summarize_semantic_records(self._episode_semantic_records),
+                        **self._summarize_episode_semantics(),
                         **{k: float(self._episode_reward_breakdown[k]) for k in self._episode_reward_breakdown},
                         **{k: float(episode_event_summary.get(k, 0.0)) for k in REWARD_EVENT_SUMMARY_FIELDS},
                         **(self._episode_visual_artifacts() if self._record_episode_artifacts else {}),

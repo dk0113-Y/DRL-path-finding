@@ -52,7 +52,7 @@ class TrainConfig:
     enable_tf32: bool = True  # TF32 backend toggle is a runtime perf setting only; it is not an algorithm switch.
     strict_reproducibility: bool = False  # Optional runtime-determinism mode; kept non-default because it can reduce throughput.
     enable_channels_last: bool = False  # Tensor-layout toggle only; model math and metrics stay unchanged.
-    episode_print_interval: int = 1  # Stdout throttling only; 1 prints every episode without affecting logging/metrics.
+    episode_print_interval: int = 10  # Stdout throttling only; CSV episode logging remains unchanged.
     train_print_interval: int = 2_000  # Stdout throttling only; separated from CSV logging and algorithm behavior.
     save_train_representative_trajectories: bool = False  # Train-failure trajectory dumping is optional wall-clock overhead.
     save_train_special_trajectories: bool = False  # Optional train-side special-case trajectory export for post-run analysis.
@@ -69,7 +69,7 @@ class TrainConfig:
     timing_log_interval: int = 2000  # Stdout profiling cadence only; it does not affect training behavior.
     debug_check_incremental_frontier: bool = False  # Debug-only full-recompute compare; default stays off in normal rollout.
     prefer_batch_replay_add: bool = True  # Replay write-path optimization only; transition semantics stay unchanged.
-    learner_debug_stats_every: int = 1  # Metric-sync throttling only; learner updates stay unchanged.
+    learner_debug_stats_every: int = 8  # Metric-sync throttling only; learner updates stay unchanged.
     rows: int = 40
     cols: int = 60
     obs_size: int = 6
@@ -1757,8 +1757,8 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--episode-print-interval",
         type=int,
-        default=1,
-        help="Stdout throttling only; 1 prints every episode and does not affect CSV metrics.",
+        default=10,
+        help="Stdout throttling only; set 1 to print every episode. CSV episode metrics are unaffected.",
     )
     p.add_argument(
         "--train-print-interval",
@@ -1856,7 +1856,7 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--learner-debug-stats-every",
         type=int,
-        default=1,
+        default=8,
         help=(
             "Metric-sync throttling only; returns full learner debug scalars every N learner steps "
             "without changing optimization behavior."
@@ -2348,7 +2348,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         enable_tf32=True,
         strict_reproducibility=False,
         enable_channels_last=False,
-        episode_print_interval=1,
+        episode_print_interval=10,
         train_print_interval=2000,
         save_train_representative_trajectories=False,
         save_train_special_trajectories=False,
@@ -2365,7 +2365,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         timing_log_interval=2000,
         debug_check_incremental_frontier=False,
         prefer_batch_replay_add=True,
-        learner_debug_stats_every=1,
+        learner_debug_stats_every=8,
         rows=40,
         cols=60,
         scan_radius=10,

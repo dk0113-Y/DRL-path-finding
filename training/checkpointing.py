@@ -35,6 +35,7 @@ class CheckpointManager:
         train_episode_idx: int | None = None,
         train_config=None,
         selection_metadata: Dict[str, object] | None = None,
+        include_optimizer_state: bool = True,
     ) -> Dict[str, object]:
         payload: Dict[str, object] = {
             "online_state_dict": online_net.state_dict(),
@@ -46,7 +47,7 @@ class CheckpointManager:
             payload["train_episode_idx"] = int(train_episode_idx)
         if selection_metadata is not None:
             payload["selection_metadata"] = dict(selection_metadata)
-        if learner is not None and hasattr(learner, "optimizer"):
+        if include_optimizer_state and learner is not None and hasattr(learner, "optimizer"):
             payload["optimizer_state_dict"] = learner.optimizer.state_dict()
         return payload
 
@@ -64,6 +65,7 @@ class CheckpointManager:
             env_steps,
             train_episode_idx=train_episode_idx,
             train_config=train_config,
+            include_optimizer_state=True,
         )
         torch.save(payload, self.last_path)
         return self.last_path
@@ -88,6 +90,7 @@ class CheckpointManager:
             train_episode_idx=train_episode_idx,
             train_config=train_config,
             selection_metadata=selection_metadata,
+            include_optimizer_state=True,
         )
         torch.save(payload, path)
         return path
@@ -100,6 +103,7 @@ class CheckpointManager:
         train_episode_idx: int | None = None,
         train_config=None,
         selection_metadata: Dict[str, object] | None = None,
+        include_optimizer_state: bool = False,
     ) -> Path:
         """Save a train-only periodic checkpoint for post-hoc candidate selection."""
 
@@ -111,6 +115,7 @@ class CheckpointManager:
             train_episode_idx=train_episode_idx,
             train_config=train_config,
             selection_metadata=selection_metadata,
+            include_optimizer_state=include_optimizer_state,
         )
         torch.save(payload, path)
         return path

@@ -26,7 +26,7 @@ class DDQNLearnerConfig:
     enable_amp: bool = False
     amp_dtype: str = "fp16"
     enable_timing: bool = False
-    return_debug_stats_every: int = 1
+    return_debug_stats_every: int = 8
 
 
 class DDQNLearner:
