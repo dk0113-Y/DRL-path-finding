@@ -8,6 +8,13 @@ from env.core_radar import RadarSensor
 from env.grid_topology import EMPTY, INVISIBLE, OBSTACLE
 
 
+_NO_CORNER_CHECK = -1_000_000
+_FastInteriorCell = tuple[int, int, int, int, int, int]
+_FastInteriorRay = tuple[_FastInteriorCell, ...]
+_FastBoundaryCell = tuple[int, int, int, int, int, int, int, int]
+_FastBoundaryRay = tuple[int, int, tuple[_FastBoundaryCell, ...]]
+
+
 class LocalObservationModel:
     """
     Compute local radar observation for a 1x1 agent.
@@ -26,9 +33,90 @@ class LocalObservationModel:
         self.local_shape = tuple(self.sensor.local_shape)
         self._rows = int(self.grid.shape[0])
         self._cols = int(self.grid.shape[1])
+        self._scan_radius = int(self.sensor.scan_r)
+        self._block_corner_peeking = bool(getattr(self.sensor, "block_corner_peeking", True))
+        self._interior_r_min = self._scan_radius
+        self._interior_r_max_exclusive = self._rows - self._scan_radius
+        self._interior_c_min = self._scan_radius
+        self._interior_c_max_exclusive = self._cols - self._scan_radius
+        self._fast_interior_rays, self._fast_boundary_rays = self._build_fast_observation_cache()
 
         self.local_snap = np.full(self.local_shape, INVISIBLE, dtype=np.int8)
         self.observe_fast(agent_state)
+
+    def _build_fast_observation_cache(
+        self,
+    ) -> tuple[tuple[_FastInteriorRay, ...], tuple[_FastBoundaryRay, ...]]:
+        center_r, center_c = int(self.center_state[0]), int(self.center_state[1])
+        interior_rays: list[_FastInteriorRay] = []
+        boundary_rays: list[_FastBoundaryRay] = []
+
+        for ray in self.sensor.local_ray_templates:
+            target_dr, target_dc, _, _ = ray[-1]
+            interior_cells: list[_FastInteriorCell] = []
+            boundary_cells: list[_FastBoundaryCell] = []
+            prev_rel_r: int | None = None
+            prev_rel_c: int | None = None
+
+            for rel_r, rel_c, local_r, local_c in ray:
+                rel_r_i = int(rel_r)
+                rel_c_i = int(rel_c)
+                local_r_i = int(local_r)
+                local_c_i = int(local_c)
+
+                side_a_rel_r = _NO_CORNER_CHECK
+                side_a_rel_c = _NO_CORNER_CHECK
+                side_b_rel_r = _NO_CORNER_CHECK
+                side_b_rel_c = _NO_CORNER_CHECK
+                side_a_local_r = _NO_CORNER_CHECK
+                side_a_local_c = _NO_CORNER_CHECK
+                side_b_local_r = _NO_CORNER_CHECK
+                side_b_local_c = _NO_CORNER_CHECK
+
+                if (
+                    self._block_corner_peeking
+                    and prev_rel_r is not None
+                    and abs(rel_r_i - prev_rel_r) == 1
+                    and abs(rel_c_i - prev_rel_c) == 1
+                ):
+                    side_a_rel_r = rel_r_i
+                    side_a_rel_c = prev_rel_c
+                    side_b_rel_r = prev_rel_r
+                    side_b_rel_c = rel_c_i
+                    side_a_local_r = center_r + side_a_rel_r
+                    side_a_local_c = center_c + side_a_rel_c
+                    side_b_local_r = center_r + side_b_rel_r
+                    side_b_local_c = center_c + side_b_rel_c
+
+                interior_cells.append(
+                    (
+                        local_r_i,
+                        local_c_i,
+                        side_a_local_r,
+                        side_a_local_c,
+                        side_b_local_r,
+                        side_b_local_c,
+                    )
+                )
+                boundary_cells.append(
+                    (
+                        rel_r_i,
+                        rel_c_i,
+                        local_r_i,
+                        local_c_i,
+                        side_a_rel_r,
+                        side_a_rel_c,
+                        side_b_rel_r,
+                        side_b_rel_c,
+                    )
+                )
+                prev_rel_r = rel_r_i
+                prev_rel_c = rel_c_i
+
+            interior_rays.append(tuple(interior_cells))
+            boundary_rays.append((int(target_dr), int(target_dc), tuple(boundary_cells)))
+
+        return tuple(interior_rays), tuple(boundary_rays)
 
     def _global_to_local(self, agent_state: Tuple[int, int], gr: int, gc: int) -> Optional[Tuple[int, int]]:
         ar, ac = int(agent_state[0]), int(agent_state[1])
@@ -98,29 +186,75 @@ class LocalObservationModel:
         ar, ac = int(agent_state[0]), int(agent_state[1])
         snap = self.local_snap
         snap.fill(INVISIBLE)
+        grid = self.grid
+        obstacle = OBSTACLE
 
-        for ray in self.sensor.local_ray_templates:
-            target_dr, target_dc, _, _ = ray[-1]
-            tr, tc = ar + target_dr, ac + target_dc
-            if not (0 <= tr < self._rows and 0 <= tc < self._cols):
-                continue
+        if (
+            self._interior_r_min <= ar < self._interior_r_max_exclusive
+            and self._interior_c_min <= ac < self._interior_c_max_exclusive
+        ):
+            local_grid = grid[
+                ar - self._scan_radius:ar + self._scan_radius + 1,
+                ac - self._scan_radius:ac + self._scan_radius + 1,
+            ]
+            if self._block_corner_peeking:
+                for ray in self._fast_interior_rays:
+                    for local_r, local_c, side_a_r, side_a_c, side_b_r, side_b_c in ray:
+                        if (
+                            side_a_r >= 0
+                            and local_grid[side_a_r, side_a_c] == obstacle
+                            and local_grid[side_b_r, side_b_c] == obstacle
+                        ):
+                            break
 
-            prev_rel: Optional[Tuple[int, int]] = None
-            for rel_r, rel_c, local_r, local_c in ray:
-                if prev_rel is not None:
-                    prev_rel_r, prev_rel_c = prev_rel
-                    if self._corner_occluded_global(
-                        (ar + prev_rel_r, ac + prev_rel_c),
-                        (ar + rel_r, ac + rel_c),
+                        value = int(local_grid[local_r, local_c])
+                        if value == obstacle:
+                            snap[local_r, local_c] = OBSTACLE
+                            break
+                        snap[local_r, local_c] = EMPTY
+            else:
+                for ray in self._fast_interior_rays:
+                    for local_r, local_c, _, _, _, _ in ray:
+                        value = int(local_grid[local_r, local_c])
+                        if value == obstacle:
+                            snap[local_r, local_c] = OBSTACLE
+                            break
+                        snap[local_r, local_c] = EMPTY
+            return snap
+
+        rows = self._rows
+        cols = self._cols
+        if self._block_corner_peeking:
+            for target_dr, target_dc, ray in self._fast_boundary_rays:
+                tr, tc = ar + target_dr, ac + target_dc
+                if not (0 <= tr < rows and 0 <= tc < cols):
+                    continue
+
+                for rel_r, rel_c, local_r, local_c, side_a_r, side_a_c, side_b_r, side_b_c in ray:
+                    if (
+                        side_a_r != _NO_CORNER_CHECK
+                        and grid[ar + side_a_r, ac + side_a_c] == obstacle
+                        and grid[ar + side_b_r, ac + side_b_c] == obstacle
                     ):
                         break
 
-                value = int(self.grid[ar + rel_r, ac + rel_c])
-                if value == OBSTACLE:
-                    snap[local_r, local_c] = OBSTACLE
-                    break
-                snap[local_r, local_c] = EMPTY
-                prev_rel = (int(rel_r), int(rel_c))
+                    value = int(grid[ar + rel_r, ac + rel_c])
+                    if value == obstacle:
+                        snap[local_r, local_c] = OBSTACLE
+                        break
+                    snap[local_r, local_c] = EMPTY
+        else:
+            for target_dr, target_dc, ray in self._fast_boundary_rays:
+                tr, tc = ar + target_dr, ac + target_dc
+                if not (0 <= tr < rows and 0 <= tc < cols):
+                    continue
+
+                for rel_r, rel_c, local_r, local_c, _, _, _, _ in ray:
+                    value = int(grid[ar + rel_r, ac + rel_c])
+                    if value == obstacle:
+                        snap[local_r, local_c] = OBSTACLE
+                        break
+                    snap[local_r, local_c] = EMPTY
 
         return snap
 
