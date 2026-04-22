@@ -1614,6 +1614,9 @@ def write_formal_run_artifacts(
         source_of_truth_repo=source_repo,
         insufficient_evidence_flags=flags,
     )
+    timing_summary = benchmark_summary.get("timing_summary")
+    if timing_summary:
+        metric_snapshot["timing_summary"] = timing_summary
     observed_run_contract = build_observed_run_contract(
         run_dir=run_dir,
         recent_train_row=recent_train_row,

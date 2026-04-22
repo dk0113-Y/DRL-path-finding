@@ -186,6 +186,13 @@ class TransitionCollector:
         self.state_build_time = 0.0
         self.policy_forward_time = 0.0
         self.env_step_time = 0.0
+        self.action_apply_time = 0.0
+        self.observe_time = 0.0
+        self.valid_action_refresh_time = 0.0
+        self.cummap_update_time = 0.0
+        self.frontier_fetch_time = 0.0
+        self.shared_artifact_rebuild_time = 0.0
+        self.reward_bookkeeping_time = 0.0
 
         self.reset_episode()
 
@@ -214,6 +221,13 @@ class TransitionCollector:
         if not self._enable_inference_amp:
             return nullcontext()
         return torch.autocast(device_type="cuda", dtype=self._inference_amp_dtype)
+
+    def _timing_start(self) -> float:
+        return time.perf_counter() if self._timing_enabled else 0.0
+
+    def _add_timing(self, attr: str, start: float) -> None:
+        if self._timing_enabled:
+            setattr(self, attr, float(getattr(self, attr)) + (time.perf_counter() - start))
 
     def _episode_seed_for_index(self, episode_idx: int) -> int | None:
         if not self._use_fixed_train_episode_seeds:
@@ -461,36 +475,54 @@ class TransitionCollector:
                 f"Selected action {action_idx} outside the valid-action set {valid_before}. "
                 "This is treated as a defensive invariant violation."
             )
-        else:
-            turn_steps = GridTopology.circular_turn_steps(self._prev_action_idx, int(action_idx))
-            turn_penalty_weight = float(
-                turn_penalty_weight_from_steps(
-                    turn_steps,
-                    weight_45=float(self.cfg.reward_turn_weight_45),
-                    weight_90=float(self.cfg.reward_turn_weight_90),
-                    weight_135=float(self.cfg.reward_turn_weight_135),
-                    weight_180=float(self.cfg.reward_turn_weight_180),
-                )
-            )
-            dr, dc = ACTIONS_8[int(action_idx)]
-            self.agent = (int(self.agent[0] + dr), int(self.agent[1] + dc))
-            self._recent_trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
-            if self._record_episode_artifacts:
-                self._trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
 
-            self.local_snap = self.obs_model.observe_fast(self.agent)
-            self._refresh_valid_action_cache(GridTopology.valid_action_indices_fast(self.free_mask, self.agent))
-            updated, delta_empty, delta_obstacle = self.cum_map.update(self.agent, self.local_snap)
-            if int(updated) != int(delta_empty + delta_obstacle):
-                raise RuntimeError("belief-map update returned inconsistent information-gain counts")
-            self.frontier_u8 = self.cum_map.get_frontier_u8(refresh=False)
-            self._check_incremental_frontier_consistency(context="collector_step_post_update")
-            self._current_shared_artifacts = self.state_adapter.build_shared_step_artifacts(
-                self.cum_map,
-                self.agent,
-                frontier_u8=self.frontier_u8,
+        t0 = self._timing_start()
+        turn_steps = GridTopology.circular_turn_steps(self._prev_action_idx, int(action_idx))
+        turn_penalty_weight = float(
+            turn_penalty_weight_from_steps(
+                turn_steps,
+                weight_45=float(self.cfg.reward_turn_weight_45),
+                weight_90=float(self.cfg.reward_turn_weight_90),
+                weight_135=float(self.cfg.reward_turn_weight_135),
+                weight_180=float(self.cfg.reward_turn_weight_180),
             )
+        )
+        dr, dc = ACTIONS_8[int(action_idx)]
+        self.agent = (int(self.agent[0] + dr), int(self.agent[1] + dc))
+        self._recent_trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
+        if self._record_episode_artifacts:
+            self._trajectory_positions.append((int(self.agent[0]), int(self.agent[1])))
+        self._add_timing("action_apply_time", t0)
 
+        t0 = self._timing_start()
+        self.local_snap = self.obs_model.observe_fast(self.agent)
+        self._add_timing("observe_time", t0)
+
+        t0 = self._timing_start()
+        self._refresh_valid_action_cache(GridTopology.valid_action_indices_fast(self.free_mask, self.agent))
+        self._add_timing("valid_action_refresh_time", t0)
+
+        t0 = self._timing_start()
+        updated, delta_empty, delta_obstacle = self.cum_map.update(self.agent, self.local_snap)
+        self._add_timing("cummap_update_time", t0)
+        if int(updated) != int(delta_empty + delta_obstacle):
+            raise RuntimeError("belief-map update returned inconsistent information-gain counts")
+
+        t0 = self._timing_start()
+        self.frontier_u8 = self.cum_map.get_frontier_u8(refresh=False)
+        self._check_incremental_frontier_consistency(context="collector_step_post_update")
+        self._add_timing("frontier_fetch_time", t0)
+
+        t0 = self._timing_start()
+        self._current_shared_artifacts = self.state_adapter.build_shared_step_artifacts(
+            self.cum_map,
+            self.agent,
+            frontier_u8=self.frontier_u8,
+        )
+        self._add_timing("shared_artifact_rebuild_time", t0)
+
+        t0 = self._timing_start()
+        try:
             recent_revisit = self._is_recent_revisit(self.agent)
             stall_triggered = self._update_stall_streak(delta_empty, delta_obstacle)
             event_summary = self._episode_event_summary
@@ -545,22 +577,24 @@ class TransitionCollector:
                     "This is treated as a defensive environment invariant violation."
                 )
 
-        self.episode_steps += 1
+            self.episode_steps += 1
 
-        if (not done) and (self.episode_steps >= int(self.cfg.max_episode_steps)):
-            done = True
-            done_reason = "max_episode_steps"
-            timeout_breakdown = timeout_penalty_breakdown(self.cfg)
-            add_reward_breakdown(step_breakdown, timeout_breakdown)
-            reward += reward_from_breakdown(timeout_breakdown)
+            if (not done) and (self.episode_steps >= int(self.cfg.max_episode_steps)):
+                done = True
+                done_reason = "max_episode_steps"
+                timeout_breakdown = timeout_penalty_breakdown(self.cfg)
+                add_reward_breakdown(step_breakdown, timeout_breakdown)
+                reward += reward_from_breakdown(timeout_breakdown)
 
-        self.total_env_steps += 1
-        self._episode_reward += reward
-        add_reward_breakdown(self._episode_reward_breakdown, step_breakdown)
+            self.total_env_steps += 1
+            self._episode_reward += reward
+            add_reward_breakdown(self._episode_reward_breakdown, step_breakdown)
 
-        if done and done_reason == "":
-            done_reason = "terminal"
-        return reward, done, done_reason
+            if done and done_reason == "":
+                done_reason = "terminal"
+            return reward, done, done_reason
+        finally:
+            self._add_timing("reward_bookkeeping_time", t0)
 
     @staticmethod
     def _repeat_visit_ratio(cum_map) -> float:
@@ -599,10 +633,19 @@ class TransitionCollector:
         return len(ready)
 
     def get_timing_stats(self) -> Dict[str, float]:
+        total_time_sec = float(self.state_build_time + self.policy_forward_time + self.env_step_time)
         return {
+            "total_time_sec": total_time_sec,
             "state_build_time": float(self.state_build_time),
             "policy_forward_time": float(self.policy_forward_time),
             "env_step_time": float(self.env_step_time),
+            "action_apply_time": float(self.action_apply_time),
+            "observe_time": float(self.observe_time),
+            "valid_action_refresh_time": float(self.valid_action_refresh_time),
+            "cummap_update_time": float(self.cummap_update_time),
+            "frontier_fetch_time": float(self.frontier_fetch_time),
+            "shared_artifact_rebuild_time": float(self.shared_artifact_rebuild_time),
+            "reward_bookkeeping_time": float(self.reward_bookkeeping_time),
         }
 
     def collect_steps(
@@ -733,4 +776,11 @@ class TransitionCollector:
             out["state_build_time"] = float(self.state_build_time)
             out["policy_forward_time"] = float(self.policy_forward_time)
             out["env_step_time"] = float(self.env_step_time)
+            out["action_apply_time"] = float(self.action_apply_time)
+            out["observe_time"] = float(self.observe_time)
+            out["valid_action_refresh_time"] = float(self.valid_action_refresh_time)
+            out["cummap_update_time"] = float(self.cummap_update_time)
+            out["frontier_fetch_time"] = float(self.frontier_fetch_time)
+            out["shared_artifact_rebuild_time"] = float(self.shared_artifact_rebuild_time)
+            out["reward_bookkeeping_time"] = float(self.reward_bookkeeping_time)
         return out

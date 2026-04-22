@@ -480,7 +480,15 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
             "state_build_time": "state",
             "policy_forward_time": "policy",
             "env_step_time": "env",
+            "action_apply_time": "action",
+            "observe_time": "observe",
+            "valid_action_refresh_time": "valid",
+            "cummap_update_time": "cummap_update",
+            "frontier_fetch_time": "frontier_fetch",
+            "shared_artifact_rebuild_time": "shared_rebuild",
+            "reward_bookkeeping_time": "reward_book",
         },
+        total_key="total_time_sec",
     )
     if collector_line is not None:
         lines.append(collector_line)
@@ -556,10 +564,23 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
         cum_map.get_timing_stats()
         if cum_map is not None and hasattr(cum_map, "get_timing_stats") else None,
         aliases={
+            "update_time": "update",
+            "local_projection_time": "project",
+            "local_observation_merge_time": "local_merge",
+            "bounds_expand_time": "bounds",
+            "visit_update_time": "visit",
+            "map_merge_time": "map_merge",
+            "frontier_dirty_update_time": "frontier_dirty",
+            "frontier_full_rebuild_time": "frontier_full",
+            "frontier_fetch_time": "frontier_fetch",
+            "frontier_cache_invalidation_time": "frontier_cache",
+            "coverage_update_time": "coverage",
+            "analysis_box_time": "analysis_box",
             "frontier_stats_time": "frontier",
             "domain_extract_time": "domain",
             "aggregate_time": "agg",
         },
+        total_key="total_time_sec",
     )
     if cummap_line is not None:
         lines.append(cummap_line)

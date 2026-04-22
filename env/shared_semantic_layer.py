@@ -273,6 +273,17 @@ class SharedSemanticSnapshot:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _FrontierRecord:
+    frontier_index: int
+    frontier_geometry: SparseMaskGeometry
+    support_geometry: SupportGeometry
+    frontier_anchor_rc: tuple[int, int]
+    delta_r: float
+    delta_c: float
+    entry_width: float
+
+
 @dataclass
 class _UnionFind:
     size: int
@@ -370,9 +381,10 @@ def _sparse_geometry_from_local_mask(
     offset_c0: int,
 ) -> SparseMaskGeometry:
     mask_bool = np.asarray(local_mask, dtype=bool)
-    if not np.any(mask_bool):
-        return SparseMaskGeometry.empty(r0=int(offset_r0), c0=int(offset_c0))
     rows, cols = np.nonzero(mask_bool)
+    count = int(rows.size)
+    if count <= 0:
+        return SparseMaskGeometry.empty(r0=int(offset_r0), c0=int(offset_c0))
     r0 = int(rows.min())
     r1 = int(rows.max()) + 1
     c0 = int(cols.min())
@@ -382,8 +394,69 @@ def _sparse_geometry_from_local_mask(
         r0=int(offset_r0) + r0,
         c0=int(offset_c0) + c0,
         mask=cropped,
-        count=int(np.count_nonzero(cropped)),
+        count=count,
     )
+
+
+def _anchor_rc_from_global_coords(
+    rows: np.ndarray,
+    cols: np.ndarray,
+    *,
+    fallback_r: int,
+    fallback_c: int,
+) -> tuple[int, int]:
+    rows_i32 = np.asarray(rows, dtype=np.int32)
+    cols_i32 = np.asarray(cols, dtype=np.int32)
+    if rows_i32.size <= 0 or cols_i32.size <= 0:
+        return int(fallback_r), int(fallback_c)
+
+    centroid_r = float(np.mean(rows_i32))
+    centroid_c = float(np.mean(cols_i32))
+    dist2 = ((rows_i32.astype(np.float32) - centroid_r) ** 2) + (
+        (cols_i32.astype(np.float32) - centroid_c) ** 2
+    )
+    min_dist2 = float(np.min(dist2))
+    candidates = np.flatnonzero(np.isclose(dist2, min_dist2))
+    if candidates.size <= 1:
+        best_idx = int(candidates[0]) if candidates.size == 1 else int(np.argmin(dist2))
+        return int(rows_i32[best_idx]), int(cols_i32[best_idx])
+
+    order = np.lexsort((cols_i32[candidates], rows_i32[candidates]))
+    best_idx = int(candidates[int(order[0])])
+    return int(rows_i32[best_idx]), int(cols_i32[best_idx])
+
+
+def _sparse_geometry_and_anchor_from_local_mask(
+    local_mask: np.ndarray,
+    *,
+    offset_r0: int,
+    offset_c0: int,
+) -> tuple[SparseMaskGeometry, tuple[int, int]]:
+    mask_bool = np.asarray(local_mask, dtype=bool)
+    rows, cols = np.nonzero(mask_bool)
+    count = int(rows.size)
+    if count <= 0:
+        geometry = SparseMaskGeometry.empty(r0=int(offset_r0), c0=int(offset_c0))
+        return geometry, (int(geometry.r0), int(geometry.c0))
+
+    r0 = int(rows.min())
+    r1 = int(rows.max()) + 1
+    c0 = int(cols.min())
+    c1 = int(cols.max()) + 1
+    cropped = mask_bool[r0:r1, c0:c1]
+    geometry = SparseMaskGeometry(
+        r0=int(offset_r0) + r0,
+        c0=int(offset_c0) + c0,
+        mask=cropped,
+        count=count,
+    )
+    anchor = _anchor_rc_from_global_coords(
+        rows.astype(np.int32, copy=False) + int(offset_r0),
+        cols.astype(np.int32, copy=False) + int(offset_c0),
+        fallback_r=int(geometry.r0),
+        fallback_c=int(geometry.c0),
+    )
+    return geometry, anchor
 
 
 class SharedSemanticLayer:
@@ -426,37 +499,13 @@ class SharedSemanticLayer:
         return box, box_map, unknown_box, frontier_box
 
     @staticmethod
-    def _neighbor_label_stack(labels: np.ndarray) -> np.ndarray:
-        padded = np.pad(np.asarray(labels, dtype=np.int32), 1, mode="constant", constant_values=0)
-        return np.stack(
-            (
-                padded[:-2, 1:-1],
-                padded[2:, 1:-1],
-                padded[1:-1, :-2],
-                padded[1:-1, 2:],
-            ),
-            axis=0,
-        )
-
-    @staticmethod
     def _frontier_anchor_rc(frontier_geometry: SparseMaskGeometry) -> tuple[int, int]:
-        rows = np.asarray(frontier_geometry.rows, dtype=np.int32)
-        cols = np.asarray(frontier_geometry.cols, dtype=np.int32)
-        if rows.size <= 0 or cols.size <= 0:
-            return int(frontier_geometry.r0), int(frontier_geometry.c0)
-
-        centroid_r = float(np.mean(rows))
-        centroid_c = float(np.mean(cols))
-        dist2 = ((rows.astype(np.float32) - centroid_r) ** 2) + ((cols.astype(np.float32) - centroid_c) ** 2)
-        min_dist2 = float(np.min(dist2))
-        candidates = np.flatnonzero(np.isclose(dist2, min_dist2))
-        if candidates.size <= 1:
-            best_idx = int(candidates[0]) if candidates.size == 1 else int(np.argmin(dist2))
-            return int(rows[best_idx]), int(cols[best_idx])
-
-        order = np.lexsort((cols[candidates], rows[candidates]))
-        best_idx = int(candidates[int(order[0])])
-        return int(rows[best_idx]), int(cols[best_idx])
+        return _anchor_rc_from_global_coords(
+            frontier_geometry.rows,
+            frontier_geometry.cols,
+            fallback_r=int(frontier_geometry.r0),
+            fallback_c=int(frontier_geometry.c0),
+        )
 
     @staticmethod
     def _support_local_box_bounds(
@@ -476,11 +525,10 @@ class SharedSemanticLayer:
         local_box_map: np.ndarray,
     ) -> float:
         local_box = np.asarray(local_box_map, dtype=np.int8)
-        known_mask = (local_box != INVISIBLE)
-        known_count = int(np.count_nonzero(known_mask))
+        known_count = int(local_box.size) - int(np.count_nonzero(local_box == INVISIBLE))
         if known_count <= 0:
             return 0.0
-        obstacle_density = float(np.count_nonzero((local_box == OBSTACLE) & known_mask)) / float(known_count)
+        obstacle_density = float(np.count_nonzero(local_box == OBSTACLE)) / float(known_count)
         return float(np.clip(obstacle_density, 0.0, 1.0))
 
     @staticmethod
@@ -500,76 +548,83 @@ class SharedSemanticLayer:
         if frontier_count <= 0 or not np.any(unknown_box):
             return np.zeros_like(frontier_labels, dtype=np.int32), {}
 
-        neighbor_frontier_labels = SharedSemanticLayer._neighbor_label_stack(frontier_labels)
-        seed_unknown_mask = np.asarray(unknown_box, dtype=bool) & np.any(neighbor_frontier_labels > 0, axis=0)
-        if not np.any(seed_unknown_mask):
+        unknown_labels, unknown_count = _label_components_2d(unknown_box, connectivity=4)
+        if unknown_count <= 0:
+            return np.zeros_like(frontier_labels, dtype=np.int32), {}
+
+        # Equivalent to frontier-seeded propagation: a 4-connected unknown
+        # component belongs to the union of every adjacent frontier label.
+        component_frontier_pairs = SharedSemanticLayer._component_frontier_pairs(
+            unknown_labels,
+            frontier_labels,
+        )
+        if component_frontier_pairs.size <= 0:
             return np.zeros_like(frontier_labels, dtype=np.int32), {}
 
         union_find = _UnionFind(frontier_count)
-        owner = np.zeros_like(frontier_labels, dtype=np.int32)
-        queue: deque[tuple[int, int]] = deque()
-        active_frontier_labels: set[int] = set()
+        component_first_frontier = np.zeros(int(unknown_count) + 1, dtype=np.int32)
+        idx = 0
+        pair_count = int(component_frontier_pairs.shape[0])
+        while idx < pair_count:
+            component_label = int(component_frontier_pairs[idx, 0])
+            root = int(component_frontier_pairs[idx, 1])
+            component_first_frontier[component_label] = root
+            idx += 1
+            while idx < pair_count and int(component_frontier_pairs[idx, 0]) == component_label:
+                root = union_find.union(root, int(component_frontier_pairs[idx, 1]))
+                idx += 1
 
-        # Unified frontier-first unknown grouping:
-        # frontier labels seed adjacent unknown cells, then a single multi-source
-        # propagation expands through unknown space and unions frontier labels
-        # whenever their propagation waves meet.
-        seed_rows, seed_cols = np.nonzero(seed_unknown_mask)
-        for seed_r, seed_c in zip(seed_rows.tolist(), seed_cols.tolist()):
-            labels = np.asarray(neighbor_frontier_labels[:, seed_r, seed_c], dtype=np.int32)
-            labels = labels[labels > 0]
-            if labels.size <= 0:
-                continue
-            unique_labels = np.unique(labels)
-            root = int(unique_labels[0])
-            active_frontier_labels.add(root)
-            for label in unique_labels[1:].tolist():
-                active_frontier_labels.add(int(label))
-                root = union_find.union(root, int(label))
-            root = union_find.find(root)
-            if owner[seed_r, seed_c] == 0:
-                owner[seed_r, seed_c] = root
-                queue.append((int(seed_r), int(seed_c)))
-            else:
-                owner[seed_r, seed_c] = union_find.union(int(owner[seed_r, seed_c]), root)
+        component_root_lut = np.zeros(int(unknown_count) + 1, dtype=np.int32)
+        active_components = np.unique(component_frontier_pairs[:, 0])
+        for component_label in active_components.tolist():
+            first_frontier = int(component_first_frontier[int(component_label)])
+            if first_frontier > 0:
+                component_root_lut[int(component_label)] = int(union_find.find(first_frontier))
+        owner = component_root_lut[unknown_labels]
 
-        while queue:
-            r, c = queue.popleft()
-            current_root = union_find.find(int(owner[r, c]))
-            owner[r, c] = current_root
-            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                nr = r + dr
-                nc = c + dc
-                if nr < 0 or nr >= int(unknown_box.shape[0]) or nc < 0 or nc >= int(unknown_box.shape[1]):
-                    continue
-                if not bool(unknown_box[nr, nc]):
-                    continue
-                neighbor_owner = int(owner[nr, nc])
-                if neighbor_owner <= 0:
-                    owner[nr, nc] = current_root
-                    queue.append((int(nr), int(nc)))
-                    continue
-                neighbor_root = union_find.find(neighbor_owner)
-                if neighbor_root != current_root:
-                    current_root = union_find.union(current_root, neighbor_root)
-                    owner[r, c] = current_root
-
-        visited = (owner > 0)
-        if not np.any(visited):
-            return owner, {}
-
-        lut = np.arange(int(frontier_count) + 1, dtype=np.int32)
-        for label in active_frontier_labels:
-            lut[int(label)] = int(union_find.find(int(label)))
-        owner[visited] = lut[owner[visited]]
-
+        active_frontier_labels = np.unique(component_frontier_pairs[:, 1])
         root_to_frontier_labels: dict[int, list[int]] = {}
-        for label in sorted(active_frontier_labels):
-            root = int(lut[int(label)])
+        for label in active_frontier_labels.tolist():
+            root = int(union_find.find(int(label)))
             if root <= 0:
                 continue
             root_to_frontier_labels.setdefault(root, []).append(int(label))
         return owner, root_to_frontier_labels
+
+    @staticmethod
+    def _component_frontier_pairs(
+        unknown_labels: np.ndarray,
+        frontier_labels: np.ndarray,
+    ) -> np.ndarray:
+        pair_chunks: list[np.ndarray] = []
+
+        def append_pairs(component_view: np.ndarray, frontier_view: np.ndarray) -> None:
+            mask = (component_view > 0) & (frontier_view > 0)
+            if not np.any(mask):
+                return
+            pair_chunks.append(
+                np.column_stack(
+                    (
+                        component_view[mask],
+                        frontier_view[mask],
+                    )
+                ).astype(np.int32, copy=False)
+            )
+
+        append_pairs(unknown_labels[1:, :], frontier_labels[:-1, :])
+        append_pairs(unknown_labels[:-1, :], frontier_labels[1:, :])
+        append_pairs(unknown_labels[:, 1:], frontier_labels[:, :-1])
+        append_pairs(unknown_labels[:, :-1], frontier_labels[:, 1:])
+
+        if len(pair_chunks) <= 0:
+            return np.zeros((0, 2), dtype=np.int32)
+
+        pairs = np.concatenate(pair_chunks, axis=0)
+        if pairs.shape[0] > 1:
+            pairs = np.unique(pairs, axis=0)
+            order = np.lexsort((pairs[:, 1], pairs[:, 0]))
+            pairs = pairs[order]
+        return np.asarray(pairs, dtype=np.int32)
 
     def analyze(
         self,
@@ -620,7 +675,7 @@ class SharedSemanticLayer:
             if not np.any(frontier_local):
                 continue
 
-            frontier_geometry = _sparse_geometry_from_local_mask(
+            frontier_geometry, frontier_anchor_rc = _sparse_geometry_and_anchor_from_local_mask(
                 frontier_local,
                 offset_r0=int(analysis_box.r0) + int(local_r0),
                 offset_c0=int(analysis_box.c0) + int(local_c0),
@@ -652,21 +707,20 @@ class SharedSemanticLayer:
                 support_obstacle_density=float(support_obstacle_density),
             )
 
-            frontier_anchor_rc = self._frontier_anchor_rc(frontier_geometry)
             delta_r = float(int(frontier_anchor_rc[0]) - int(agent_arr[0]))
             delta_c = float(int(frontier_anchor_rc[1]) - int(agent_arr[1]))
-            frontier_records[int(frontier_label)] = {
-                "frontier_index": int(frontier_label) - 1,
-                "frontier_geometry": frontier_geometry,
-                "support_geometry": support_geometry,
-                "frontier_anchor_rc": tuple(int(v) for v in frontier_anchor_rc),
-                "delta_r": float(delta_r),
-                "delta_c": float(delta_c),
-                "entry_width": float(frontier_geometry.count),
-            }
+            frontier_records[int(frontier_label)] = _FrontierRecord(
+                frontier_index=int(frontier_label) - 1,
+                frontier_geometry=frontier_geometry,
+                support_geometry=support_geometry,
+                frontier_anchor_rc=tuple(int(v) for v in frontier_anchor_rc),
+                delta_r=float(delta_r),
+                delta_c=float(delta_c),
+                entry_width=float(frontier_geometry.count),
+            )
 
         accessible_blocks: list[UnknownBlock] = []
-        for root in sorted(int(v) for v in np.unique(unknown_owner[unknown_owner > 0]).tolist()):
+        for root in sorted(int(v) for v in root_to_frontier_labels):
             frontier_labels_for_root = [
                 int(label)
                 for label in root_to_frontier_labels.get(int(root), [])
@@ -684,19 +738,19 @@ class SharedSemanticLayer:
                 offset_r0=int(analysis_box.r0),
                 offset_c0=int(analysis_box.c0),
             )
-            block_index = min(int(frontier_records[label]["frontier_index"]) for label in frontier_labels_for_root)
+            block_index = min(int(frontier_records[label].frontier_index) for label in frontier_labels_for_root)
             frontier_clusters = tuple(
                 sorted(
                     (
                         FrontierCluster(
-                            frontier_index=int(frontier_records[label]["frontier_index"]),
+                            frontier_index=int(frontier_records[label].frontier_index),
                             block_index=int(block_index),
-                            frontier_geometry=frontier_records[label]["frontier_geometry"],
-                            support_geometry=frontier_records[label]["support_geometry"],
-                            frontier_anchor_rc=frontier_records[label]["frontier_anchor_rc"],
-                            delta_r=float(frontier_records[label]["delta_r"]),
-                            delta_c=float(frontier_records[label]["delta_c"]),
-                            entry_width=float(frontier_records[label]["entry_width"]),
+                            frontier_geometry=frontier_records[label].frontier_geometry,
+                            support_geometry=frontier_records[label].support_geometry,
+                            frontier_anchor_rc=frontier_records[label].frontier_anchor_rc,
+                            delta_r=float(frontier_records[label].delta_r),
+                            delta_c=float(frontier_records[label].delta_c),
+                            entry_width=float(frontier_records[label].entry_width),
                         )
                         for label in frontier_labels_for_root
                     ),
