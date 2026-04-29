@@ -134,6 +134,177 @@ def _mean_metric(rows: list[Mapping[str, Any]], field_name: str) -> float | None
     return float(statistics.fmean(values))
 
 
+def _metric_values(rows: list[Mapping[str, Any]], field_name: str) -> list[float]:
+    values = []
+    for row in rows:
+        value = _to_float(row.get(field_name))
+        if value is not None:
+            values.append(float(value))
+    return values
+
+
+def _window_metric_stats(rows: list[Mapping[str, Any]], field_name: str) -> dict[str, float | int | None]:
+    values = _metric_values(rows, field_name)
+    if not values:
+        return {
+            "mean": None,
+            "median": None,
+            "std": None,
+            "sample_count": 0,
+        }
+    return {
+        "mean": float(statistics.fmean(values)),
+        "median": float(statistics.median(values)),
+        "std": float(statistics.pstdev(values)),
+        "sample_count": int(len(values)),
+    }
+
+
+def _window_tail_slope_per10k(rows: list[Mapping[str, Any]], field_name: str) -> float | None:
+    points = []
+    for row in rows:
+        env_steps = _to_float(row.get("env_steps"))
+        metric_value = _to_float(row.get(field_name))
+        if env_steps is None or metric_value is None:
+            continue
+        points.append((float(env_steps), float(metric_value)))
+    if len(points) < 2:
+        return None
+    start_env, start_value = points[0]
+    end_env, end_value = points[-1]
+    if end_env <= start_env:
+        return None
+    return float((end_value - start_value) / ((end_env - start_env) / 10000.0))
+
+
+def _candidate_temporal_bucket(distance_from_last: int, checkpoint_interval: int) -> str:
+    interval = int(max(1, checkpoint_interval))
+    if distance_from_last <= interval:
+        return "last_interval"
+    if distance_from_last <= 2 * interval:
+        return "tail_2_intervals"
+    if distance_from_last <= 4 * interval:
+        return "tail_4_intervals"
+    return "earlier_window"
+
+
+def _build_candidate_diagnostics(
+    *,
+    candidate_row: Mapping[str, Any],
+    train_window_rows: list[Mapping[str, Any]],
+    train_score_weights: Mapping[str, float],
+    last_train_env_steps: int,
+    checkpoint_interval: int,
+) -> dict[str, Any]:
+    candidate_step = int(candidate_row.get("candidate_step") or 0)
+    distance_from_last = int(max(0, int(last_train_env_steps) - candidate_step))
+    train_score_components: dict[str, Any] = {}
+    train_window_metrics: dict[str, Any] = {}
+    tail_slope_metrics: dict[str, float | None] = {}
+    for metric_name, field_name in TRAIN_WINDOW_FIELDS.items():
+        weight = float(train_score_weights.get(metric_name, 0.0))
+        z_value = _to_float(candidate_row.get(f"{metric_name}_z"))
+        contribution = None if z_value is None else float(weight * float(z_value))
+        train_score_components[metric_name] = {
+            "raw_value": _to_float(candidate_row.get(metric_name)),
+            "z_score": z_value,
+            "weight": weight,
+            "weighted_contribution": contribution,
+        }
+        train_window_metrics[metric_name] = _window_metric_stats(train_window_rows, field_name)
+        tail_slope_metrics[metric_name] = _window_tail_slope_per10k(train_window_rows, field_name)
+
+    score_value = _to_float(candidate_row.get("selection_score"))
+    std_values = [
+        train_window_metrics[metric_name].get("std")
+        for metric_name in TRAIN_WINDOW_FIELDS
+    ]
+    valid_std = [float(v) for v in std_values if isinstance(v, (int, float))]
+    slope_values = [v for v in tail_slope_metrics.values() if isinstance(v, (int, float))]
+    stability_score = None
+    if valid_std:
+        # Diagnostic-only scalar: lower dispersion + gentler tail slope implies higher stability.
+        mean_std = float(statistics.fmean(valid_std))
+        mean_abs_slope = float(statistics.fmean([abs(float(v)) for v in slope_values])) if slope_values else 0.0
+        stability_score = float(1.0 / (1.0 + mean_std + 0.1 * mean_abs_slope))
+
+    return {
+        "candidate_step": candidate_step,
+        "train_rank": (
+            None
+            if candidate_row.get("selection_rank") is None
+            else int(candidate_row.get("selection_rank") or 0)
+        ),
+        "train_score": score_value,
+        "train_score_component_breakdown": train_score_components,
+        "train_window_metrics": train_window_metrics,
+        "tail_slope_metrics": tail_slope_metrics,
+        "candidate_distance_from_last": distance_from_last,
+        "checkpoint_age": distance_from_last,
+        "temporal_bucket": _candidate_temporal_bucket(distance_from_last, checkpoint_interval),
+        "stability_score": stability_score,
+        "generalization_gap_proxy": None,
+        "generalization_gap_proxy_note": "posthoc_unavailable_before_final_probe",
+        "rank_reversal_flag": None,
+        "rank_reversal_flag_note": "posthoc_unavailable_before_final_probe",
+    }
+
+
+def _build_posthoc_diagnostics_payload(
+    *,
+    output_rows: list[Mapping[str, Any]],
+    window_rows_by_candidate: Mapping[int, list[Mapping[str, Any]]],
+    train_score_weights: Mapping[str, float],
+    train_steps_source: str,
+    train_episodes_source: str,
+    window_env_steps: int,
+    checkpoint_interval: int,
+    candidate_start_step: int,
+    candidate_end_step: int,
+) -> dict[str, Any]:
+    env_values = []
+    for rows in window_rows_by_candidate.values():
+        for row in rows:
+            env_steps = _to_float(row.get("env_steps"))
+            if env_steps is not None:
+                env_values.append(int(env_steps))
+    last_train_env_steps = int(max(env_values)) if env_values else int(candidate_end_step)
+
+    candidate_diagnostics = []
+    for row in output_rows:
+        candidate_step = int(row.get("candidate_step") or 0)
+        candidate_window_rows = window_rows_by_candidate.get(candidate_step, [])
+        candidate_diagnostics.append(
+            _build_candidate_diagnostics(
+                candidate_row=row,
+                train_window_rows=candidate_window_rows,
+                train_score_weights=train_score_weights,
+                last_train_env_steps=last_train_env_steps,
+                checkpoint_interval=checkpoint_interval,
+            )
+        )
+
+    return {
+        "diagnostic_version": "posthoc_diagnostics_v1",
+        "selection_window_config": {
+            "train_steps_source": train_steps_source,
+            "train_episodes_source": train_episodes_source,
+            "window_definition": f"[candidate_step-window_env_steps, candidate_step], window_env_steps={int(window_env_steps)}",
+            "aggregation_method": "mean_for_selection_score; diagnostics additionally include median/std and tail slope",
+            "candidate_step_alignment_rule": (
+                "candidate checkpoints are periodic ckpt_step_<env_steps>.pt filtered by "
+                f"candidate_start_step={int(candidate_start_step)}, candidate_end_step={int(candidate_end_step)}, "
+                f"checkpoint_interval={int(checkpoint_interval)}"
+            ),
+        },
+        "candidate_diagnostics": candidate_diagnostics,
+        "notes": [
+            "Diagnostics fields are non-blocking and must not change selection_score/ranking semantics.",
+            "generalization_gap_proxy and rank_reversal_flag remain null before held-out final_probe outcomes are merged.",
+        ],
+    }
+
+
 def _window_rows(train_step_rows: list[Mapping[str, Any]], start: int, end: int) -> list[Mapping[str, Any]]:
     selected = []
     for row in train_step_rows:
@@ -176,12 +347,14 @@ def select_posthoc_candidates(
         score_weights.update({str(key): float(value) for key, value in weights.items()})
 
     candidates: list[dict[str, Any]] = []
+    candidate_window_rows: dict[int, list[Mapping[str, Any]]] = {}
     for checkpoint in checkpoints:
         step = int(checkpoint["checkpoint_step"])
         if step < int(candidate_start_step) or step > int(candidate_end_step):
             continue
         window_start = max(0, step - int(window_env_steps))
         rows = _window_rows(train_step_rows, window_start, step)
+        candidate_window_rows[int(step)] = list(rows)
         row: dict[str, Any] = {
             "candidate_step": step,
             "checkpoint_path": checkpoint["checkpoint_path"],
@@ -293,6 +466,17 @@ def select_posthoc_candidates(
         "selected_candidate_steps": [int(row["candidate_step"]) for row in selected],
         "top_candidates": [_json_safe(dict(row)) for row in selected],
         "all_candidates": [_json_safe(dict(row)) for row in output_rows],
+        "diagnostics": _build_posthoc_diagnostics_payload(
+            output_rows=output_rows,
+            window_rows_by_candidate=candidate_window_rows,
+            train_score_weights=score_weights,
+            train_steps_source="logs/train_steps.csv",
+            train_episodes_source="logs/train_episodes.csv",
+            window_env_steps=int(window_env_steps),
+            checkpoint_interval=int(checkpoint_interval),
+            candidate_start_step=int(candidate_start_step),
+            candidate_end_step=int(candidate_end_step),
+        ),
     }
     summary_path = logs_dir / "posthoc_selection_summary.json"
     _write_json(summary_path, summary)
