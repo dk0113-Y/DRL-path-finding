@@ -72,6 +72,21 @@ class AdvantageCanvasEncoder(nn.Module):
         )
         self._direction_mask_cache: dict[tuple[int, int, torch.device, torch.dtype], torch.Tensor] = {}
 
+    @staticmethod
+    def _is_inference_tensor(tensor: torch.Tensor) -> bool:
+        if hasattr(torch, "is_inference"):
+            try:
+                return bool(torch.is_inference(tensor))
+            except Exception:
+                pass
+        marker = getattr(tensor, "is_inference", None)
+        if callable(marker):
+            try:
+                return bool(marker())
+            except Exception:
+                return False
+        return False
+
     def _directional_masks(
         self,
         h: int,
@@ -83,6 +98,11 @@ class AdvantageCanvasEncoder(nn.Module):
         key = (int(h), int(w), device, dtype)
         cached = self._direction_mask_cache.get(key)
         if cached is not None:
+            # Greedy action selection runs under inference_mode and may populate this
+            # cache first. Clone once on read to guarantee train-step autograd safety.
+            if self._is_inference_tensor(cached):
+                cached = cached.clone()
+                self._direction_mask_cache[key] = cached
             return cached
 
         center_r = h // 2
@@ -108,6 +128,8 @@ class AdvantageCanvasEncoder(nn.Module):
             mask_sum = torch.clamp(mask.sum(), min=1e-6)
             masks.append((mask / mask_sum).to(dtype=dtype))
         stacked = torch.stack(masks, dim=0)
+        if self._is_inference_tensor(stacked):
+            stacked = stacked.clone()
         self._direction_mask_cache[key] = stacked
         return stacked
 

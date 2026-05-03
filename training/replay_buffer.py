@@ -176,6 +176,21 @@ class ReplayBuffer:
         return self.size
 
     @staticmethod
+    def _is_inference_tensor(tensor: torch.Tensor) -> bool:
+        if hasattr(torch, "is_inference"):
+            try:
+                return bool(torch.is_inference(tensor))
+            except Exception:
+                pass
+        marker = getattr(tensor, "is_inference", None)
+        if callable(marker):
+            try:
+                return bool(marker())
+            except Exception:
+                return False
+        return False
+
+    @staticmethod
     def _as_tensor(x, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
         if isinstance(x, torch.Tensor):
             t = x.detach()
@@ -187,6 +202,10 @@ class ReplayBuffer:
                 t = t.to(device="cpu", dtype=target_dtype)
             elif dtype is not None and t.dtype != dtype:
                 t = t.to(dtype=dtype)
+            # Inference-mode tensors are read-only for autograd graph saves and can
+            # crash learner backward when sampled from replay; clone strips that mode.
+            if ReplayBuffer._is_inference_tensor(t):
+                t = t.clone()
         else:
             t = torch.as_tensor(x, device="cpu")
             if dtype is not None and t.dtype != dtype:
