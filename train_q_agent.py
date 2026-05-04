@@ -1919,6 +1919,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--target-update-interval", type=int, default=1_000)
     p.add_argument("--learning-rate", type=float, default=1.0e-4)
+    p.add_argument("--grad-clip-norm", type=float, default=10.0)
 
     p.add_argument("--epsilon-start", type=float, default=1.0)
     p.add_argument("--epsilon-end", type=float, default=0.03)
@@ -2150,6 +2151,7 @@ def parse_args() -> TrainConfig:
             gamma=args.gamma,
             target_update_interval=20,
             learning_rate=args.learning_rate,
+            grad_clip_norm=args.grad_clip_norm,
             epsilon_start=args.epsilon_start,
             epsilon_end=args.epsilon_end,
             epsilon_decay_steps=max(1, args.epsilon_decay_steps),
@@ -2249,6 +2251,7 @@ def parse_args() -> TrainConfig:
         gamma=args.gamma,
         target_update_interval=args.target_update_interval,
         learning_rate=args.learning_rate,
+        grad_clip_norm=args.grad_clip_norm,
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
         epsilon_decay_steps=max(1, args.epsilon_decay_steps),
