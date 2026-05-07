@@ -913,7 +913,9 @@ def _strict_contract_verdict(
         notes.append("PYTHONHASHSEED is missing; it must be set before interpreter startup for full hash determinism.")
     if not env_vars.get("CUBLAS_WORKSPACE_CONFIG", {}).get("present"):
         notes.append("CUBLAS_WORKSPACE_CONFIG is missing after runtime configuration.")
-    if isinstance(cublas_action, Mapping) and bool(cublas_action.get("set_by_script")):
+    if not isinstance(cublas_action, Mapping):
+        notes.append("CUBLAS_WORKSPACE_CONFIG runtime action was not recorded.")
+    elif bool(cublas_action.get("set_by_script")):
         notes.append("CUBLAS_WORKSPACE_CONFIG was set by the script; exact timing relative to CUDA/CUBLAS initialization is not guaranteed.")
     if bool(config_dict.get("deterministic_warn_only", True)):
         notes.append("deterministic_warn_only is enabled, so nondeterministic operations may warn rather than fail.")
