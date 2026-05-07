@@ -158,6 +158,14 @@ python .\train_q_agent.py --strict-reproducibility
 python .\scripts\check_reproducibility_contract.py .\outputs\<run_dir>\logs\reproducibility_contract.json
 ```
 
+顺序 A/B same-seed 复现实验可使用：
+
+```powershell
+.\scripts\launch_stable_same_seed_ab.ps1 -PythonExecutable "<python>"
+```
+
+该脚本会先启动 A、验证 A 的 contract，再启动 B、验证 B 的 contract；如果 A 失败或 A contract 无效，B 不会启动。A/B 应只由 run name 不同。Metric comparison 仍属于两次 run 完成后的 Codex evidence report 与 GPT review。
+
 正式 run 会在 `logs/reproducibility_contract.json` 记录 argv、后端 readback、环境输入与 RNG policy。它是可选增强项，不替代固定 train episode seed 序列。
 
 实验性快速 CUDA 路径：
