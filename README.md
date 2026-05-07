@@ -145,7 +145,7 @@ python .\train_q_agent.py --device cuda --profile --total-env-steps 24000 --warm
 python .\train_q_agent.py --strict-reproducibility
 ```
 
-该开关会尽量使用 deterministic runtime guard，并在 CUDA 下关闭 `cudnn_benchmark` 与 TF32。它是可选增强项，不替代固定 train episode seed 序列。
+该开关会尽量使用 deterministic runtime guard，并在 CUDA 下关闭 `cudnn_benchmark` 与 TF32。稳定模式同 seed 复现实验应在启动 Python 前设置外部环境变量，例如 `PYTHONHASHSEED=0` 和 `CUBLAS_WORKSPACE_CONFIG=:4096:8`，并保持 AMP / compile / channels_last 关闭。可配合 `--no-enable-tf32`、`--no-enable-cudnn-benchmark` 和默认 `--deterministic-warn-only` 使用；如需让 PyTorch deterministic guard 硬失败，可显式传入 `--no-deterministic-warn-only`。正式 run 会在 `logs/reproducibility_contract.json` 记录 argv、后端 readback、环境输入与 RNG policy。它是可选增强项，不替代固定 train episode seed 序列。
 
 实验性快速 CUDA 路径：
 

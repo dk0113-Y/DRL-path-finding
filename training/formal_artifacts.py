@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import statistics
 import subprocess
 from dataclasses import asdict, is_dataclass
@@ -29,6 +30,7 @@ RUNTIME_ONLY_FIELDS = (
     "enable_cudnn_benchmark",
     "enable_tf32",
     "strict_reproducibility",
+    "deterministic_warn_only",
     "enable_channels_last",
     "generate_plots_on_finish",
     "save_train_representative_trajectories",
@@ -330,6 +332,49 @@ def _git_output(repo_dir: Path, args: list[str]) -> str | None:
         return None
     text = result.stdout.strip()
     return text or None
+
+
+def _path_reference(path: Path, repo_dir: Path, label: str) -> str:
+    try:
+        resolved = path.resolve()
+    except Exception:
+        return str(path)
+    try:
+        rel = resolved.relative_to(repo_dir.resolve())
+        rel_text = rel.as_posix() if rel.as_posix() != "." else "."
+        return f"{label}:{rel_text}"
+    except Exception:
+        return f"{label}:outside_repository"
+
+
+def _sanitize_arg(arg: Any, *, repo_dir: Path, run_dir: Path) -> str:
+    text = str(arg)
+    if not text:
+        return text
+    try:
+        candidate = Path(text)
+    except Exception:
+        return text
+    if not candidate.is_absolute():
+        return text
+    for base, label in ((run_dir, "run_dir"), (repo_dir, "source_repo")):
+        try:
+            rel = candidate.resolve().relative_to(base.resolve())
+        except Exception:
+            continue
+        return f"<{label}>/{rel.as_posix()}"
+    return f"<absolute_path>/{candidate.name}"
+
+
+def _sanitize_argv(raw_argv: list[Any], *, repo_dir: Path, run_dir: Path) -> list[str]:
+    return [_sanitize_arg(arg, repo_dir=repo_dir, run_dir=run_dir) for arg in raw_argv]
+
+
+def _launch_command_from_argv(argv: list[str]) -> str:
+    try:
+        return subprocess.list2cmdline([str(item) for item in argv])
+    except Exception:
+        return " ".join(str(item) for item in argv)
 
 
 def _apply_row_aliases(row: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -790,13 +835,20 @@ def _build_training_dynamics_summary(
 def build_observed_run_contract(
     *,
     run_dir: Path,
+    cfg: Any | None = None,
     recent_train_row: Mapping[str, Any] | None = None,
     final_probe_row: Mapping[str, Any] | None = None,
+    last_checkpoint_env_steps: int | None = None,
+    best_checkpoint_env_steps: int | None = None,
 ) -> dict[str, Any]:
     logs_dir = run_dir / "logs"
+    config_dict = _serialize_config(cfg) or {}
     final_env_steps = _to_scalar((final_probe_row or {}).get("env_steps")) or _to_scalar((recent_train_row or {}).get("env_steps"))
     final_train_episode_idx = _to_scalar((final_probe_row or {}).get("completed_train_episodes")) or _to_scalar((recent_train_row or {}).get("completed_train_episodes"))
     observed_budget_mode = _to_scalar((recent_train_row or {}).get("budget_mode")) or _to_scalar((final_probe_row or {}).get("budget_mode"))
+    final_training_env_steps = _to_scalar((recent_train_row or {}).get("env_steps"))
+    final_probe_winner_env_steps = _to_scalar((final_probe_row or {}).get("env_steps"))
+    final_probe_episode_count = _to_scalar((final_probe_row or {}).get("eval_episodes"))
 
     if final_env_steps is None:
         final_probe_rows = _read_csv_rows(logs_dir / "final_probe.csv")
@@ -810,12 +862,200 @@ def build_observed_run_contract(
         "budget_mode": observed_budget_mode,
         "final_env_steps": final_env_steps,
         "final_train_episode_idx": final_train_episode_idx,
+        "total_env_steps_configured": config_dict.get("total_env_steps"),
+        "final_training_env_steps": final_training_env_steps,
+        "final_probe_winner_env_steps": final_probe_winner_env_steps,
+        "last_checkpoint_env_steps": last_checkpoint_env_steps,
+        "best_checkpoint_env_steps": best_checkpoint_env_steps,
+        "winner_step": final_probe_winner_env_steps,
+        "final_probe_episode_count": final_probe_episode_count,
         "train_episodes_header": _read_csv_header(logs_dir / "train_episodes.csv"),
         "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
         "model_select_eval_header": _read_csv_header(logs_dir / "model_select_eval.csv"),
         "best_recheck_eval_header": _read_csv_header(logs_dir / "best_recheck_eval.csv"),
         "final_probe_header": _read_csv_header(logs_dir / "final_probe.csv"),
     }
+
+
+def _env_value(name: str) -> dict[str, Any]:
+    value = os.environ.get(name)
+    return {
+        "value": value,
+        "present": value is not None,
+    }
+
+
+def _backend_readback_value(runtime_info: Mapping[str, Any], key: str) -> Any:
+    backend = runtime_info.get("backend_readback", {})
+    if not isinstance(backend, Mapping):
+        return None
+    return backend.get(key)
+
+
+def _strict_contract_verdict(
+    *,
+    config_dict: Mapping[str, Any],
+    runtime_info: Mapping[str, Any],
+    env_vars: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, list[str]]:
+    notes: list[str] = []
+    if not bool(config_dict.get("strict_reproducibility")):
+        return "incomplete_contract", ["strict_reproducibility is disabled for this run."]
+
+    deterministic_enabled = _backend_readback_value(runtime_info, "torch.are_deterministic_algorithms_enabled()")
+    cudnn_deterministic = _backend_readback_value(runtime_info, "torch.backends.cudnn.deterministic")
+    cudnn_benchmark = _backend_readback_value(runtime_info, "torch.backends.cudnn.benchmark")
+    cuda_tf32 = _backend_readback_value(runtime_info, "torch.backends.cuda.matmul.allow_tf32")
+    cudnn_tf32 = _backend_readback_value(runtime_info, "torch.backends.cudnn.allow_tf32")
+    cublas_action = _backend_readback_value(runtime_info, "cublas_workspace_config_action")
+
+    if not env_vars.get("PYTHONHASHSEED", {}).get("present"):
+        notes.append("PYTHONHASHSEED is missing; it must be set before interpreter startup for full hash determinism.")
+    if not env_vars.get("CUBLAS_WORKSPACE_CONFIG", {}).get("present"):
+        notes.append("CUBLAS_WORKSPACE_CONFIG is missing after runtime configuration.")
+    if isinstance(cublas_action, Mapping) and bool(cublas_action.get("set_by_script")):
+        notes.append("CUBLAS_WORKSPACE_CONFIG was set by the script; exact timing relative to CUDA/CUBLAS initialization is not guaranteed.")
+    if bool(config_dict.get("deterministic_warn_only", True)):
+        notes.append("deterministic_warn_only is enabled, so nondeterministic operations may warn rather than fail.")
+    if deterministic_enabled is not True:
+        notes.append("torch deterministic algorithms are not confirmed enabled.")
+    if cudnn_deterministic is not True:
+        notes.append("cuDNN deterministic mode is not confirmed enabled.")
+    if cudnn_benchmark is True:
+        notes.append("cuDNN benchmark is enabled.")
+    if cuda_tf32 is True:
+        notes.append("CUDA matmul TF32 is enabled.")
+    if cudnn_tf32 is True:
+        notes.append("cuDNN TF32 is enabled.")
+
+    if notes:
+        return "empirical_same_seed_only", notes
+    return "strict_contract_ready", ["Strict reproducibility inputs and backend readbacks are present for this artifact contract."]
+
+
+def build_reproducibility_contract(
+    *,
+    cfg: Any | None,
+    run_dir: Path,
+    run_mode: str,
+    source_of_truth_repo: str,
+    raw_argv: list[Any] | None = None,
+    runtime_info: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    repo_dir = Path(source_of_truth_repo)
+    run_dir = Path(run_dir)
+    config_dict = _serialize_config(cfg) or {}
+    argv = list(raw_argv or [])
+    sanitized_argv = _sanitize_argv(argv, repo_dir=repo_dir, run_dir=run_dir)
+    env_names = (
+        "PYTHONHASHSEED",
+        "CUBLAS_WORKSPACE_CONFIG",
+        "CUDA_VISIBLE_DEVICES",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+    )
+    env_vars = {name: _env_value(name) for name in env_names}
+    runtime_payload = dict(runtime_info or {})
+    verdict, verdict_notes = _strict_contract_verdict(
+        config_dict=config_dict,
+        runtime_info=runtime_payload,
+        env_vars=env_vars,
+    )
+
+    seed_policy = {
+        "python_random_seed_policy": "set_seed(cfg.seed) calls random.seed(seed) before model/system initialization.",
+        "numpy_seed_policy": "set_seed(cfg.seed) calls numpy.random.seed(seed) before model/system initialization.",
+        "torch_seed_policy": "set_seed(cfg.seed) calls torch.manual_seed(seed) before model/system initialization.",
+        "torch_cuda_seed_policy": "set_seed(cfg.seed) calls torch.cuda.manual_seed_all(seed) when CUDA is available.",
+        "model_initialization_seed_policy": "ExplorationQNetwork construction occurs after set_seed(cfg.seed), so initial weights are controlled by the global torch seed.",
+        "replay_sampling_rng_policy": "ReplayBuffer.sample uses CPU torch.randint from the global torch RNG; no dedicated replay torch.Generator is configured.",
+        "epsilon_action_rng_policy": "TransitionCollector epsilon branch and random-only actions use the global Python random module; no dedicated action RNG is configured.",
+        "train_episode_seed_policy": "When use_fixed_train_episode_seeds is true, train episode maps use fixed_train_episode_seed_base + episode_index - 1.",
+        "final_probe_seed_policy": "When use_fixed_eval_seeds is true, final_probe uses fixed_final_probe_seed_base + episode_index.",
+        "posthoc_candidate_final_probe_seed_policy": "Post-hoc candidate final probes use the final_probe seed policy and the configured fixed_final_probe_seed_base when fixed eval seeds are enabled.",
+    }
+    backend_requested_flags = {
+        "enable_tf32": config_dict.get("enable_tf32"),
+        "enable_cudnn_benchmark": config_dict.get("enable_cudnn_benchmark"),
+        "enable_amp": config_dict.get("enable_amp"),
+        "enable_inference_amp": config_dict.get("enable_inference_amp"),
+        "enable_torch_compile": config_dict.get("enable_torch_compile"),
+        "enable_channels_last": config_dict.get("enable_channels_last"),
+    }
+    backend_readback = runtime_payload.get("backend_readback", {})
+    return {
+        "schema_version": "formal_train_reproducibility_contract/v1",
+        "artifact_type": "reproducibility_contract",
+        "experiment_mode": "formal_train",
+        "generated_at": _now_iso(),
+        "run_name": config_dict.get("run_name"),
+        "run_mode": run_mode,
+        "budget_mode": config_dict.get("budget_mode"),
+        "output_root": config_dict.get("output_root"),
+        "run_dir_reference": _path_reference(run_dir, repo_dir, "source_repo"),
+        "seed": config_dict.get("seed"),
+        "strict_reproducibility": bool(config_dict.get("strict_reproducibility")),
+        "deterministic_algorithms_enabled": _backend_readback_value(runtime_payload, "torch.are_deterministic_algorithms_enabled()"),
+        "deterministic_algorithms_warn_only": config_dict.get("deterministic_warn_only"),
+        "requested_device": runtime_payload.get("requested_device") or config_dict.get("device"),
+        "actual_device": runtime_payload.get("actual_device"),
+        "torch_version": runtime_payload.get("torch_version"),
+        "cuda_availability": runtime_payload.get("cuda_available"),
+        "cuda_version": runtime_payload.get("cuda_version"),
+        "cudnn_version": runtime_payload.get("cudnn_version"),
+        "raw_argv": _json_safe(argv),
+        "raw_argv_sanitized": sanitized_argv,
+        "reconstructed_launch_command": _launch_command_from_argv(sanitized_argv),
+        "cwd_sanitized": _path_reference(Path.cwd(), repo_dir, "source_repo"),
+        "source_git_branch": _git_output(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        "source_git_commit_sha": _git_output(repo_dir, ["rev-parse", "HEAD"]),
+        "python_executable_basename": runtime_payload.get("python_executable_basename"),
+        "determinism_environment_variables": env_vars,
+        "backend_requested_flags": backend_requested_flags,
+        "backend_runtime_readback": backend_readback,
+        "seed_policy": seed_policy,
+        "fixed_seed_fields": {
+            "use_fixed_train_episode_seeds": config_dict.get("use_fixed_train_episode_seeds"),
+            "fixed_train_episode_seed_base": config_dict.get("fixed_train_episode_seed_base"),
+            "use_fixed_eval_seeds": config_dict.get("use_fixed_eval_seeds"),
+            "fixed_final_probe_seed_base": config_dict.get("fixed_final_probe_seed_base"),
+            "use_fixed_model_select_seeds": config_dict.get("use_fixed_model_select_seeds"),
+            "fixed_model_select_seed_base": config_dict.get("fixed_model_select_seed_base"),
+        },
+        "reproducibility_limitations": [
+            "PYTHONHASHSEED can only be fully effective when set before interpreter startup.",
+            "CUBLAS_WORKSPACE_CONFIG should be set before CUDA/CUBLAS use.",
+            "warn_only deterministic mode may warn rather than fail.",
+            "Replay sampling currently uses global torch RNG unless a dedicated generator is implemented.",
+            "Epsilon action selection currently uses global Python random unless a dedicated RNG is implemented.",
+        ],
+        "contract_verdict": verdict,
+        "contract_notes": verdict_notes,
+    }
+
+
+def write_reproducibility_contract(
+    *,
+    cfg: Any | None,
+    run_dir: Path,
+    run_mode: str,
+    source_of_truth_repo: str,
+    raw_argv: list[Any] | None = None,
+    runtime_info: Mapping[str, Any] | None = None,
+) -> Path:
+    path = Path(run_dir) / "logs" / "reproducibility_contract.json"
+    _write_json(
+        path,
+        build_reproducibility_contract(
+            cfg=cfg,
+            run_dir=run_dir,
+            run_mode=run_mode,
+            source_of_truth_repo=source_of_truth_repo,
+            raw_argv=raw_argv,
+            runtime_info=runtime_info,
+        ),
+    )
+    return path
 
 
 def build_metric_snapshot(
@@ -1126,6 +1366,7 @@ def build_benchmark_summary(
         "total_runtime_sec": total_runtime_sec,
         "total_runtime_hms": total_runtime_hms,
         "runtime_performance_switches": runtime_flags,
+        "reproducibility_contract_json": "logs/reproducibility_contract.json",
         "timing_switches": timing_flags,
         "timing_summary": timing_summary,
         "formal_protocol_revision": protocol_revision,
@@ -1209,6 +1450,7 @@ def build_config_snapshot(
         },
         "comparability": comparability_sections,
         "runtime_only_fields": {field_name: config_dict.get(field_name) for field_name in RUNTIME_ONLY_FIELDS if field_name in config_dict},
+        "reproducibility_contract_json": "logs/reproducibility_contract.json",
         "observed_run_contract": _json_safe(dict(observed_run_contract or {})),
         "evaluation_contract": {
             "protocol_revision": protocol_revision,
@@ -1483,6 +1725,7 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
             _artifact_record(run_dir, "logs/metric_snapshot.json", required=True, category="structured_summary"),
             _artifact_record(run_dir, "logs/benchmark_summary.json", required=True, category="structured_summary"),
             _artifact_record(run_dir, "logs/config_snapshot.json", required=True, category="structured_summary"),
+            _artifact_record(run_dir, "logs/reproducibility_contract.json", required=True, category="structured_summary"),
             _artifact_record(run_dir, "logs/artifact_index.json", required=True, category="structured_summary"),
             _artifact_record(run_dir, "logs/posthoc_selection_summary.json", required=posthoc_required, category="posthoc_selection_summary"),
             _artifact_record(run_dir, "logs/final_probe_summary.json", required=posthoc_required, category="posthoc_final_summary"),
@@ -1563,6 +1806,8 @@ def write_formal_run_artifacts(
     replay: Any | None = None,
     state_adapter: Any | None = None,
     source_of_truth_repo: str | None = None,
+    raw_argv: list[Any] | None = None,
+    runtime_info: Mapping[str, Any] | None = None,
     extra_insufficient_evidence_flags: list[str] | None = None,
     last_eval_row: Mapping[str, Any] | None = None,
     best_eval_row: Mapping[str, Any] | None = None,
@@ -1619,8 +1864,11 @@ def write_formal_run_artifacts(
         metric_snapshot["timing_summary"] = timing_summary
     observed_run_contract = build_observed_run_contract(
         run_dir=run_dir,
+        cfg=cfg,
         recent_train_row=recent_train_row,
         final_probe_row=final_probe_row,
+        last_checkpoint_env_steps=last_checkpoint_env_steps,
+        best_checkpoint_env_steps=best_checkpoint_env_steps,
     )
     config_snapshot = build_config_snapshot(
         cfg=cfg,
@@ -1635,6 +1883,14 @@ def write_formal_run_artifacts(
     benchmark_path = run_dir / "logs" / "benchmark_summary.json"
     config_path = run_dir / "logs" / "config_snapshot.json"
     training_summary_path = run_dir / "logs" / "training_summary.txt"
+    reproducibility_contract_path = write_reproducibility_contract(
+        cfg=cfg,
+        run_dir=run_dir,
+        run_mode=run_mode,
+        source_of_truth_repo=source_repo,
+        raw_argv=raw_argv,
+        runtime_info=runtime_info,
+    )
 
     _write_json(metric_path, metric_snapshot)
     _write_json(benchmark_path, benchmark_summary)
@@ -1661,6 +1917,7 @@ def write_formal_run_artifacts(
         "metric_snapshot": metric_path,
         "benchmark_summary": benchmark_path,
         "config_snapshot": config_path,
+        "reproducibility_contract": reproducibility_contract_path,
         "artifact_index": artifact_index_path,
         "training_summary": training_summary_path,
     }

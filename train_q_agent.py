@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import os
 import random
 import sys
 import time
@@ -51,6 +52,7 @@ class TrainConfig:
     enable_cudnn_benchmark: bool = True  # cuDNN autotune affects kernel selection only; it does not change metrics.
     enable_tf32: bool = True  # TF32 backend toggle is a runtime perf setting only; it is not an algorithm switch.
     strict_reproducibility: bool = False  # Optional runtime-determinism mode; kept non-default because it can reduce throughput.
+    deterministic_warn_only: bool = True  # Strict-mode deterministic guard warns by default unless explicitly disabled.
     enable_channels_last: bool = False  # Tensor-layout toggle only; model math and metrics stay unchanged.
     episode_print_interval: int = 10  # Stdout throttling only; CSV episode logging remains unchanged.
     train_print_interval: int = 2_000  # Stdout throttling only; separated from CSV logging and algorithm behavior.
@@ -185,16 +187,81 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def configure_torch_runtime(cfg: TrainConfig) -> None:
+def _ensure_strict_cublas_workspace_config(cfg: TrainConfig) -> dict[str, object]:
+    existing = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+    if not bool(cfg.strict_reproducibility):
+        return {
+            "name": "CUBLAS_WORKSPACE_CONFIG",
+            "value": existing,
+            "preexisting": existing is not None,
+            "set_by_script": False,
+            "status": "not_required_when_strict_reproducibility_false",
+        }
+    if existing:
+        return {
+            "name": "CUBLAS_WORKSPACE_CONFIG",
+            "value": existing,
+            "preexisting": True,
+            "set_by_script": False,
+            "status": "preexisting",
+        }
+    value = ":4096:8"
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = value
+    return {
+        "name": "CUBLAS_WORKSPACE_CONFIG",
+        "value": value,
+        "preexisting": False,
+        "set_by_script": True,
+        "status": "set_by_script_before_configure_torch_runtime_cuda_checks",
+        "limitation": "torch is already imported; exact timing relative to lower-level CUDA/CUBLAS initialization is not guaranteed.",
+    }
+
+
+def _safe_backend_value(getter) -> object:
+    try:
+        return getter()
+    except Exception as exc:
+        return {"unavailable": type(exc).__name__}
+
+
+def _collect_backend_readback(cfg: TrainConfig, cublas_workspace_action: Mapping[str, object]) -> dict[str, object]:
+    cuda_backend = getattr(torch.backends, "cuda", None)
+    cuda_matmul = getattr(cuda_backend, "matmul", None)
+    cudnn_backend = getattr(torch.backends, "cudnn", None)
+    return {
+        "requested_device": str(cfg.device),
+        "strict_reproducibility": bool(cfg.strict_reproducibility),
+        "deterministic_algorithms_warn_only": bool(cfg.deterministic_warn_only),
+        "cublas_workspace_config_action": dict(cublas_workspace_action),
+        "torch.backends.cudnn.deterministic": _safe_backend_value(
+            lambda: bool(torch.backends.cudnn.deterministic)
+        ) if cudnn_backend is not None and hasattr(cudnn_backend, "deterministic") else None,
+        "torch.backends.cudnn.benchmark": _safe_backend_value(
+            lambda: bool(torch.backends.cudnn.benchmark)
+        ) if cudnn_backend is not None and hasattr(cudnn_backend, "benchmark") else None,
+        "torch.backends.cuda.matmul.allow_tf32": _safe_backend_value(
+            lambda: bool(torch.backends.cuda.matmul.allow_tf32)
+        ) if cuda_matmul is not None and hasattr(cuda_matmul, "allow_tf32") else None,
+        "torch.backends.cudnn.allow_tf32": _safe_backend_value(
+            lambda: bool(torch.backends.cudnn.allow_tf32)
+        ) if cudnn_backend is not None and hasattr(cudnn_backend, "allow_tf32") else None,
+        "torch.are_deterministic_algorithms_enabled()": _safe_backend_value(
+            lambda: bool(torch.are_deterministic_algorithms_enabled())
+        ) if hasattr(torch, "are_deterministic_algorithms_enabled") else None,
+    }
+
+
+def configure_torch_runtime(cfg: TrainConfig) -> dict[str, object]:
     """Apply performance-only backend toggles without changing training/eval semantics."""
+    cublas_workspace_action = _ensure_strict_cublas_workspace_config(cfg)
     strict_mode = bool(cfg.strict_reproducibility)
     if hasattr(torch, "use_deterministic_algorithms"):
-        torch.use_deterministic_algorithms(strict_mode, warn_only=True)
+        torch.use_deterministic_algorithms(strict_mode, warn_only=bool(cfg.deterministic_warn_only))
     if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "deterministic"):
         torch.backends.cudnn.deterministic = strict_mode
 
     if not str(cfg.device).lower().startswith("cuda") or not torch.cuda.is_available():
-        return
+        return _collect_backend_readback(cfg, cublas_workspace_action)
 
     torch.backends.cudnn.benchmark = False if strict_mode else bool(cfg.enable_cudnn_benchmark)
 
@@ -206,6 +273,34 @@ def configure_torch_runtime(cfg: TrainConfig) -> None:
 
     if hasattr(torch.backends.cudnn, "allow_tf32"):
         torch.backends.cudnn.allow_tf32 = False if strict_mode else bool(cfg.enable_tf32)
+
+    return _collect_backend_readback(cfg, cublas_workspace_action)
+
+
+def collect_reproducibility_runtime_info(
+    cfg: TrainConfig,
+    *,
+    backend_readback: Mapping[str, object],
+    online_net: torch.nn.Module | None = None,
+) -> dict[str, object]:
+    actual_device = None
+    if online_net is not None:
+        param = next(online_net.parameters(), None)
+        if param is not None:
+            actual_device = str(param.device)
+    cudnn_version = None
+    if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "version"):
+        cudnn_version = _safe_backend_value(lambda: torch.backends.cudnn.version())
+    return {
+        "requested_device": str(cfg.device),
+        "actual_device": actual_device,
+        "python_executable_basename": Path(sys.executable).name,
+        "torch_version": str(torch.__version__),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_version": getattr(torch.version, "cuda", None),
+        "cudnn_version": cudnn_version,
+        "backend_readback": dict(backend_readback),
+    }
 
 
 class _CompileFallbackWrapper(torch.nn.Module):
@@ -799,13 +894,18 @@ def _build_eval_row(
 def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     run_start_time = time.perf_counter()
     set_seed(int(cfg.seed))
-    configure_torch_runtime(cfg)
+    backend_readback = configure_torch_runtime(cfg)
     run_dir = create_run_dir(cfg)
     logger = CSVMetricLogger(run_dir)
     ckpt = CheckpointManager(run_dir)
     budget_mode = resolve_budget_mode(cfg)
 
     online_net, _, replay, collector, learner, evaluator = build_system(cfg)
+    reproducibility_runtime_info = collect_reproducibility_runtime_info(
+        cfg,
+        backend_readback=backend_readback,
+        online_net=online_net,
+    )
 
     recent_eps: deque[dict] = deque(maxlen=int(max(1, cfg.recent_episode_window)))
     warmup_phase_episodes = 0
@@ -1690,6 +1790,8 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         replay=replay,
         state_adapter=collector.state_adapter,
         source_of_truth_repo=str(Path(__file__).resolve().parent),
+        raw_argv=list(sys.argv),
+        runtime_info=reproducibility_runtime_info,
         model_select_rows=model_select_rows,
         best_recheck_rows=best_recheck_rows,
         best_checkpoint_selection_row=final_best_selection_row,
@@ -1698,6 +1800,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     print(f"metric_snapshot_json: {structured_artifacts['metric_snapshot']}")
     print(f"benchmark_summary_json: {structured_artifacts['benchmark_summary']}")
     print(f"config_snapshot_json: {structured_artifacts['config_snapshot']}")
+    print(f"reproducibility_contract_json: {structured_artifacts['reproducibility_contract']}")
     print(f"artifact_index_json: {structured_artifacts['artifact_index']}")
     print("=" * 72)
 
@@ -1764,6 +1867,15 @@ def parse_args() -> TrainConfig:
         help=(
             "Optional runtime determinism mode: disables cuDNN benchmark / TF32 on CUDA and enables "
             "deterministic algorithm guards where supported. This does not replace fixed episode seeds."
+        ),
+    )
+    p.add_argument(
+        "--deterministic-warn-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Controls warn_only for torch.use_deterministic_algorithms in strict reproducibility mode; "
+            "default warns instead of hard failing."
         ),
     )
     p.add_argument(
@@ -2085,6 +2197,7 @@ def parse_args() -> TrainConfig:
     enable_cudnn_benchmark = bool(args.enable_cudnn_benchmark)
     enable_tf32 = bool(args.enable_tf32)
     strict_reproducibility = bool(args.strict_reproducibility)
+    deterministic_warn_only = bool(args.deterministic_warn_only)
     enable_channels_last = bool(args.enable_channels_last)
     if bool(args.fast_cuda):
         enable_amp = True
@@ -2112,6 +2225,7 @@ def parse_args() -> TrainConfig:
             enable_cudnn_benchmark=enable_cudnn_benchmark,
             enable_tf32=enable_tf32,
             strict_reproducibility=strict_reproducibility,
+            deterministic_warn_only=deterministic_warn_only,
             enable_channels_last=enable_channels_last,
             episode_print_interval=max(0, args.episode_print_interval),
             train_print_interval=max(0, args.train_print_interval),
@@ -2217,6 +2331,7 @@ def parse_args() -> TrainConfig:
         enable_cudnn_benchmark=enable_cudnn_benchmark,
         enable_tf32=enable_tf32,
         strict_reproducibility=strict_reproducibility,
+        deterministic_warn_only=deterministic_warn_only,
         enable_channels_last=enable_channels_last,
         episode_print_interval=max(0, args.episode_print_interval),
         train_print_interval=max(0, args.train_print_interval),
@@ -2371,6 +2486,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         enable_cudnn_benchmark=True,
         enable_tf32=True,
         strict_reproducibility=False,
+        deterministic_warn_only=True,
         enable_channels_last=False,
         episode_print_interval=10,
         train_print_interval=2000,
