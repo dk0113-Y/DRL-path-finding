@@ -28,6 +28,7 @@ param(
     [int]$TrainEveryEnvSteps = 16,
     [int]$FixedTrainEpisodeSeedBase = 20259323,
     [int]$FixedFinalProbeSeedBase = 20261323,
+    [bool]$TrainSideOnlyTuning = $true,
     [switch]$DryRun
 )
 
@@ -81,6 +82,10 @@ $trainArgs = @(
     "--use-fixed-train-episode-seeds",
     "--use-fixed-eval-seeds"
 )
+
+if ($TrainSideOnlyTuning) {
+    $trainArgs += "--train-side-only-tuning"
+}
 
 function Quote-CommandPart {
     param([string]$Value)

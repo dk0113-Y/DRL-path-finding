@@ -20,7 +20,12 @@ from env.advantage_state_builder import AdvantageStateConfig
 from env.shared_semantic_layer import SharedSemanticConfig
 from env.value_state_builder import ValueStateConfig
 from training.checkpointing import CheckpointManager
-from training.collector import CollectorConfig, SEMANTIC_EPISODE_FIELDS, TransitionCollector
+from training.collector import (
+    CollectorConfig,
+    DERIVED_TRAIN_DIAGNOSTIC_FIELDS,
+    SEMANTIC_EPISODE_FIELDS,
+    TransitionCollector,
+)
 from training.evaluator import GreedyEvaluator
 from training.formal_artifacts import write_formal_run_artifacts
 from training.learner import DDQNLearner, DDQNLearnerConfig
@@ -95,6 +100,7 @@ class TrainConfig:
 
     recent_episode_window: int = 100
     formal_protocol: str = POSTHOC_PROTOCOL_NAME
+    train_side_only_tuning: bool = False
     final_greedy_episodes: int = 100
     train_print_interval_episodes: int = 20
     use_fixed_train_episode_seeds: bool = True
@@ -396,6 +402,8 @@ def summarize_recent_episodes(recent: deque[dict]) -> dict:
             out[field] = float("nan")
         for field in REWARD_EVENT_SUMMARY_FIELDS:
             out[field] = float("nan")
+        for field in DERIVED_TRAIN_DIAGNOSTIC_FIELDS:
+            out[field] = float("nan")
         return out
 
     rewards = np.asarray([float(ep["episode_reward"]) for ep in recent], dtype=np.float32)
@@ -418,6 +426,9 @@ def summarize_recent_episodes(recent: deque[dict]) -> dict:
         values = np.asarray([float(ep.get(field, float("nan"))) for ep in recent], dtype=np.float32)
         out[field] = float(np.nanmean(values)) if np.any(np.isfinite(values)) else float("nan")
     for field in REWARD_EVENT_SUMMARY_FIELDS:
+        values = np.asarray([float(ep.get(field, float("nan"))) for ep in recent], dtype=np.float32)
+        out[field] = float(np.nanmean(values)) if np.any(np.isfinite(values)) else float("nan")
+    for field in DERIVED_TRAIN_DIAGNOSTIC_FIELDS:
         values = np.asarray([float(ep.get(field, float("nan"))) for ep in recent], dtype=np.float32)
         out[field] = float(np.nanmean(values)) if np.any(np.isfinite(values)) else float("nan")
     return out
@@ -515,6 +526,7 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"train_print_interval={int(cfg.train_print_interval)} "
         f"log_interval={int(cfg.log_interval)} "
         f"formal_protocol={_formal_protocol(cfg)} "
+        f"train_side_only_tuning={bool(cfg.train_side_only_tuning)} "
         f"formal_final_probe_episodes={int(cfg.final_greedy_episodes)} "
         f"best_checkpoint_selection={bool(cfg.enable_best_checkpoint_selection)} "
         f"posthoc_checkpoint_interval={int(cfg.periodic_checkpoint_interval_env_steps)} "
@@ -927,8 +939,13 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     last_checkpoint_diagnostic_row: dict[str, object] | None = None
     best_checkpoint_path: Path | None = None
     formal_protocol = _formal_protocol(cfg)
-    use_posthoc_protocol = _use_posthoc_protocol(cfg)
-    enable_best_selection = (not use_posthoc_protocol) and bool(cfg.enable_best_checkpoint_selection)
+    train_side_only_tuning = bool(cfg.train_side_only_tuning)
+    use_posthoc_protocol = (not train_side_only_tuning) and _use_posthoc_protocol(cfg)
+    enable_best_selection = (
+        (not train_side_only_tuning)
+        and (not use_posthoc_protocol)
+        and bool(cfg.enable_best_checkpoint_selection)
+    )
     posthoc_candidate_rows: list[dict[str, Any]] = []
     posthoc_final_probe_rows: list[dict[str, object]] = []
     posthoc_selection_result: dict[str, Any] | None = None
@@ -987,6 +1004,11 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
                 **{
                     field: float(ep[field])
                     for field in REWARD_EVENT_SUMMARY_FIELDS
+                    if field in ep
+                },
+                **{
+                    field: float(ep[field])
+                    for field in DERIVED_TRAIN_DIAGNOSTIC_FIELDS
                     if field in ep
                 },
             }
@@ -1105,6 +1127,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             **{
                 f"recent_{field}": float(rec[field])
                 for field in REWARD_EVENT_SUMMARY_FIELDS
+            },
+            **{
+                f"recent_{field}": float(rec[field])
+                for field in DERIVED_TRAIN_DIAGNOSTIC_FIELDS
             },
         }
         if should_log:
@@ -1344,7 +1370,19 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         train_config=cfg,
     )
 
-    if use_posthoc_protocol:
+    best_env_steps: int | None = None
+    best_train_episode_idx: int | None = None
+    probe_source = "skipped_train_side_only_tuning"
+    probe: dict[str, Any] = {}
+    probe_row: dict[str, object] | None = None
+
+    if train_side_only_tuning:
+        print(
+            "[train_side_only_tuning] "
+            "skipping posthoc checkpoint selection, candidate scoring, final_probe evaluation, "
+            "best-vs-last comparison, and automatic winner checkpoint selection."
+        )
+    elif use_posthoc_protocol:
         if int(env_steps) >= posthoc_candidate_start_step and int(env_steps) <= posthoc_candidate_end_step:
             # If the configured final step is itself a scheduled boundary, this
             # is a no-op because the loop already saved it. It never evaluates.
@@ -1485,6 +1523,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             "recent_success_rate": float(recent_for_posthoc["success_rate"]),
             "recent_mean_episode_length": float(recent_for_posthoc["mean_length"]),
             "recent_mean_repeat_visit_ratio": float(recent_for_posthoc["mean_repeat_visit_ratio"]),
+            **{
+                f"recent_{field}": float(recent_for_posthoc[field])
+                for field in DERIVED_TRAIN_DIAGNOSTIC_FIELDS
+            },
         }
         write_posthoc_final_artifacts(
             run_dir=run_dir,
@@ -1668,7 +1710,9 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
                 f"train special trajectories "
                 f"({type(exc).__name__}: {exc})"
             )
-    if bool(cfg.save_final_probe_trajectories):
+    if bool(cfg.save_final_probe_trajectories) and not probe:
+        print("[warning] final probe trajectories requested but skipped by train_side_only_tuning.")
+    if bool(cfg.save_final_probe_trajectories) and probe:
         try:
             trajectory_plot_paths.extend(
                 save_episode_trajectory_plots(
@@ -1724,6 +1768,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
             f"recent_{field}": float(recent_summary[field])
             for field in REWARD_EVENT_SUMMARY_FIELDS
         },
+        **{
+            f"recent_{field}": float(recent_summary[field])
+            for field in DERIVED_TRAIN_DIAGNOSTIC_FIELDS
+        },
     }
     total_runtime_sec = time.perf_counter() - run_start_time
     total_runtime_sec_int = int(round(total_runtime_sec))
@@ -1748,14 +1796,17 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
         f"repeat={recent_summary['mean_repeat_visit_ratio']:.4f}"
     )
 
-    print(
-        "final_probe: "
-        f"source={probe_source}, checkpoint={probe_row['checkpoint_path']}, reward={probe_row['eval_mean_reward']:.4f}, "
-        f"coverage={probe_row['eval_mean_coverage']:.4f}, "
-        f"success={probe_row['eval_success_rate']:.4f}, "
-        f"length={probe_row['eval_mean_episode_length']:.2f}, "
-        f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
-    )
+    if probe_row is None:
+        print("final_probe: skipped intentionally by train_side_only_tuning")
+    else:
+        print(
+            "final_probe: "
+            f"source={probe_source}, checkpoint={probe_row['checkpoint_path']}, reward={probe_row['eval_mean_reward']:.4f}, "
+            f"coverage={probe_row['eval_mean_coverage']:.4f}, "
+            f"success={probe_row['eval_success_rate']:.4f}, "
+            f"length={probe_row['eval_mean_episode_length']:.2f}, "
+            f"blocks={probe_row['eval_mean_accessible_block_count']:.2f}"
+        )
 
     print(f"checkpoint_last: {last_ckpt_path}")
     print(f"checkpoint_best: {best_checkpoint_path}")
@@ -2046,6 +2097,15 @@ def parse_args() -> TrainConfig:
         help="Formal protocol lane. Default uses post-hoc train-side candidate selection.",
     )
     p.add_argument(
+        "--train-side-only-tuning",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Formal tuning mode that preserves train-side logging and endpoint checkpoints while skipping "
+            "posthoc selection, candidate scoring, final_probe, best-vs-last comparison, and automatic winner selection."
+        ),
+    )
+    p.add_argument(
         "--final-greedy-episodes",
         type=int,
         default=100,
@@ -2271,6 +2331,7 @@ def parse_args() -> TrainConfig:
             epsilon_decay_steps=max(1, args.epsilon_decay_steps),
             recent_episode_window=10,
             formal_protocol=str(args.formal_protocol),
+            train_side_only_tuning=bool(args.train_side_only_tuning),
             final_greedy_episodes=1,
             train_print_interval_episodes=max(0, args.train_print_interval_episodes),
             use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),
@@ -2372,6 +2433,7 @@ def parse_args() -> TrainConfig:
         epsilon_decay_steps=max(1, args.epsilon_decay_steps),
         recent_episode_window=max(1, args.recent_episode_window),
         formal_protocol=str(args.formal_protocol),
+        train_side_only_tuning=bool(args.train_side_only_tuning),
         final_greedy_episodes=max(1, args.final_greedy_episodes),
         train_print_interval_episodes=max(0, args.train_print_interval_episodes),
         use_fixed_train_episode_seeds=bool(args.use_fixed_train_episode_seeds),

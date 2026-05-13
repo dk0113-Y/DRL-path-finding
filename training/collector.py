@@ -46,6 +46,43 @@ SEMANTIC_EPISODE_FIELDS = (
     "local_frontier_block_area_mean",
     *VALUE_DIAGNOSTIC_FIELDS,
 )
+DERIVED_TRAIN_DIAGNOSTIC_FIELDS = (
+    "coverage_gain_per_step",
+    "weighted_info_gain_per_step",
+    "zero_info_rate",
+    "recent_revisit_rate",
+    "stall_rate",
+    "turn_burden_rate",
+    "timeout_rate",
+)
+
+
+def _finite_or_nan(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return number if math.isfinite(number) else float("nan")
+
+
+def derive_train_episode_diagnostics(episode_row: dict[str, object]) -> dict[str, float]:
+    length = _finite_or_nan(episode_row.get("episode_length"))
+    denominator = float(max(1.0, length)) if math.isfinite(length) else 1.0
+
+    def rate(field_name: str) -> float:
+        value = _finite_or_nan(episode_row.get(field_name))
+        return float(value / denominator) if math.isfinite(value) else float("nan")
+
+    timeout_flag = _finite_or_nan(episode_row.get("timeout_flag"))
+    return {
+        "coverage_gain_per_step": rate("final_coverage"),
+        "weighted_info_gain_per_step": rate("weighted_info_gain_sum"),
+        "zero_info_rate": rate("zero_info_step_count"),
+        "recent_revisit_rate": rate("recent_revisit_trigger_count"),
+        "stall_rate": rate("stall_trigger_count"),
+        "turn_burden_rate": rate("turn_penalty_weight_sum"),
+        "timeout_rate": timeout_flag if math.isfinite(timeout_flag) else float("nan"),
+    }
 
 
 def _nanmean_or_nan(values: list[float]) -> float:
@@ -755,6 +792,7 @@ class TransitionCollector:
                         **(self._episode_visual_artifacts() if self._record_episode_artifacts else {}),
                     }
                 )
+                episodes[-1].update(derive_train_episode_diagnostics(episodes[-1]))
                 self.total_episodes = completed_episode_idx
                 self.reset_episode()
                 if target_episode_count is not None and episode_done >= target_episode_count:

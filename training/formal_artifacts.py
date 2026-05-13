@@ -78,6 +78,7 @@ FROZEN_COMPARABILITY_FIELDS = (
     "learner_updates_per_iter",
     "train_every_env_steps",
     "formal_protocol",
+    "train_side_only_tuning",
     "final_greedy_episodes",
     "use_fixed_train_episode_seeds",
     "fixed_train_episode_seed_base",
@@ -843,6 +844,7 @@ def build_observed_run_contract(
 ) -> dict[str, Any]:
     logs_dir = run_dir / "logs"
     config_dict = _serialize_config(cfg) or {}
+    train_side_only = bool(config_dict.get("train_side_only_tuning"))
     final_env_steps = _to_scalar((final_probe_row or {}).get("env_steps")) or _to_scalar((recent_train_row or {}).get("env_steps"))
     final_train_episode_idx = _to_scalar((final_probe_row or {}).get("completed_train_episodes")) or _to_scalar((recent_train_row or {}).get("completed_train_episodes"))
     observed_budget_mode = _to_scalar((recent_train_row or {}).get("budget_mode")) or _to_scalar((final_probe_row or {}).get("budget_mode"))
@@ -869,6 +871,10 @@ def build_observed_run_contract(
         "best_checkpoint_env_steps": best_checkpoint_env_steps,
         "winner_step": final_probe_winner_env_steps,
         "final_probe_episode_count": final_probe_episode_count,
+        "train_side_only_tuning": train_side_only,
+        "test_side_evaluation_status": (
+            "skipped_train_side_only_tuning" if train_side_only else "enabled"
+        ),
         "train_episodes_header": _read_csv_header(logs_dir / "train_episodes.csv"),
         "train_steps_header": _read_csv_header(logs_dir / "train_steps.csv"),
         "model_select_eval_header": _read_csv_header(logs_dir / "model_select_eval.csv"),
@@ -1069,8 +1075,9 @@ def build_metric_snapshot(
     last_checkpoint_train_episode_idx: int | None,
     best_checkpoint_env_steps: int | None,
     best_checkpoint_train_episode_idx: int | None,
-    final_probe_source: str,
     source_of_truth_repo: str,
+    final_probe_source: str,
+    train_side_only_tuning: bool = False,
     formal_protocol_revision: str | None = None,
     last_eval_row: Mapping[str, Any] | None = None,
     best_eval_row: Mapping[str, Any] | None = None,
@@ -1082,7 +1089,8 @@ def build_metric_snapshot(
 ) -> dict[str, Any]:
     logs_dir = run_dir / "logs"
     protocol_revision = str(formal_protocol_revision or CURRENT_FORMAL_PROTOCOL_REVISION)
-    posthoc_protocol = _is_posthoc_protocol(protocol_revision)
+    train_side_only = bool(train_side_only_tuning)
+    posthoc_protocol = (not train_side_only) and _is_posthoc_protocol(protocol_revision)
     model_select_csv_rows = _read_csv_rows(logs_dir / "model_select_eval.csv")
     best_recheck_csv_rows = _read_csv_rows(logs_dir / "best_recheck_eval.csv")
     posthoc_selection_summary = _read_json(logs_dir / "posthoc_selection_summary.json")
@@ -1147,7 +1155,30 @@ def build_metric_snapshot(
         "diagnostic_last_checkpoint": diagnostic_last_checkpoint,
     }
 
-    if posthoc_protocol:
+    if train_side_only:
+        checkpoint_validation_summary = {
+            "role": "skipped_train_side_only_tuning",
+            "artifact_source": None,
+            "row_count": 0,
+            "training_during_validation_episodes": 0,
+        }
+        best_checkpoint_selection_summary = {
+            "role": "skipped_train_side_only_tuning",
+            "artifact_source": None,
+            "row_count": 0,
+            "selection_rule": "not_run",
+            "selected_best": {},
+            "best_checkpoint_env_steps": None,
+            "best_checkpoint_train_episode_idx": None,
+            "best_checkpoint_path": None,
+        }
+        diagnostic_eval_rule = "test-side evaluation skipped intentionally by train_side_only_tuning"
+        best_vs_last_summary = {
+            "role": "skipped_train_side_only_tuning",
+            "reason": "train_side_only_tuning",
+            "comparison_mode": "not_run",
+        }
+    elif posthoc_protocol:
         checkpoint_validation_summary = {
             "role": "disabled_in_formal_posthoc_trainselect_v1",
             "artifact_source": None,
@@ -1197,6 +1228,7 @@ def build_metric_snapshot(
         "artifact_type": "metric_snapshot",
         "experiment_mode": "formal_train",
         "formal_protocol_revision": protocol_revision,
+        "train_side_only_tuning": train_side_only,
         "source_of_truth_repo": source_of_truth_repo,
         "run_dir": str(run_dir.resolve()),
         "generated_at": _now_iso(),
@@ -1207,6 +1239,22 @@ def build_metric_snapshot(
         "posthoc_final_probe_summary": posthoc_final_probe_summary if posthoc_protocol else {},
         "formal_selection_manifest": formal_selection_manifest if posthoc_protocol else {},
         "final_probe": final_probe,
+        "skipped_test_side_evaluation": (
+            {
+                "reason": "train_side_only_tuning",
+                "skipped_operations": [
+                    "posthoc_checkpoint_selection",
+                    "posthoc_candidate_scoring",
+                    "posthoc_final_artifacts",
+                    "best_vs_last_test_side_comparison",
+                    "final_probe_evaluation",
+                    "final_probe_csv_summary_writing",
+                    "automatic_winner_checkpoint_selection",
+                ],
+            }
+            if train_side_only
+            else {}
+        ),
         "diagnostic_last_checkpoint_summary": {
             "role": "diagnostic_only_training_endpoint",
             "checkpoint_path": "checkpoints/last.pt",
@@ -1225,21 +1273,25 @@ def build_metric_snapshot(
         "best_checkpoint_train_episode_idx": best_checkpoint_train_episode_idx,
         "final_probe_source": final_probe_source,
         "formal_final_object": {
-            "checkpoint_path": "checkpoints/best.pt",
+            "checkpoint_path": "checkpoints/last.pt" if train_side_only else "checkpoints/best.pt",
             "network_source": final_probe_source,
-            "env_steps": best_checkpoint_env_steps,
-            "train_episode_idx": best_checkpoint_train_episode_idx,
-            "evaluation_artifact": "logs/final_probe.csv",
-            "role": "formal_acceptance_object",
+            "env_steps": last_checkpoint_env_steps if train_side_only else best_checkpoint_env_steps,
+            "train_episode_idx": last_checkpoint_train_episode_idx if train_side_only else best_checkpoint_train_episode_idx,
+            "evaluation_artifact": None if train_side_only else "logs/final_probe.csv",
+            "role": "train_side_tuning_endpoint" if train_side_only else "formal_acceptance_object",
         },
         "automatic_tuning_ranking_basis": {
-            "final_network_outcome": [
-                "success_rate",
-                "coverage",
-                "reward",
-                "episode_length",
-                "repeat_visit_ratio",
-            ],
+            "final_network_outcome": (
+                []
+                if train_side_only
+                else [
+                    "success_rate",
+                    "coverage",
+                    "reward",
+                    "episode_length",
+                    "repeat_visit_ratio",
+                ]
+            ),
             "training_dynamics_quality": [
                 "phase_slope_summary",
                 "recent_mean_reward",
@@ -1425,7 +1477,8 @@ def build_config_snapshot(
     repo_dir = Path(source_of_truth_repo)
     config_dict = _serialize_config(cfg) or {}
     protocol_revision = _formal_protocol_revision(config_dict)
-    posthoc_protocol = _is_posthoc_protocol(protocol_revision)
+    train_side_only = bool(config_dict.get("train_side_only_tuning"))
+    posthoc_protocol = (not train_side_only) and _is_posthoc_protocol(protocol_revision)
     comparability_sections = _comparability_sections(config_dict, protocol_revision)
     flags = list(insufficient_evidence_flags or [])
     if not config_dict:
@@ -1439,6 +1492,7 @@ def build_config_snapshot(
         "run_dir": str(run_dir.resolve()),
         "generated_at": _now_iso(),
         "run_mode": run_mode,
+        "train_side_only_tuning": train_side_only,
         "git_commit_sha": _git_output(repo_dir, ["rev-parse", "HEAD"]),
         "git_branch": _git_output(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
         "full_train_config": config_dict or None,
@@ -1457,23 +1511,37 @@ def build_config_snapshot(
         "evaluation_contract": {
             "protocol_revision": protocol_revision,
             "formal_final_object": {
-                "checkpoint_path": "checkpoints/best.pt",
+                "checkpoint_path": "checkpoints/last.pt" if train_side_only else "checkpoints/best.pt",
                 "acceptance_target": (
+                    "train_side_recent_monitoring_only_no_final_probe"
+                    if train_side_only else
                     "held_out_final_probe_of_posthoc_train_side_selected_winner"
                     if posthoc_protocol
                     else "held_out_final_probe_of_validation_selected_best_checkpoint"
                 ),
-                "role": "formal_acceptance_object",
+                "role": "train_side_tuning_endpoint" if train_side_only else "formal_acceptance_object",
             },
             "training_first_ranking_context": {
                 "role": "first_class_ranking_and_diagnostic_evidence",
                 "note": (
+                    "train_side_only_tuning uses train-side monitoring without posthoc selection or final_probe"
+                    if train_side_only else
                     "post-hoc protocol uses train-side smoothed candidate scoring before a single held-out final probe"
                     if posthoc_protocol
                     else "legacy protocol inspects train dynamics, checkpoint validation, recheck, and best-vs-last drift"
                 ),
             },
             "training_during_eval_rule": (
+                {
+                    "validation_during_training": False,
+                    "recheck_during_training": False,
+                    "final_probe_during_training": False,
+                    "collector_pause_for_eval": False,
+                    "checkpoint_behavior": "save_last_training_endpoint_checkpoint",
+                    "skip_reason": "train_side_only_tuning",
+                }
+                if train_side_only
+                else
                 {
                     "validation_during_training": False,
                     "recheck_during_training": False,
@@ -1515,7 +1583,7 @@ def build_config_snapshot(
             ),
             "model_selection_rule": (
                 None
-                if posthoc_protocol
+                if train_side_only or posthoc_protocol
                 else {
                     "checkpoint_path": "checkpoints/best.pt",
                     "candidate_eval_csv": "logs/model_select_eval.csv",
@@ -1532,36 +1600,48 @@ def build_config_snapshot(
                     "seed_set_role": "checkpoint_validation_only",
                 }
             ),
-            "final_probe_rule": {
-                "source": (
-                    "posthoc_topk_candidates_only"
-                    if posthoc_protocol
-                    else "best_checkpoint_only"
-                ),
-                "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_final_probe_toggle_else_runtime_seed_stream",
-                "seed_toggle_field": "use_fixed_eval_seeds",
-                "seed_toggle_note": "legacy field name retained; it controls final held-out test seeds only",
-                "seed_base_field": "fixed_final_probe_seed_base",
-                "seed_base": config_dict.get("fixed_final_probe_seed_base"),
-                "seed_set_role": "final_formal_test_only",
-                "run_final_greedy_episodes": config_dict.get("final_greedy_episodes"),
-                "posthoc_final_probe_topk": config_dict.get("posthoc_final_probe_topk") if posthoc_protocol else None,
-                "current_default_formal_final_probe_episodes": CURRENT_DEFAULT_FORMAL_FINAL_PROBE_EPISODES,
-                "historical_formal_final_probe_episodes": HISTORICAL_FORMAL_FINAL_PROBE_EPISODES,
-                "strict_comparability_field": "final_greedy_episodes",
-                "protocol_upgrade_note": (
-                    "This protocol does not evaluate during training. It selects up to top-k candidates from smoothed train-side metrics, "
-                    "then runs one held-out final_probe pass over those candidates and promotes the winner to best.pt."
-                    if posthoc_protocol
-                    else "Legacy protocol selects best.pt with dedicated model-selection seeds, then runs final_probe only on best.pt."
-                ),
-                "csv_file": "logs/final_probe.csv",
-                "summary_json": "logs/final_probe_summary.json" if posthoc_protocol else None,
-            },
+            "final_probe_rule": (
+                {
+                    "source": "skipped_train_side_only_tuning",
+                    "run_final_greedy_episodes": 0,
+                    "csv_file": None,
+                    "summary_json": None,
+                    "skip_reason": "train_side_only_tuning",
+                }
+                if train_side_only
+                else {
+                    "source": (
+                        "posthoc_topk_candidates_only"
+                        if posthoc_protocol
+                        else "best_checkpoint_only"
+                    ),
+                    "held_out_seed_rule": "fixed_final_probe_seed_base_when_use_fixed_eval_seeds_final_probe_toggle_else_runtime_seed_stream",
+                    "seed_toggle_field": "use_fixed_eval_seeds",
+                    "seed_toggle_note": "legacy field name retained; it controls final held-out test seeds only",
+                    "seed_base_field": "fixed_final_probe_seed_base",
+                    "seed_base": config_dict.get("fixed_final_probe_seed_base"),
+                    "seed_set_role": "final_formal_test_only",
+                    "run_final_greedy_episodes": config_dict.get("final_greedy_episodes"),
+                    "posthoc_final_probe_topk": config_dict.get("posthoc_final_probe_topk") if posthoc_protocol else None,
+                    "current_default_formal_final_probe_episodes": CURRENT_DEFAULT_FORMAL_FINAL_PROBE_EPISODES,
+                    "historical_formal_final_probe_episodes": HISTORICAL_FORMAL_FINAL_PROBE_EPISODES,
+                    "strict_comparability_field": "final_greedy_episodes",
+                    "protocol_upgrade_note": (
+                        "This protocol does not evaluate during training. It selects up to top-k candidates from smoothed train-side metrics, "
+                        "then runs one held-out final_probe pass over those candidates and promotes the winner to best.pt."
+                        if posthoc_protocol
+                        else "Legacy protocol selects best.pt with dedicated model-selection seeds, then runs final_probe only on best.pt."
+                    ),
+                    "csv_file": "logs/final_probe.csv",
+                    "summary_json": "logs/final_probe_summary.json" if posthoc_protocol else None,
+                }
+            ),
             "diagnostic_last_checkpoint": {
                 "checkpoint_path": "checkpoints/last.pt",
                 "role": "diagnostic_only_training_endpoint",
                 "evaluation_reuse_rule": (
+                    "test-side diagnostic evaluation skipped by train_side_only_tuning"
+                    if train_side_only else
                     "last.pt is not separately held-out probed unless it is one of the post-hoc top-k candidates"
                     if posthoc_protocol
                     else "reuse the 500k checkpoint validation or top-k recheck result when present; do not run a separate final test for last.pt"
@@ -1621,6 +1701,17 @@ def build_config_snapshot(
             },
             "structured_artifacts": (
                 {
+                    "train_episodes": "logs/train_episodes.csv",
+                    "train_steps": "logs/train_steps.csv",
+                    "metric_snapshot": "logs/metric_snapshot.json",
+                    "config_snapshot": "logs/config_snapshot.json",
+                    "reproducibility_contract": "logs/reproducibility_contract.json",
+                    "artifact_index": "logs/artifact_index.json",
+                    "last_checkpoint": "checkpoints/last.pt",
+                }
+                if train_side_only
+                else
+                {
                     "posthoc_candidate_scores": "logs/posthoc_candidate_scores.csv",
                     "posthoc_selection_summary": "logs/posthoc_selection_summary.json",
                     "final_probe": "logs/final_probe.csv",
@@ -1653,6 +1744,9 @@ def _artifact_record(run_dir: Path, relative_path: str, *, required: bool, categ
 def build_artifact_index(run_dir: Path) -> dict[str, Any]:
     plots_dir = run_dir / "plots"
     trajectories_dir = run_dir / "trajectories"
+    config_snapshot = _read_json(run_dir / "logs" / "config_snapshot.json")
+    train_config = config_snapshot.get("full_train_config", {}) if isinstance(config_snapshot, Mapping) else {}
+    train_side_only = bool(train_config.get("train_side_only_tuning")) if isinstance(train_config, Mapping) else False
     plot_records = []
     if plots_dir.exists():
         plot_records.extend(
@@ -1701,6 +1795,8 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
         if path.is_file()
     ]
     posthoc_required = (run_dir / "logs" / "formal_selection_manifest.json").exists()
+    final_probe_required = not train_side_only
+    best_checkpoint_required = not train_side_only
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1714,11 +1810,11 @@ def build_artifact_index(run_dir: Path) -> dict[str, Any]:
             _artifact_record(run_dir, "logs/model_select_eval.csv", required=False, category="legacy_model_selection_csv"),
             _artifact_record(run_dir, "logs/best_recheck_eval.csv", required=False, category="legacy_model_selection_csv"),
             _artifact_record(run_dir, "logs/posthoc_candidate_scores.csv", required=posthoc_required, category="posthoc_selection_csv"),
-            _artifact_record(run_dir, "logs/final_probe.csv", required=True, category="csv"),
+            _artifact_record(run_dir, "logs/final_probe.csv", required=final_probe_required, category="csv"),
             _artifact_record(run_dir, "logs/eval_metrics.csv", required=False, category="legacy_diagnostic_csv"),
         ],
         "checkpoints": [
-            _artifact_record(run_dir, "checkpoints/best.pt", required=True, category="formal_primary_checkpoint"),
+            _artifact_record(run_dir, "checkpoints/best.pt", required=best_checkpoint_required, category="formal_primary_checkpoint"),
             _artifact_record(run_dir, "checkpoints/last.pt", required=True, category="diagnostic_endpoint_checkpoint"),
             *model_select_checkpoint_records,
             *posthoc_checkpoint_records,
@@ -1832,8 +1928,9 @@ def write_formal_run_artifacts(
         last_checkpoint_train_episode_idx=last_checkpoint_train_episode_idx,
         best_checkpoint_env_steps=best_checkpoint_env_steps,
         best_checkpoint_train_episode_idx=best_checkpoint_train_episode_idx,
-        final_probe_source=final_probe_source,
         source_of_truth_repo=source_repo,
+        final_probe_source=final_probe_source,
+        train_side_only_tuning=train_side_only,
         formal_protocol_revision=protocol_revision,
         last_eval_row=last_eval_row,
         best_eval_row=best_eval_row,
