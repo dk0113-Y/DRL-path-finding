@@ -1918,6 +1918,7 @@ def write_formal_run_artifacts(
     source_repo = source_of_truth_repo or str(run_dir.parents[1])
     flags = list(extra_insufficient_evidence_flags or [])
     config_dict = _serialize_config(cfg) or {}
+    train_side_only = bool(config_dict.get("train_side_only_tuning"))
     protocol_revision = _formal_protocol_revision(config_dict)
 
     metric_snapshot = build_metric_snapshot(
