@@ -75,18 +75,17 @@
 - 得到 frontier-cluster local analysis box
 - 只在该局部框中对 **已知侧内容** 做统计
 
-当前 `SupportGeometry` 主要提供：
+当前代码中的 `SupportGeometry` 主要提供：
 
+- `local_box_bounds`
 - `support_free_geometry`
-- `support_area`
-- `support_clearance`
-- `support_complexity`
+- `support_obstacle_density`
 
 其中：
 
-- `support_area` 来自局部框中的已知 free cells 数量
-- `support_clearance / support_complexity` 基于局部框中 known cells 的分布统计
-- 不再把 support 解释为“从前沿向已知方向膨胀出来的一片栅格”
+- `support_free_geometry` 保留局部框中的已知 free-cell 几何，主要用于可视化/调试。
+- `support_obstacle_density` 是当前学习侧使用的局部已知侧障碍密度统计。
+- 不再把 support 解释为“从前沿向已知方向膨胀出来的一片栅格”，也不再把 `support_area / support_clearance / support_complexity` 作为当前 value entry 的学习输入。
 
 ### 3.3 UnknownBlock（未知块）
 
@@ -107,25 +106,26 @@
 
 ### 4.1 Advantage 分支使用的局部表征
 
-由 `AdvantageStateBuilder` 构造 `Advantage Canvas`，当前为 6 通道：
+由 `AdvantageStateBuilder` 构造 `Advantage Canvas`，当前代码定义为 5 通道：
 
-1. `unknown`
-2. `free`
-3. `obstacle`
-4. `main_entry_mask`
-5. `nonmain_entry_mask`
-6. `main_block_fragment_mask`
+1. `free`
+2. `obstacle`
+3. `frontier_block_area_map`
+4. `visit_count_log_norm`
+5. `recent_trajectory_decay`
 
-其中与语义树直接相关的三项是：
+其中：
 
-- `main_entry_mask`：主未知块下的 pure frontier clusters 局部掩码
-- `nonmain_entry_mask`：非主未知块下的 pure frontier clusters 局部掩码
-- `main_block_fragment_mask`：主未知块在当前局部窗口中的 unknown fragment
+- `free` / `obstacle` 来自当前累计 belief map 在雷达局部窗口中的采样。
+- `frontier_block_area_map` 在局部可见 frontier cluster 位置写入其所属 UnknownBlock 的面积占比。
+- `visit_count_log_norm` 是由累计访问计数生成的 log-normalized revisit pressure。
+- `recent_trajectory_decay` 绘制最近轨迹中通向当前状态的历史位置，不重新标记当前 agent 中心格。
 
 注意：
 
 - 当前 advantage 分支画的是 **pure frontier geometry**
 - 不再画旧 support dilation 区
+- 当前代码不包含 `unknown`、`main_entry_mask`、`nonmain_entry_mask` 或 `main_block_fragment_mask` 通道。
 
 ### 4.2 Value 分支使用的层级结构化表征
 
@@ -179,7 +179,7 @@ block-entry 对应关系由层级张量结构表达：`entry_features[block_slot
 输入：
 
 - `advantage_canvas`，shape = `[B, C, H, W]`
-- 当前 `C = 6`
+- 当前 `C = 5`
 
 编码器：`encoders/advantage_encoder.py` 中的 `AdvantageCanvasEncoder`
 
@@ -205,7 +205,7 @@ block-entry 对应关系由层级张量结构表达：`entry_features[block_slot
 语义角色：
 
 - 负责刻画“当前局部一步怎么走更有优势”
-- 输入以局部几何 + 局部前沿簇位置 + 主未知块局部碎片为主
+- 输入以局部 free/obstacle 几何、frontier block-area 投影、累计访问压力和短时轨迹几何为主
 
 ## 5.3 Value 支路
 
@@ -225,28 +225,23 @@ block-entry 对应关系由层级张量结构表达：`entry_features[block_slot
 
 当前结构：
 
-### 第一步：编码 FrontierCluster / SupportGeometry 子层
+### 第一步：编码 UnknownBlock 与 FrontierCluster / SupportGeometry 子层
 
-- 对 `entry_features` 逐 entry 做 MLP 编码，得到 `entry_repr`
-- 对 block 内各 entry 做 attention pooling
-- 同时计算：
-  - weighted summary
-  - masked mean
-  - masked max
+- 对 `block_features` 做 MLP 编码，得到 parent block token。
+- 对 `entry_features` 逐 entry 做 MLP 编码，得到 child entry token。
+- 对同一 block 下的 sibling entries 做 masked self-attention。
 
-### 第二步：融合到 UnknownBlock 层
+### 第二步：parent-conditioned child aggregation
 
-- 将 block 原始特征与 entry 聚合结果拼接
-- 经 `block_fusion` 得到 block representation
+- parent block token 作为 query 聚合其子 entry tokens。
+- child summary 通过 parent-grounded gated update 融入 block representation。
+- 该路径不选择单一代表 entry，也不使用 mean/max fallback pooling 作为学习主路径。
 
 ### 第三步：全局 block 聚合
 
-- 对 blocks 做 block attention
-- 计算：
-  - weighted summary
-  - masked mean
-  - masked max
-- 再经 `state_head` 得到最终 `value_state`
+- 对 block representations 做 masked global block self-attention。
+- 使用 learned state query 对有效 block 做 weighted pooling。
+- 经 `value_state_head` 得到最终 `value_state`。
 
 输出：
 
@@ -309,7 +304,7 @@ block-entry 对应关系由层级张量结构表达：`entry_features[block_slot
   - UnknownBlock
   - FrontierCluster
   - SupportGeometry
-- 局部分支读取局部 canvas，强调 frontier 几何与主未知块局部碎片
+- 局部分支读取局部 canvas，强调局部 free/obstacle、frontier block-area 投影、累计访问压力与短时轨迹
 - 全局分支读取 block-tree 状态，强调未知主干价值与子前沿簇支持信息
 - 最后通过 semantic dueling head 融合为 Q 值
 
@@ -324,7 +319,7 @@ block-entry 对应关系由层级张量结构表达：`entry_features[block_slot
 5. FrontierCluster 改为 8 连通 pure frontier cluster
 6. SupportGeometry 改为 frontier-cluster local box 内的已知侧统计
 7. 表征层移除 per-entry A*
-8. advantage 分支画纯 frontier，不再画旧 support dilation 区
+8. advantage 分支画 pure frontier 的 block-area 投影，并加入累计访问压力与短时轨迹通道；不再画旧 support dilation 区，也不包含旧 main/nonmain entry mask
 9. value 分支 entry 特征显式拆分为 FrontierCluster 几何 + SupportGeometry 统计
 
 ## 9. 推荐阅读顺序

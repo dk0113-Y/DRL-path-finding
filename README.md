@@ -27,6 +27,14 @@
   - `Value State`（Accessible Unknown Block tree / value block tree）
   - `Semantic Dueling Head`
 - 当前网络实际接收的状态张量为 `advantage_canvas`、`value_block_features`、`value_entry_features`、`value_block_mask`、`value_entry_mask`。
+- 当前 `advantage_canvas` 以 `env/advantage_state_builder.py` 为准，为 5 通道局部决策画布：
+  1. `free`
+  2. `obstacle`
+  3. `frontier_block_area_map`
+  4. `visit_count_log_norm`
+  5. `recent_trajectory_decay`
+- 当前 `value_block_features` 为 2 维：`block_area_ratio`、`frontier_cluster_count`。
+- 当前 `value_entry_features` 为 4 维：`delta_r_ratio`、`delta_c_ratio`、`entry_width_ratio`、`support_obstacle_density`。
 - Some legacy files may remain in the repository for historical reference, but they are not part of the current training path.
 
 ## 代码结构
@@ -48,7 +56,7 @@
 
 1. `RandomMapGenerator` 生成随机障碍地图和起点。
 2. `RadarSensor` + `LocalObservationModel` 提供局部观测。
-3. `CumulativeBeliefMap` 维护 agent 的累计认知地图、analysis box 与 revisit/recency 状态。
+3. `CumulativeBeliefMap` 维护 agent 的累计认知地图、analysis box、frontier cache 与访问计数。
 4. `SharedSemanticLayer` 从累计地图提取 accessible blocks 与 entry clusters。
 5. `StateTensorAdapter` 将 advantage canvas 和 value block-tree 转成网络输入张量。
 6. `TransitionCollector` 用 epsilon-greedy 与环境交互，并写入 replay buffer。
