@@ -2095,6 +2095,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--target-update-interval", type=int, default=1_000)
     p.add_argument("--learning-rate", type=float, default=1.0e-4)
+    p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--grad-clip-norm", type=float, default=10.0)
 
     p.add_argument("--epsilon-start", type=float, default=1.0)
@@ -2194,6 +2195,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--scan-radius", type=int, default=10)
     p.add_argument("--max-accessible-blocks", type=int, default=16)
     p.add_argument("--max-entries-per-block", type=int, default=8)
+    p.add_argument("--max-episode-steps", type=int, default=600)
+    p.add_argument("--coverage-stop-threshold", type=float, default=0.95)
     p.add_argument("--obstacle-ratio", type=float, default=0.20)
     p.add_argument(
         "--reward-info-scale",
@@ -2440,6 +2443,7 @@ def parse_args() -> TrainConfig:
         gamma=args.gamma,
         target_update_interval=args.target_update_interval,
         learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
         grad_clip_norm=args.grad_clip_norm,
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
@@ -2474,6 +2478,8 @@ def parse_args() -> TrainConfig:
         scan_radius=args.scan_radius,
         max_accessible_blocks=max(1, args.max_accessible_blocks),
         max_entries_per_block=max(1, args.max_entries_per_block),
+        max_episode_steps=args.max_episode_steps,
+        coverage_stop_threshold=args.coverage_stop_threshold,
         obstacle_ratio=args.obstacle_ratio,
         reward_info_scale=args.reward_info_scale,
         reward_obstacle_weight=args.reward_obstacle_weight,
