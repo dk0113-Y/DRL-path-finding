@@ -42,6 +42,15 @@ def _build_train_args(spec: AblationSpec, run_stage: str, passthrough: list[str]
     return train_args
 
 
+def _validate_stage_train_args(run_stage: str, train_args: list[str]) -> None:
+    if run_stage in {"pilot", "formal"} and _has_option(train_args, "--smoke"):
+        raise ValueError(
+            "--smoke is only allowed with --run-stage smoke. "
+            f"Got run_stage={run_stage!r} with --smoke in passthrough args. "
+            "Use --run-stage smoke for smoke tests, or remove --smoke for pilot/formal runs."
+        )
+
+
 def _parse_train_config(train_args: list[str]) -> train_q_agent.TrainConfig:
     original_argv = sys.argv
     sys.argv = ["train_q_agent.py", *train_args]
@@ -205,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
 
     spec = get_ablation_spec(args.ablation_id)
     train_args = _build_train_args(spec, args.run_stage, passthrough)
+    _validate_stage_train_args(args.run_stage, train_args)
     cfg = _parse_train_config(train_args)
     cfg = _apply_ablation_config(cfg, spec, args.run_stage)
     state_adapter_factory = _state_adapter_factory_for(spec)

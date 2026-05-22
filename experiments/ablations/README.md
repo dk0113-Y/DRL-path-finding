@@ -12,6 +12,13 @@
 - pilot/smoke run 不能进入论文 Results。
 - formal run 才能作为结果候选。
 
+## run-stage 与 smoke 约束
+
+- `smoke`：功能测试，不进入论文 Results。
+- `pilot`：小规模试跑，不进入论文主结果表。
+- `formal`：正式实验，不能携带 `--smoke`。
+- 如果命令中使用 `--run-stage formal` 或 `--run-stage pilot`，不能在 passthrough 参数里再传 `--smoke`；例如 `--run-stage formal -- --smoke` 会被启动器拒绝。
+
 ## F 组
 
 F 组保持 `advantage_canvas shape = [B, 5, H, W]`，按通道名称置零：
