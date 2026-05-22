@@ -7,7 +7,7 @@ import random
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -152,6 +152,12 @@ class TrainConfig:
     reward_turn_weight_135: float = 2.0 / 3.0
     reward_turn_weight_180: float = 1.0
     reward_timeout_penalty: float = 8.0
+
+    ablation_group: str = "none"
+    ablation_id: str = "none"
+    zeroed_advantage_channels: tuple[str, ...] = ()
+    reward_override: dict[str, float] = field(default_factory=dict)
+    run_stage: str = "formal"
 
     special_highcov_timeout_min_coverage: float = 0.85
     special_highcov_timeout_max_plots: int = 5
@@ -543,9 +549,9 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         )
 
 
-def _run_with_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
+def _run_with_startup_summary(cfg: TrainConfig, run_mode: str) -> Path:
     _print_startup_summary(cfg, run_mode=run_mode)
-    run_training(cfg, run_mode=run_mode)
+    return run_training(cfg, run_mode=run_mode)
 
 
 def _format_timing_line(
@@ -700,7 +706,7 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
         print(f"  {line}")
 
 
-def build_system(cfg: TrainConfig):
+def build_system(cfg: TrainConfig, state_adapter_factory=None):
     q_cfg = ExplorationQConfig()
     raw_online_net = ExplorationQNetwork(q_cfg).to(cfg.device)
     raw_online_net = _maybe_to_channels_last(raw_online_net, cfg)
@@ -726,7 +732,10 @@ def build_system(cfg: TrainConfig):
         channels_last_on_cuda=bool(cfg.enable_channels_last),
         enable_timing=bool(cfg.enable_state_adapter_timing),
     )
-    state_adapter = StateTensorAdapter(cfg=state_cfg, device="cpu")
+    if state_adapter_factory is None:
+        state_adapter = StateTensorAdapter(cfg=state_cfg, device="cpu")
+    else:
+        state_adapter = state_adapter_factory(cfg=state_cfg, device="cpu")
 
     replay = ReplayBuffer(
         ReplayBufferConfig(
@@ -903,7 +912,7 @@ def _build_eval_row(
     return row
 
 
-def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
+def run_training(cfg: TrainConfig, *, run_mode: str = "cli", state_adapter_factory=None) -> Path:
     run_start_time = time.perf_counter()
     set_seed(int(cfg.seed))
     backend_readback = configure_torch_runtime(cfg)
@@ -912,7 +921,10 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     ckpt = CheckpointManager(run_dir)
     budget_mode = resolve_budget_mode(cfg)
 
-    online_net, _, replay, collector, learner, evaluator = build_system(cfg)
+    online_net, _, replay, collector, learner, evaluator = build_system(
+        cfg,
+        state_adapter_factory=state_adapter_factory,
+    )
     reproducibility_runtime_info = collect_reproducibility_runtime_info(
         cfg,
         backend_readback=backend_readback,
@@ -1854,6 +1866,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli") -> None:
     print(f"reproducibility_contract_json: {structured_artifacts['reproducibility_contract']}")
     print(f"artifact_index_json: {structured_artifacts['artifact_index']}")
     print("=" * 72)
+    return run_dir
 
 
 def parse_args() -> TrainConfig:
