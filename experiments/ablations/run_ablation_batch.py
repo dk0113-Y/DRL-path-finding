@@ -20,6 +20,7 @@ from train_q_agent import TrainConfig
 
 DEFAULT_BASE_CONFIG = Path("experiment_records/full_method_main/logs/config_snapshot.json")
 DEFAULT_RECORDS_ROOT = Path("experiment_records/ablations")
+DEFAULT_CHECKPOINT_STORE_ROOT = Path("checkpoint_store/ablations")
 
 COPIED_LOG_FILES = (
     "final_probe.csv",
@@ -187,6 +188,10 @@ def _records_logs_dir(records_root: Path, spec: AblationSpec) -> Path:
     return records_root / ablation_slug(spec) / "logs"
 
 
+def _checkpoint_target_path(checkpoint_store_root: Path, spec: AblationSpec) -> Path:
+    return checkpoint_store_root / f"{ablation_slug(spec)}.pt"
+
+
 def _has_existing_curated_logs(logs_dir: Path) -> bool:
     if not logs_dir.exists():
         return False
@@ -259,6 +264,31 @@ def _copy_curated_logs(run_dir: Path, records_root: Path, spec: AblationSpec) ->
     return target_logs, copied, missing
 
 
+def _copy_last_checkpoint(
+    run_dir: Path,
+    checkpoint_store_root: Path,
+    spec: AblationSpec,
+    *,
+    copy_checkpoints: bool,
+) -> tuple[Path | None, Path | None, bool, str | None]:
+    source_path = run_dir / "checkpoints" / "last.pt"
+    target_path = _checkpoint_target_path(checkpoint_store_root, spec)
+    if not copy_checkpoints:
+        return source_path, target_path, False, "disabled_by_user"
+    if not source_path.exists():
+        print(f"[batch] warning: last checkpoint not found at {source_path}")
+        return source_path, target_path, False, "missing_last_checkpoint"
+    if target_path.exists():
+        print(f"[batch] warning: overwriting existing checkpoint target {target_path}")
+    try:
+        checkpoint_store_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+    except Exception as exc:
+        print(f"[batch] warning: failed to copy last checkpoint to {target_path}: {exc}")
+        return source_path, target_path, False, f"copy_failed:{type(exc).__name__}"
+    return source_path, target_path, True, None
+
+
 def _eligibility_verdict(run_stage: str, train_side_only_tuning: bool, missing_artifacts: list[str]) -> str:
     if run_stage != "formal":
         return "unable_to_judge"
@@ -277,6 +307,10 @@ def _write_run_record(
     base_config_path: Path,
     copied: list[str],
     missing: list[str],
+    checkpoint_source: Path | None,
+    checkpoint_store_path: Path | None,
+    checkpoint_copied: bool,
+    checkpoint_copy_reason: str | None,
 ) -> Path:
     config_snapshot = _read_json_if_exists(target_logs / "config_snapshot.json") or {}
     train_config = config_snapshot.get("full_train_config", {})
@@ -295,12 +329,16 @@ def _write_run_record(
         f"- base_config path: {base_config_path}",
         f"- copied artifact list: {', '.join(copied) if copied else 'none'}",
         f"- missing artifact list: {', '.join(missing) if missing else 'none'}",
+        f"- checkpoint_source: {checkpoint_source if checkpoint_source is not None else 'none'}",
+        f"- checkpoint_store_path: {checkpoint_store_path if checkpoint_store_path is not None else 'none'}",
+        f"- checkpoint_copied: {str(checkpoint_copied).lower()}",
+        f"- checkpoint_copy_reason: {checkpoint_copy_reason if checkpoint_copy_reason is not None else 'none'}",
         f"- train_side_only_tuning: {str(train_side_only).lower()}",
         f"- eligibility verdict: {verdict}",
         "",
         "## Notes",
         "",
-        "- Curated logs only; checkpoints and raw outputs are intentionally not copied.",
+        "- Curated logs are copied into experiment_records. last.pt may be copied into checkpoint_store when --copy-checkpoints is enabled. Raw outputs remain under outputs/.",
     ]
     record_path = target_logs.parent / "run_record.md"
     record_path.write_text("\n".join(record) + "\n", encoding="utf-8")
@@ -351,6 +389,9 @@ def _print_dry_run(
         print(f"[batch:dry-run] {spec.short_id}/{spec.ablation_id}")
         print(f"  command: {' '.join(command)}")
         print(f"  records: {_records_logs_dir(Path(args.records_root), spec)}")
+        print("  checkpoint source: outputs/<run_name_timestamp>/checkpoints/last.pt cannot be known before run")
+        print(f"  checkpoint target: {_checkpoint_target_path(Path(args.checkpoint_store_root), spec)}")
+        print(f"  checkpoint copying: {'enabled' if bool(args.copy_checkpoints) else 'disabled'}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -362,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--output-root", type=str, default="outputs")
     parser.add_argument("--records-root", type=Path, default=DEFAULT_RECORDS_ROOT)
+    parser.add_argument("--checkpoint-store-root", type=Path, default=DEFAULT_CHECKPOINT_STORE_ROOT)
+    parser.add_argument("--copy-checkpoints", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--stop-on-failure", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-existing-records", action="store_true", default=False)
@@ -409,6 +452,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             run_dir = _run_child_command(command, repo_root)
             target_logs, copied, missing = _copy_curated_logs(run_dir, args.records_root, spec)
+            checkpoint_source, checkpoint_store_path, checkpoint_copied, checkpoint_copy_reason = _copy_last_checkpoint(
+                run_dir,
+                args.checkpoint_store_root,
+                spec,
+                copy_checkpoints=bool(args.copy_checkpoints),
+            )
             record_path = _write_run_record(
                 target_logs=target_logs,
                 spec=spec,
@@ -417,6 +466,10 @@ def main(argv: list[str] | None = None) -> int:
                 base_config_path=args.base_config,
                 copied=copied,
                 missing=missing,
+                checkpoint_source=checkpoint_source,
+                checkpoint_store_path=checkpoint_store_path,
+                checkpoint_copied=checkpoint_copied,
+                checkpoint_copy_reason=checkpoint_copy_reason,
             )
             print(f"[batch] archived {spec.short_id}/{spec.ablation_id} to {target_logs}")
             print(f"[batch] run_record: {record_path}")
