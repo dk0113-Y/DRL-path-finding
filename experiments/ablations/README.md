@@ -65,3 +65,37 @@ formal R5：
 ```powershell
 python experiments\ablations\run_ablation_train.py --ablation-id R5 --run-stage formal -- --device cuda --total-env-steps 500000 --final-greedy-episodes 100
 ```
+
+## 批量运行
+
+批量入口 `run_ablation_batch.py` 会默认从 `experiment_records/full_method_main/logs/config_snapshot.json` 读取 A Full method 的 `full_train_config`，用它对齐地图、训练预算、学习超参数、seed policy、formal protocol 和 reward 基准参数，然后按顺序调用单个消融启动器。
+
+当前 A config 如果记录了 `train_side_only_tuning=true`，批量 run 也会默认保持该模式。这种模式不会生成完整 final probe，不能直接作为最终论文 Results。后续需要 final_probe 时，应使用完整 formal protocol 重新评估，或通过额外参数显式关闭 train-side-only 模式，例如在确认协议后使用 `--extra-train-args "--no-train-side-only-tuning"`。
+
+真实批量运行要求上述 base config 文件存在并能解析；dry-run 在本地缺少该文件时只会打印 warning 并使用当前 `TrainConfig` 默认值预览命令。
+
+dry-run 推荐组：
+
+```powershell
+python experiments\ablations\run_ablation_batch.py --preset recommended_first_batch --dry-run
+```
+
+正式跑推荐组：
+
+```powershell
+python experiments\ablations\run_ablation_batch.py --preset recommended_first_batch --run-stage formal --device cuda
+```
+
+跑完整 F/R 组：
+
+```powershell
+python experiments\ablations\run_ablation_batch.py --preset full_fr_batch --run-stage formal --device cuda
+```
+
+仅跑指定实验：
+
+```powershell
+python experiments\ablations\run_ablation_batch.py --ablation-ids F1,F4,F5,R5 --run-stage formal --device cuda
+```
+
+每个 run 完成后，脚本只会把 curated logs 复制到 `experiment_records/ablations/<ablation_dir>/logs/`，并更新对应的 `run_record.md`；不会复制 checkpoints、模型权重、完整 outputs、replay buffer、plots 或 debug/profile 文件。
