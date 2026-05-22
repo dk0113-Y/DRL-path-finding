@@ -117,6 +117,10 @@ def list_ablation_specs() -> list[AblationSpec]:
     return list(_SPECS)
 
 
+def ablation_slug(spec: AblationSpec) -> str:
+    return f"{spec.short_id}_ablation_{spec.ablation_id}"
+
+
 def is_channel_ablation(spec: AblationSpec) -> bool:
     return spec.group == "channel_ablation"
 

@@ -13,7 +13,7 @@ from typing import Any, Mapping
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experiments.ablations.ablation_specs import AblationSpec, get_ablation_spec
+from experiments.ablations.ablation_specs import AblationSpec, ablation_slug, get_ablation_spec
 from experiments.ablations.batch_presets import get_batch_preset, list_batch_presets
 from train_q_agent import TrainConfig
 
@@ -166,7 +166,7 @@ def _build_aligned_train_args(
     args.extend(extra_train_args)
     args.extend(["--device", device])
     args.extend(["--output-root", output_root])
-    args.extend(["--run-name", f"ablation_{spec.ablation_id}_{run_stage}"])
+    args.extend(["--run-name", f"{ablation_slug(spec)}_{run_stage}"])
     return args
 
 
@@ -184,7 +184,7 @@ def _command_for_ablation(spec: AblationSpec, run_stage: str, train_args: list[s
 
 
 def _records_logs_dir(records_root: Path, spec: AblationSpec) -> Path:
-    return records_root / f"ablation_{spec.ablation_id}" / "logs"
+    return records_root / ablation_slug(spec) / "logs"
 
 
 def _has_existing_curated_logs(logs_dir: Path) -> bool:

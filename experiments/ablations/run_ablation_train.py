@@ -12,6 +12,7 @@ if __package__ in (None, ""):
 
 from experiments.ablations.ablation_specs import (
     AblationSpec,
+    ablation_slug,
     get_ablation_spec,
     is_channel_ablation,
     is_reward_ablation,
@@ -36,7 +37,7 @@ def _build_train_args(spec: AblationSpec, run_stage: str, passthrough: list[str]
     if run_stage == "smoke" and not _has_option(train_args, "--smoke"):
         train_args.append("--smoke")
     if not _has_option(train_args, "--run-name"):
-        train_args.extend(["--run-name", f"ablation_{spec.ablation_id}_{run_stage}"])
+        train_args.extend(["--run-name", f"{ablation_slug(spec)}_{run_stage}"])
     if not _has_option(train_args, "--output-root"):
         train_args.extend(["--output-root", "outputs"])
     return train_args

@@ -19,6 +19,22 @@
 - `formal`：正式实验，不能携带 `--smoke`。
 - 如果命令中使用 `--run-stage formal` 或 `--run-stage pilot`，不能在 passthrough 参数里再传 `--smoke`；例如 `--run-stage formal -- --smoke` 会被启动器拒绝。
 
+## 命名规则
+
+canonical `ablation_id` 和 `short_id` 保持不变。文件系统 slug 统一为：
+
+```text
+<short_id>_ablation_<canonical_id>
+```
+
+示例：
+
+- F1：`F1_ablation_no_frontier_channel`
+- F5：`F5_ablation_occupancy_only_canvas`
+- R5：`R5_ablation_no_efficiency_penalties`
+
+默认 outputs run_name 使用 `<slug>_<run_stage>`，例如 `F5_ablation_occupancy_only_canvas_formal`。`experiment_records/ablations/<slug>/logs/` 用于归档 curated logs。若后续启用 checkpoint_store 归档，推荐路径为 `checkpoint_store/ablations/<slug>.pt`；checkpoint_store 被 Git 忽略，不应提交模型权重。
+
 ## F 组
 
 F 组保持 `advantage_canvas shape = [B, 5, H, W]`，按通道名称置零：
@@ -40,7 +56,7 @@ R 组只覆盖 `TrainConfig` 中已有的 reward 字段：
 - R5：`no_efficiency_penalties`
 - R6：`sparse_reward_variant`
 
-## 示例命令
+## 单实验示例
 
 列出规格：
 
@@ -68,7 +84,7 @@ python experiments\ablations\run_ablation_train.py --ablation-id R5 --run-stage 
 
 ## 批量运行
 
-批量入口 `run_ablation_batch.py` 会默认从 `experiment_records/full_method_main/logs/config_snapshot.json` 读取 A Full method 的 `full_train_config`，用它对齐地图、训练预算、学习超参数、seed policy、formal protocol 和 reward 基准参数，然后按顺序调用单个消融启动器。
+批量入口 `run_ablation_batch.py` 默认从 `experiment_records/full_method_main/logs/config_snapshot.json` 读取 A Full method 的 `full_train_config`，用它对齐地图、训练预算、学习超参数、seed policy、formal protocol 和 reward 基准参数，然后按顺序调用单个消融启动器。
 
 当前 A config 如果记录了 `train_side_only_tuning=true`，批量 run 也会默认保持该模式。这种模式不会生成完整 final probe，不能直接作为最终论文 Results。后续需要 final_probe 时，应使用完整 formal protocol 重新评估，或通过额外参数显式关闭 train-side-only 模式，例如在确认协议后使用 `--extra-train-args "--no-train-side-only-tuning"`。
 
@@ -98,4 +114,4 @@ python experiments\ablations\run_ablation_batch.py --preset full_fr_batch --run-
 python experiments\ablations\run_ablation_batch.py --ablation-ids F1,F4,F5,R5 --run-stage formal --device cuda
 ```
 
-每个 run 完成后，脚本只会把 curated logs 复制到 `experiment_records/ablations/<ablation_dir>/logs/`，并更新对应的 `run_record.md`；不会复制 checkpoints、模型权重、完整 outputs、replay buffer、plots 或 debug/profile 文件。
+每个 run 完成后，脚本只会把 curated logs 复制到 `experiment_records/ablations/<slug>/logs/`，并更新对应的 `run_record.md`；不会复制 checkpoints、模型权重、完整 outputs、replay buffer、plots 或 debug/profile 文件。

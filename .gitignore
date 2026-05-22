@@ -10,6 +10,10 @@ __pycache__/
 outputs/
 perf_runs/
 tmp_plot_smoke/
+checkpoint_store/
+checkpoint_store/**/*.pt
+checkpoint_store/**/*.pth
+checkpoint_store/**/*.ckpt
 
 experiment_records/**/checkpoints/
 experiment_records/**/*.pt
