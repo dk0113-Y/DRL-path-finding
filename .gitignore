@@ -11,3 +11,11 @@ outputs/
 perf_runs/
 tmp_plot_smoke/
 
+experiment_records/**/checkpoints/
+experiment_records/**/*.pt
+experiment_records/**/*.pth
+experiment_records/**/*.ckpt
+experiment_records/**/replay*/
+experiment_records/**/debug*/
+experiment_records/**/profile*/
+
