@@ -28,6 +28,32 @@ python .\experiments\baselines\run_baseline_batch.py --baseline-id C_baseline_lo
 Formal runs use the same wrapper with `--run-stage formal` and formal training
 budgets.
 
+## Wait For D Then Launch C Pilot
+
+To monitor a running D structural ablation and automatically launch the C pilot
+after D exits and key D artifacts are present:
+
+```powershell
+.\scripts\wait_then_run_c_baseline_pilot.ps1 -Device cuda
+```
+
+Preview without waiting or launching:
+
+```powershell
+.\scripts\wait_then_run_c_baseline_pilot.ps1 -DryRun
+```
+
+If the D process has already exited and the D artifacts are present, use:
+
+```powershell
+.\scripts\wait_then_run_c_baseline_pilot.ps1 -Device cuda -Force
+```
+
+The watcher still launches C through `run_baseline_batch.py`, so pilot logs are
+archived under `experiment_records/baselines/` and the local `last.pt` copy goes
+to `checkpoint_store/baselines/`. Smoke and pilot runs are interface and
+short-training checks only; they cannot enter paper Results.
+
 ## Archive Behavior
 
 `run_baseline_batch.py` calls
