@@ -39,6 +39,22 @@ _SPECS: tuple[AblationSpec, ...] = (
         ),
     ),
     AblationSpec(
+        ablation_id="E_ablation_no_semantic_dual_state_split",
+        short_id="E",
+        group="structural",
+        experiment_id="E",
+        ablation_name="no_semantic_dual_state_split",
+        description="No semantic dual-state split structural ablation",
+        value_replacement_strategy="none",
+        value_tree_enabled=True,
+        notes=(
+            "Structural ablation only; keeps advantage canvas channels.",
+            "Reward overrides are none.",
+            "Value tree tensors remain enabled and are consumed by the E model.",
+            "Replaces SemanticDuelingHead with one fused action-value pathway.",
+        ),
+    ),
+    AblationSpec(
         ablation_id="no_frontier_channel",
         short_id="F1",
         group="channel_ablation",
@@ -155,6 +171,10 @@ def is_reward_ablation(spec: AblationSpec) -> bool:
 
 def is_value_tree_ablation(spec: AblationSpec) -> bool:
     return spec.group in {"structural", "value_tree"} and spec.value_replacement_strategy == "zero_value_state"
+
+
+def is_semantic_split_ablation(spec: AblationSpec) -> bool:
+    return spec.group == "structural" and spec.ablation_name == "no_semantic_dual_state_split"
 
 
 def _alias_map() -> dict[str, AblationSpec]:

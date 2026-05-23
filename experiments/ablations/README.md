@@ -1,117 +1,116 @@
-# F/R 消融实验基础设施
+# Ablation Experiment Infrastructure
 
-本目录只用于 F/R 输入层和配置层消融，不包含 D `no_value_tree`、E `no_semantic_dual_state_split`、C local DDQN baseline，也不包含 classical frontier greedy baseline。
+This directory contains controlled ablation launchers for structural, input/channel, and reward experiments. It does not contain learning baselines such as C `C_baseline_local_state_ddqn`; those stay under `baselines/` and `experiments/baselines/`.
 
-## 设计边界
+## Design Boundaries
 
-- 不复制主工程。
-- 不重写训练系统。
-- F 组只做 `advantage_canvas` 通道置零。
-- R 组只做 reward 参数覆盖。
-- full method 默认训练入口 `train_q_agent.py` 不受影响；只有通过 `experiments/ablations/run_ablation_train.py` 显式启动时才启用消融。
-- pilot/smoke run 不能进入论文 Results。
-- formal run 才能作为结果候选。
+- Do not duplicate the main training system.
+- Do not rewrite environment, replay, collector, learner, or reward semantics except through explicit reward-ablation config overrides.
+- Full method default training through `train_q_agent.py` is unchanged; ablations activate only through `experiments/ablations/run_ablation_train.py`.
+- Smoke and pilot runs are functional checks only and do not enter paper Results.
+- Formal runs are the only result candidates, after artifact and protocol review.
 
-## run-stage 与 smoke 约束
+## Experiment Groups
 
-- `smoke`：功能测试，不进入论文 Results。
-- `pilot`：小规模试跑，不进入论文主结果表。
-- `formal`：正式实验，不能携带 `--smoke`。
-- 如果命令中使用 `--run-stage formal` 或 `--run-stage pilot`，不能在 passthrough 参数里再传 `--smoke`；例如 `--run-stage formal -- --smoke` 会被启动器拒绝。
+Structural ablations:
 
-## 命名规则
+- D `D_ablation_no_value_tree`: removes value-tree information by replacing value branch tensors with zero/false tensors while preserving the full network interface.
+- E `E_ablation_no_semantic_dual_state_split`: keeps advantage canvas and value-tree information, but removes the explicit `value_state` / `advantage_state` split decision structure by replacing `SemanticDuelingHead` with a fused single action-value pathway.
 
-canonical `ablation_id` 和 `short_id` 保持不变。文件系统 slug 统一为：
+Input/channel ablations:
+
+- F1 `no_frontier_channel`
+- F2 `no_visit_count_channel`
+- F3 `no_recent_trajectory_channel`
+- F4 `no_visit_traj_channels`
+- F5 `occupancy_only_canvas`
+
+Reward ablations:
+
+- R1 `no_step_penalty`
+- R2 `no_revisit_penalty`
+- R3 `no_turn_penalty`
+- R4 `no_timeout_penalty`
+- R5 `no_efficiency_penalties`
+- R6 `sparse_reward_variant`
+
+## E Structural Ablation
+
+E tests whether explicitly separating value-state and action-conditioned advantage-state before dueling fusion is beneficial. It does not test whether value-tree information exists; value-tree tensors remain enabled and are consumed by `ValueTreeEncoder`.
+
+The E model uses:
+
+- `AdvantageCanvasEncoder` for full advantage canvas inputs.
+- `ValueTreeEncoder` for full value-tree block/entry tensors.
+- `NoSemanticDualStateSplitQNetwork`, which projects both encoder outputs into a fused per-action latent and predicts Q values through one action-value head.
+
+The E model does not call `SemanticDuelingHead`, and its aux output marks `no_semantic_dual_state_split=1`, `semantic_dual_state_split_used=0`, and `value_tree_used_by_model=1`.
+
+E requires retraining. A, D, F, or R checkpoints cannot be reused as final E performance evidence.
+
+## Naming
+
+Canonical `ablation_id` and `short_id` stay stable. Filesystem slugs use:
 
 ```text
 <short_id>_ablation_<canonical_id>
 ```
 
-示例：
+When the canonical id already starts with `<short_id>_ablation_`, the canonical id itself is the slug. Examples:
 
-- F1：`F1_ablation_no_frontier_channel`
-- F5：`F5_ablation_occupancy_only_canvas`
-- R5：`R5_ablation_no_efficiency_penalties`
+- D: `D_ablation_no_value_tree`
+- E: `E_ablation_no_semantic_dual_state_split`
+- F5: `F5_ablation_occupancy_only_canvas`
+- R5: `R5_ablation_no_efficiency_penalties`
 
-默认 outputs run_name 使用 `<slug>_<run_stage>`，例如 `F5_ablation_occupancy_only_canvas_formal`。`experiment_records/ablations/<slug>/logs/` 用于归档 curated logs。checkpoint 本体归档到 `checkpoint_store/ablations/<slug>.pt`；checkpoint_store 被 Git 忽略，不应提交模型权重。
+Default outputs run names use `<slug>_<run_stage>`. Curated logs are archived to `experiment_records/ablations/<slug>/logs/`. Checkpoint bodies are copied to `checkpoint_store/ablations/<slug>.pt` by the batch runner and are ignored by Git.
 
-## F 组
+## Single Experiment
 
-F 组保持 `advantage_canvas shape = [B, 5, H, W]`，按通道名称置零：
-
-- F1：`no_frontier_channel`
-- F2：`no_visit_count_channel`
-- F3：`no_recent_trajectory_channel`
-- F4：`no_visit_traj_channels`
-- F5：`occupancy_only_canvas`
-
-## R 组
-
-R 组只覆盖 `TrainConfig` 中已有的 reward 字段：
-
-- R1：`no_step_penalty`
-- R2：`no_revisit_penalty`
-- R3：`no_turn_penalty`
-- R4：`no_timeout_penalty`
-- R5：`no_efficiency_penalties`
-- R6：`sparse_reward_variant`
-
-## 单实验示例
-
-列出规格：
+List specs:
 
 ```powershell
 python experiments\ablations\run_ablation_train.py --list
 ```
 
-dry-run F1：
+Dry-run E:
 
 ```powershell
-python experiments\ablations\run_ablation_train.py --ablation-id F1 --dry-run
+python experiments\ablations\run_ablation_train.py --ablation-id E --run-stage smoke --dry-run
 ```
 
-smoke F5：
+Smoke E:
 
 ```powershell
-python experiments\ablations\run_ablation_train.py --ablation-id F5 --run-stage smoke
+python experiments\ablations\run_ablation_train.py --ablation-id E --run-stage smoke
 ```
 
-formal R5：
+Formal R5:
 
 ```powershell
 python experiments\ablations\run_ablation_train.py --ablation-id R5 --run-stage formal -- --device cuda --total-env-steps 500000 --final-greedy-episodes 100
 ```
 
-## 批量运行
+## Batch Runner
 
-批量入口 `run_ablation_batch.py` 默认从 `experiment_records/full_method_main/logs/config_snapshot.json` 读取 A Full method 的 `full_train_config`，用它对齐地图、训练预算、学习超参数、seed policy、formal protocol 和 reward 基准参数，然后按顺序调用单个消融启动器。
+`run_ablation_batch.py` reads `experiment_records/full_method_main/logs/config_snapshot.json` and aligns map, budget, learning hyperparameters, seed policy, formal protocol, and reward base parameters before invoking individual ablation launches.
 
-当前 A config 如果记录了 `train_side_only_tuning=true`，批量 run 也会默认保持该模式。这种模式不会生成完整 final probe，不能直接作为最终论文 Results。后续需要 final_probe 时，应使用完整 formal protocol 重新评估，或通过额外参数显式关闭 train-side-only 模式，例如在确认协议后使用 `--extra-train-args "--no-train-side-only-tuning"`。
+Available structural presets include:
 
-真实批量运行要求上述 base config 文件存在并能解析；dry-run 在本地缺少该文件时只会打印 warning 并使用当前 `TrainConfig` 默认值预览命令。
+- `structural_core_batch`: D only, preserving the original minimum structural check semantics.
+- `semantic_core_batch`: E only.
+- `structural_extended_batch`: D and E.
 
-dry-run 推荐组：
-
-```powershell
-python experiments\ablations\run_ablation_batch.py --preset recommended_first_batch --dry-run
-```
-
-正式跑推荐组：
+Dry-run E through the batch runner:
 
 ```powershell
-python experiments\ablations\run_ablation_batch.py --preset recommended_first_batch --run-stage formal --device cuda
+python experiments\ablations\run_ablation_batch.py --ablation-ids E --run-stage smoke --device cpu --dry-run
 ```
 
-跑完整 F/R 组：
+Run E smoke through the batch runner:
 
 ```powershell
-python experiments\ablations\run_ablation_batch.py --preset full_fr_batch --run-stage formal --device cuda
+python experiments\ablations\run_ablation_batch.py --ablation-ids E --run-stage smoke --device cpu
 ```
 
-仅跑指定实验：
-
-```powershell
-python experiments\ablations\run_ablation_batch.py --ablation-ids F1,F4,F5,R5 --run-stage formal --device cuda
-```
-
-每个 run 完成后，脚本会把 curated logs 复制到 `experiment_records/ablations/<slug>/logs/`，并更新对应的 `run_record.md`。默认还会复制 `run_dir/checkpoints/last.pt` 到 `checkpoint_store/ablations/<slug>.pt`；可以使用 `--no-copy-checkpoints` 关闭该复制。脚本只复制 `last.pt`，不复制 `best.pt` 或其它 checkpoint。checkpoint 文件名与 slug 一致，checkpoint_store 被 `.gitignore` 忽略，不进入 Git。完整 outputs、replay buffer、plots 和 debug/profile 文件仍不会被复制到 `experiment_records`。
+Each completed run copies curated logs to `experiment_records/ablations/<slug>/logs/`, writes `run_record.md`, and by default copies `run_dir/checkpoints/last.pt` to `checkpoint_store/ablations/<slug>.pt`. Raw `outputs/`, replay buffers, plots, debug files, and checkpoint files are not tracked.

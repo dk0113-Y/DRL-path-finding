@@ -16,10 +16,16 @@ from experiments.ablations.ablation_specs import (
     get_ablation_spec,
     is_channel_ablation,
     is_reward_ablation,
+    is_semantic_split_ablation,
     is_value_tree_ablation,
     list_ablation_specs,
 )
 from experiments.ablations.reward_overrides import apply_reward_overrides
+from experiments.ablations.semantic_split_ablation import (
+    NoSemanticDualStateSplitQNetwork,
+    build_no_semantic_dual_state_split_manifest,
+    count_model_parameters,
+)
 from experiments.ablations.state_adapter_wrapper import AblationStateTensorAdapter
 from experiments.ablations.value_tree_ablation import VALUE_REPLACEMENT_STRATEGY_ZERO
 import train_q_agent
@@ -111,6 +117,28 @@ def _apply_ablation_config(
             value_tree_enabled=False,
             run_stage=run_stage,
         )
+    if is_semantic_split_ablation(spec):
+        model_parameter_count = count_model_parameters(NoSemanticDualStateSplitQNetwork())
+        return replace(
+            cfg,
+            ablation_group=spec.group,
+            ablation_id=spec.ablation_id,
+            experiment_id=spec.experiment_id or spec.short_id,
+            ablation_name=spec.ablation_name or spec.ablation_id,
+            channel_ablation="none",
+            zeroed_advantage_channels=(),
+            reward_override={},
+            value_replacement_strategy="none",
+            value_tree_enabled=True,
+            is_ablation=True,
+            no_shared_semantic_dual_state=True,
+            no_value_tree=False,
+            model_class="NoSemanticDualStateSplitQNetwork",
+            model_parameter_count=model_parameter_count,
+            dummy_value_tensors_for_interface=False,
+            value_tensors_used_by_model=True,
+            run_stage=run_stage,
+        )
     raise ValueError(f"Unsupported ablation group: {spec.group!r}")
 
 
@@ -127,6 +155,17 @@ def _state_adapter_factory_for(spec: AblationSpec):
                 spec.value_replacement_strategy if is_value_tree_ablation(spec) else "none"
             ),
         )
+
+    return factory
+
+
+def _model_factory_for(spec: AblationSpec):
+    if not is_semantic_split_ablation(spec):
+        return None
+
+    def factory(cfg=None):
+        _ = cfg
+        return NoSemanticDualStateSplitQNetwork()
 
     return factory
 
@@ -157,6 +196,10 @@ def _dry_run_payload(
         "value_replacement_strategy": cfg.value_replacement_strategy,
         "value_tree_enabled": cfg.value_tree_enabled,
         "channel_ablation": cfg.channel_ablation,
+        "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
+        "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
+        "model_class": cfg.model_class,
+        "model_parameter_count": cfg.model_parameter_count,
         "train_args": train_args,
         "train_config": {
             "device": cfg.device,
@@ -171,6 +214,10 @@ def _dry_run_payload(
             "value_replacement_strategy": cfg.value_replacement_strategy,
             "value_tree_enabled": cfg.value_tree_enabled,
             "channel_ablation": cfg.channel_ablation,
+            "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
+            "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
+            "model_class": cfg.model_class,
+            "model_parameter_count": cfg.model_parameter_count,
             **reward_fields,
         },
     }
@@ -192,6 +239,11 @@ def _manifest_payload(spec: AblationSpec, cfg: train_q_agent.TrainConfig) -> dic
         "channel_ablation": cfg.channel_ablation,
         "value_replacement_strategy": cfg.value_replacement_strategy,
         "value_tree_enabled": cfg.value_tree_enabled,
+        "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
+        "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
+        "value_tree_used_by_model": bool(cfg.value_tensors_used_by_model),
+        "model_class": cfg.model_class,
+        "model_parameter_count": cfg.model_parameter_count,
         "safe_zero_dummy_value_state": False,
         "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
         "full_method_default_unchanged": True,
@@ -245,7 +297,7 @@ def _print_specs() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="F/R ablation training entrypoint")
+    parser = argparse.ArgumentParser(description="Structural, channel, and reward ablation training entrypoint")
     parser.add_argument("--ablation-id", type=str, default=None)
     parser.add_argument("--run-stage", choices=("smoke", "pilot", "formal"), default="smoke")
     parser.add_argument("--dry-run", action="store_true")
@@ -265,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = _parse_train_config(train_args)
     cfg = _apply_ablation_config(cfg, spec, args.run_stage)
     state_adapter_factory = _state_adapter_factory_for(spec)
+    model_factory = _model_factory_for(spec)
 
     if args.dry_run:
         print(json.dumps(
@@ -278,9 +331,19 @@ def main(argv: list[str] | None = None) -> int:
         cfg,
         run_mode=f"ablation_{args.run_stage}",
         state_adapter_factory=state_adapter_factory,
+        model_factory=model_factory,
     )
     manifest_path = run_dir / "logs" / "ablation_manifest.json"
-    _write_json(manifest_path, _manifest_payload(spec, cfg))
+    manifest = _manifest_payload(spec, cfg)
+    if is_semantic_split_ablation(spec):
+        manifest.update(
+            build_no_semantic_dual_state_split_manifest(
+                model=NoSemanticDualStateSplitQNetwork(),
+            )
+        )
+        manifest["source_entrypoint"] = "experiments/ablations/run_ablation_train.py"
+        manifest["notes"] = list(spec.notes)
+    _write_json(manifest_path, manifest)
     _try_append_artifact_index(run_dir, manifest_path)
     print(f"ablation_manifest_json: {manifest_path}")
     return 0

@@ -4,6 +4,8 @@ from __future__ import annotations
 _BATCH_PRESETS: dict[str, list[str]] = {
     "recommended_first_batch": ["F1", "F4", "F5", "R5"],
     "structural_core_batch": ["D"],
+    "structural_extended_batch": ["D", "E"],
+    "semantic_core_batch": ["E"],
     "minimum_closure_batch": ["D", "F5", "R5"],
     "full_fr_batch": ["F1", "F2", "F3", "F4", "F5", "R1", "R2", "R3", "R4", "R5"],
     "extended_fr_batch": ["F1", "F2", "F3", "F4", "F5", "R1", "R2", "R3", "R4", "R5", "R6"],

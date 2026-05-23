@@ -395,7 +395,7 @@ def _print_dry_run(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Batch runner for D/F/R ablation experiments")
+    parser = argparse.ArgumentParser(description="Batch runner for structural, channel, and reward ablation experiments")
     parser.add_argument("--preset", type=str, default="recommended_first_batch")
     parser.add_argument("--ablation-ids", type=str, default=None)
     parser.add_argument("--base-config", type=Path, default=DEFAULT_BASE_CONFIG)
