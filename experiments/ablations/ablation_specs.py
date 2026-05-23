@@ -9,13 +9,35 @@ class AblationSpec:
     short_id: str
     group: str
     description: str
+    experiment_id: str | None = None
+    ablation_name: str | None = None
     zeroed_channels: tuple[str, ...] = ()
     reward_overrides: dict[str, float] = field(default_factory=dict)
+    value_replacement_strategy: str = "none"
+    value_tree_enabled: bool | None = None
     recommended: bool = True
     notes: tuple[str, ...] = ()
 
 
 _SPECS: tuple[AblationSpec, ...] = (
+    AblationSpec(
+        ablation_id="D_ablation_no_value_tree",
+        short_id="D",
+        group="structural",
+        experiment_id="D",
+        ablation_name="no_value_tree",
+        description=(
+            "No value tree structural ablation: preserve the network shape and replace "
+            "the value branch input with zero_value_state."
+        ),
+        value_replacement_strategy="zero_value_state",
+        value_tree_enabled=False,
+        notes=(
+            "Structural ablation only; does not change advantage canvas channels.",
+            "Reward overrides are none.",
+            "Network structure and parameter count are unchanged.",
+        ),
+    ),
     AblationSpec(
         ablation_id="no_frontier_channel",
         short_id="F1",
@@ -118,6 +140,8 @@ def list_ablation_specs() -> list[AblationSpec]:
 
 
 def ablation_slug(spec: AblationSpec) -> str:
+    if spec.ablation_id.startswith(f"{spec.short_id}_ablation_"):
+        return spec.ablation_id
     return f"{spec.short_id}_ablation_{spec.ablation_id}"
 
 
@@ -129,11 +153,16 @@ def is_reward_ablation(spec: AblationSpec) -> bool:
     return spec.group == "reward_ablation"
 
 
+def is_value_tree_ablation(spec: AblationSpec) -> bool:
+    return spec.group in {"structural", "value_tree"} and spec.value_replacement_strategy == "zero_value_state"
+
+
 def _alias_map() -> dict[str, AblationSpec]:
     aliases: dict[str, AblationSpec] = {}
     for spec in _SPECS:
         aliases[spec.short_id.lower()] = spec
         aliases[spec.ablation_id.lower()] = spec
+        aliases[ablation_slug(spec).lower()] = spec
     return aliases
 
 

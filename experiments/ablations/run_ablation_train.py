@@ -16,10 +16,12 @@ from experiments.ablations.ablation_specs import (
     get_ablation_spec,
     is_channel_ablation,
     is_reward_ablation,
+    is_value_tree_ablation,
     list_ablation_specs,
 )
 from experiments.ablations.reward_overrides import apply_reward_overrides
 from experiments.ablations.state_adapter_wrapper import AblationStateTensorAdapter
+from experiments.ablations.value_tree_ablation import VALUE_REPLACEMENT_STRATEGY_ZERO
 import train_q_agent
 
 
@@ -72,8 +74,13 @@ def _apply_ablation_config(
             cfg,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
+            experiment_id=spec.experiment_id or spec.short_id,
+            ablation_name=spec.ablation_name or spec.ablation_id,
+            channel_ablation="none",
             zeroed_advantage_channels=(),
             reward_override=dict(spec.reward_overrides),
+            value_replacement_strategy="none",
+            value_tree_enabled=True,
             run_stage=run_stage,
         )
     if is_channel_ablation(spec):
@@ -81,15 +88,34 @@ def _apply_ablation_config(
             cfg,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
+            experiment_id=spec.experiment_id or spec.short_id,
+            ablation_name=spec.ablation_name or spec.ablation_id,
+            channel_ablation=spec.ablation_id,
             zeroed_advantage_channels=tuple(spec.zeroed_channels),
             reward_override={},
+            value_replacement_strategy="none",
+            value_tree_enabled=True,
+            run_stage=run_stage,
+        )
+    if is_value_tree_ablation(spec):
+        return replace(
+            cfg,
+            ablation_group=spec.group,
+            ablation_id=spec.ablation_id,
+            experiment_id=spec.experiment_id or spec.short_id,
+            ablation_name=spec.ablation_name or spec.ablation_id,
+            channel_ablation="none",
+            zeroed_advantage_channels=(),
+            reward_override={},
+            value_replacement_strategy=VALUE_REPLACEMENT_STRATEGY_ZERO,
+            value_tree_enabled=False,
             run_stage=run_stage,
         )
     raise ValueError(f"Unsupported ablation group: {spec.group!r}")
 
 
 def _state_adapter_factory_for(spec: AblationSpec):
-    if not is_channel_ablation(spec):
+    if not is_channel_ablation(spec) and not is_value_tree_ablation(spec):
         return None
 
     def factory(cfg=None, device="cpu"):
@@ -97,6 +123,9 @@ def _state_adapter_factory_for(spec: AblationSpec):
             cfg=cfg,
             device=device,
             zeroed_channels=spec.zeroed_channels,
+            value_replacement_strategy=(
+                spec.value_replacement_strategy if is_value_tree_ablation(spec) else "none"
+            ),
         )
 
     return factory
@@ -125,15 +154,23 @@ def _dry_run_payload(
         "run_stage": run_stage,
         "zeroed_advantage_channels": list(cfg.zeroed_advantage_channels),
         "reward_override": dict(cfg.reward_override),
+        "value_replacement_strategy": cfg.value_replacement_strategy,
+        "value_tree_enabled": cfg.value_tree_enabled,
+        "channel_ablation": cfg.channel_ablation,
         "train_args": train_args,
         "train_config": {
             "device": cfg.device,
             "output_root": cfg.output_root,
             "total_env_steps": cfg.total_env_steps,
             "final_greedy_episodes": cfg.final_greedy_episodes,
+            "experiment_id": cfg.experiment_id,
             "ablation_group": cfg.ablation_group,
             "ablation_id": cfg.ablation_id,
+            "ablation_name": cfg.ablation_name,
             "run_stage": cfg.run_stage,
+            "value_replacement_strategy": cfg.value_replacement_strategy,
+            "value_tree_enabled": cfg.value_tree_enabled,
+            "channel_ablation": cfg.channel_ablation,
             **reward_fields,
         },
     }
@@ -143,12 +180,20 @@ def _manifest_payload(spec: AblationSpec, cfg: train_q_agent.TrainConfig) -> dic
     return {
         "schema_version": "ablation_manifest/v1",
         "run_stage": cfg.run_stage,
+        "experiment_id": cfg.experiment_id,
         "ablation_group": cfg.ablation_group,
         "ablation_id": cfg.ablation_id,
+        "ablation_name": cfg.ablation_name,
         "short_id": spec.short_id,
         "description": spec.description,
         "zeroed_advantage_channels": list(cfg.zeroed_advantage_channels),
         "reward_override": dict(cfg.reward_override),
+        "reward_overrides": "none" if not cfg.reward_override else dict(cfg.reward_override),
+        "channel_ablation": cfg.channel_ablation,
+        "value_replacement_strategy": cfg.value_replacement_strategy,
+        "value_tree_enabled": cfg.value_tree_enabled,
+        "safe_zero_dummy_value_state": False,
+        "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
         "full_method_default_unchanged": True,
         "source_entrypoint": "experiments/ablations/run_ablation_train.py",
         "notes": list(spec.notes),
@@ -190,11 +235,12 @@ def _print_specs() -> None:
     for spec in list_ablation_specs():
         zeroed = ", ".join(spec.zeroed_channels) if spec.zeroed_channels else "-"
         rewards = ", ".join(f"{k}={v}" for k, v in spec.reward_overrides.items()) or "-"
+        value_strategy = spec.value_replacement_strategy or "none"
         recommended = "yes" if spec.recommended else "no"
         print(
             f"{spec.short_id:>2}  {spec.ablation_id:<34} "
             f"group={spec.group:<17} recommended={recommended:<3} "
-            f"zeroed=[{zeroed}] reward_overrides=[{rewards}]"
+            f"zeroed=[{zeroed}] reward_overrides=[{rewards}] value_strategy={value_strategy}"
         )
 
 

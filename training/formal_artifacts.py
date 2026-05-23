@@ -1496,6 +1496,28 @@ def build_config_snapshot(
         "git_commit_sha": _git_output(repo_dir, ["rev-parse", "HEAD"]),
         "git_branch": _git_output(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
         "full_train_config": config_dict or None,
+        "experiment_identity": {
+            "experiment_id": config_dict.get("experiment_id"),
+            "ablation_id": config_dict.get("ablation_id"),
+            "ablation_group": config_dict.get("ablation_group"),
+            "ablation_name": config_dict.get("ablation_name"),
+            "run_stage": config_dict.get("run_stage"),
+            "value_replacement_strategy": config_dict.get("value_replacement_strategy"),
+            "value_tree_enabled": config_dict.get("value_tree_enabled"),
+            "channel_ablation": {
+                "applied": bool(config_dict.get("zeroed_advantage_channels")),
+                "id": config_dict.get("channel_ablation"),
+                "zeroed_advantage_channels": config_dict.get("zeroed_advantage_channels") or [],
+                "semantic": "none_when_applied_false",
+            },
+            "reward_overrides": {
+                "applied": bool(config_dict.get("reward_override")),
+                "overrides": config_dict.get("reward_override") or {},
+                "semantic": "none_when_applied_false",
+            },
+            "advantage_canvas_channels": config_dict.get("advantage_canvas_channels"),
+            "safe_zero_dummy_value_state": False,
+        },
         "default_main_baseline": {
             "identifier": baseline_identifier,
             "evidence_status": "bootstrap_inference_from_local_run_inventory",

@@ -155,8 +155,20 @@ class TrainConfig:
 
     ablation_group: str = "none"
     ablation_id: str = "none"
+    experiment_id: str = "A"
+    ablation_name: str = "none"
+    channel_ablation: str = "none"
     zeroed_advantage_channels: tuple[str, ...] = ()
     reward_override: dict[str, float] = field(default_factory=dict)
+    value_replacement_strategy: str = "none"
+    value_tree_enabled: bool = True
+    advantage_canvas_channels: tuple[str, ...] = (
+        "free",
+        "obstacle",
+        "frontier_block_area_map",
+        "visit_count_log_norm",
+        "recent_trajectory_decay",
+    )
     run_stage: str = "formal"
 
     special_highcov_timeout_min_coverage: float = 0.85
