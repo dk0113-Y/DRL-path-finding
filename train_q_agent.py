@@ -169,6 +169,27 @@ class TrainConfig:
         "visit_count_log_norm",
         "recent_trajectory_decay",
     )
+    baseline_id: str = "none"
+    baseline_group: str = "none"
+    baseline_name: str = "none"
+    baseline_type: str = "none"
+    is_ablation: bool = False
+    no_shared_semantic_dual_state: bool = False
+    no_value_tree: bool = False
+    no_frontier_cluster_input: bool = False
+    no_accessible_unknown_block_input: bool = False
+    no_ground_truth_map_for_decision: bool = False
+    local_state_channels: tuple[str, ...] = ()
+    local_state_patch_size: int = 0
+    local_state_carrier_key: str = "none"
+    local_state_canvas_role: str = "full_method_advantage_canvas"
+    model_class: str = "ExplorationQNetwork"
+    model_parameter_count: int = 0
+    dummy_value_tensors_for_interface: bool = False
+    value_tensors_used_by_model: bool = True
+    dummy_value_block_shape: tuple[int, ...] = ()
+    dummy_value_entry_shape: tuple[int, ...] = ()
+    dummy_value_mask_rule: str = "none"
     run_stage: str = "formal"
 
     special_highcov_timeout_min_coverage: float = 0.85
@@ -718,9 +739,13 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
         print(f"  {line}")
 
 
-def build_system(cfg: TrainConfig, state_adapter_factory=None):
-    q_cfg = ExplorationQConfig()
-    raw_online_net = ExplorationQNetwork(q_cfg).to(cfg.device)
+def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=None):
+    if model_factory is None:
+        q_cfg = ExplorationQConfig()
+        raw_online_net = ExplorationQNetwork(q_cfg)
+    else:
+        raw_online_net = model_factory(cfg=cfg)
+    raw_online_net = raw_online_net.to(cfg.device)
     raw_online_net = _maybe_to_channels_last(raw_online_net, cfg)
     target_net = copy.deepcopy(raw_online_net).to(cfg.device)
     target_net = _maybe_to_channels_last(target_net, cfg)
@@ -924,7 +949,7 @@ def _build_eval_row(
     return row
 
 
-def run_training(cfg: TrainConfig, *, run_mode: str = "cli", state_adapter_factory=None) -> Path:
+def run_training(cfg: TrainConfig, *, run_mode: str = "cli", state_adapter_factory=None, model_factory=None) -> Path:
     run_start_time = time.perf_counter()
     set_seed(int(cfg.seed))
     backend_readback = configure_torch_runtime(cfg)
@@ -936,6 +961,7 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli", state_adapter_facto
     online_net, _, replay, collector, learner, evaluator = build_system(
         cfg,
         state_adapter_factory=state_adapter_factory,
+        model_factory=model_factory,
     )
     reproducibility_runtime_info = collect_reproducibility_runtime_info(
         cfg,

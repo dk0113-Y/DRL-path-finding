@@ -456,7 +456,11 @@ class GreedyEvaluator:
             if done:
                 episode_event_summary = finalize_reward_event_summary(dict(episode_event_summary))
                 episode_event_summary["timeout_flag"] = float(done_reason == "max_episode_steps")
-                semantic_viz = build_semantic_visualization_payload(shared_artifacts.semantic_snapshot)
+                semantic_snapshot = getattr(shared_artifacts, "semantic_snapshot", None)
+                semantic_viz = (
+                    build_semantic_visualization_payload(semantic_snapshot)
+                    if semantic_snapshot is not None else None
+                )
                 return {
                     "episode_reward": float(episode_reward),
                     "episode_length": int(episode_len),

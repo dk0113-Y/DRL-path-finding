@@ -643,9 +643,13 @@ class TransitionCollector:
         return float(repeat) / float(total_visits)
 
     def _episode_visual_artifacts(self) -> dict[str, object]:
-        semantic_payload = (
-            build_semantic_visualization_payload(self._current_shared_artifacts.semantic_snapshot)
+        semantic_snapshot = (
+            getattr(self._current_shared_artifacts, "semantic_snapshot", None)
             if self._current_shared_artifacts is not None else None
+        )
+        semantic_payload = (
+            build_semantic_visualization_payload(semantic_snapshot)
+            if semantic_snapshot is not None else None
         )
         return {
             "true_grid": np.asarray(self.grid, dtype=np.int8).copy(),
