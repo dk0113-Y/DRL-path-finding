@@ -54,6 +54,28 @@ archived under `experiment_records/baselines/` and the local `last.pt` copy goes
 to `checkpoint_store/baselines/`. Smoke and pilot runs are interface and
 short-training checks only; they cannot enter paper Results.
 
+## Wait For C Formal Then Launch E Formal
+
+To monitor a running C formal baseline and automatically launch E
+`E_ablation_no_semantic_dual_state_split` after C exits and key C artifacts are
+present:
+
+```powershell
+.\scripts\wait_then_run_e_ablation_after_c_baseline.ps1 -Device cuda
+```
+
+Preview without waiting or launching:
+
+```powershell
+.\scripts\wait_then_run_e_ablation_after_c_baseline.ps1 -DryRun
+```
+
+The watcher launches E through `experiments/ablations/run_ablation_batch.py`
+with `--ablation-ids E --run-stage formal`, so E uses the full-method base
+config alignment and writes curated artifacts to the ablation records tree.
+C formal completion is a handoff condition only; it is not automatically final
+paper Results evidence.
+
 ## Archive Behavior
 
 `run_baseline_batch.py` calls

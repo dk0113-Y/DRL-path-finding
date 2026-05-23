@@ -113,4 +113,17 @@ Run E smoke through the batch runner:
 python experiments\ablations\run_ablation_batch.py --ablation-ids E --run-stage smoke --device cpu
 ```
 
+Wait for a running C baseline formal job and then launch E formal through the
+batch runner:
+
+```powershell
+.\scripts\wait_then_run_e_ablation_after_c_baseline.ps1 -Device cuda
+```
+
+Preview the watcher without waiting or launching:
+
+```powershell
+.\scripts\wait_then_run_e_ablation_after_c_baseline.ps1 -DryRun
+```
+
 Each completed run copies curated logs to `experiment_records/ablations/<slug>/logs/`, writes `run_record.md`, and by default copies `run_dir/checkpoints/last.pt` to `checkpoint_store/ablations/<slug>.pt`. Raw `outputs/`, replay buffers, plots, debug files, and checkpoint files are not tracked.
