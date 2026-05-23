@@ -1,0 +1,17 @@
+{
+  "schema_version": "ablation_manifest/v1",
+  "run_stage": "formal",
+  "ablation_group": "channel_ablation",
+  "ablation_id": "occupancy_only_canvas",
+  "short_id": "F5",
+  "description": "Occupancy-only advantage canvas: keep free/obstacle, zero extra semantic channels.",
+  "zeroed_advantage_channels": [
+    "frontier_block_area_map",
+    "visit_count_log_norm",
+    "recent_trajectory_decay"
+  ],
+  "reward_override": {},
+  "full_method_default_unchanged": true,
+  "source_entrypoint": "experiments/ablations/run_ablation_train.py",
+  "notes": []
+}

@@ -1,0 +1,18 @@
+Training Summary
+run_dir: C:\Users\Dk\Desktop\SCI\DRL_PF\outputs\F4_ablation_no_visit_traj_channels_formal_20260522_155944
+run_mode: ablation_formal
+budget_mode: env_steps
+total_runtime_sec: 8265.938262199983
+total_runtime_hms: 02:17:46
+total_train_episodes_completed: 847
+recent_train: reward=19.295120239257812 coverage=0.6943379044532776 success_rate=0.029999999329447746 episode_length=595.6699829101562 repeat_visit_ratio=0.8008262515068054
+final_probe_best: reward=None coverage=None success_rate=None episode_length=None repeat_visit_ratio=None
+train_final_consistency_verdict: insufficient_evidence
+training_dynamics_final_window: {'recent_mean_reward': 19.295120239257812, 'recent_mean_coverage': 0.6943379044532776, 'recent_success_rate': 0.029999999329447746, 'recent_mean_episode_length': 595.6699829101562, 'recent_mean_repeat_visit_ratio': 0.8008262515068054}
+training_dynamics_growth_rates: {'growth_rate_reward': -0.07196703830576542, 'growth_rate_coverage': -0.00025213677494901774, 'growth_rate_success_rate': -0.0002627175191865405, 'growth_rate_repeat_visit_ratio': 0.00020495537930606019}
+best_checkpoint_env_steps: None
+best_checkpoint_selection_summary: {'role': 'skipped_train_side_only_tuning', 'artifact_source': None, 'row_count': 0, 'selection_rule': 'not_run', 'selected_best': {}, 'best_checkpoint_env_steps': None, 'best_checkpoint_train_episode_idx': None, 'best_checkpoint_path': None}
+last_checkpoint_env_steps: 500000
+last_checkpoint_train_episode_idx: 847
+diagnostic_last_checkpoint_summary: {'role': 'diagnostic_only_training_endpoint', 'checkpoint_path': 'checkpoints/last.pt', 'env_steps': 500000, 'train_episode_idx': 847, 'evaluation_reuse_rule': 'test-side evaluation skipped intentionally by train_side_only_tuning', 'diagnostic_eval': {}}
+final_probe_source: skipped_train_side_only_tuning

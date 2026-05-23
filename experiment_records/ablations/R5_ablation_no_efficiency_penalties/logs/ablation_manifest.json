@@ -1,0 +1,18 @@
+{
+  "schema_version": "ablation_manifest/v1",
+  "run_stage": "formal",
+  "ablation_group": "reward_ablation",
+  "ablation_id": "no_efficiency_penalties",
+  "short_id": "R5",
+  "description": "No efficiency penalties: step, revisit, turn, and timeout penalties are zeroed.",
+  "zeroed_advantage_channels": [],
+  "reward_override": {
+    "reward_step_penalty": 0.0,
+    "reward_revisit_penalty": 0.0,
+    "reward_turn_penalty_scale": 0.0,
+    "reward_timeout_penalty": 0.0
+  },
+  "full_method_default_unchanged": true,
+  "source_entrypoint": "experiments/ablations/run_ablation_train.py",
+  "notes": []
+}

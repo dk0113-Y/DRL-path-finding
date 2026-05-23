@@ -1,0 +1,15 @@
+{
+  "schema_version": "ablation_manifest/v1",
+  "run_stage": "formal",
+  "ablation_group": "reward_ablation",
+  "ablation_id": "no_turn_penalty",
+  "short_id": "R3",
+  "description": "No turn penalty.",
+  "zeroed_advantage_channels": [],
+  "reward_override": {
+    "reward_turn_penalty_scale": 0.0
+  },
+  "full_method_default_unchanged": true,
+  "source_entrypoint": "experiments/ablations/run_ablation_train.py",
+  "notes": []
+}
