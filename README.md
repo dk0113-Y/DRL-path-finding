@@ -99,6 +99,14 @@ python .\train_q_agent.py --device cuda
 python .\train_q_agent.py --smoke --device cpu
 ```
 
+Classical frontier greedy baseline（非训练 B 组 baseline）可以单独运行，不加载 Q network 或 checkpoint：
+
+```powershell
+python .\scripts\run_frontier_greedy_baseline.py --smoke --episodes 3
+```
+
+正式 baseline final probe 应在正式实验设备上运行 100 episodes，并保持与 A formal final probe 相同地图、观测、termination 与 reward/metric 配置。
+
 常用 profiling 命令（用于性能排查，不作为正式 comparable run）：
 
 ```powershell
