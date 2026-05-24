@@ -18,6 +18,14 @@ ADVANTAGE_CANVAS_CHANNELS = (
     "recent_trajectory_decay",
 )
 ADVANTAGE_CANVAS_CHANNEL_COUNT = len(ADVANTAGE_CANVAS_CHANNELS)
+FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER = "semantic_block_area_raster"
+FRONTIER_CHANNEL_MODE_LOCAL_BINARY = "local_binary"
+FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA = "local_global_area"
+FRONTIER_CHANNEL_MODES = (
+    FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
+    FRONTIER_CHANNEL_MODE_LOCAL_BINARY,
+    FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA,
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,17 @@ class AdvantageStateConfig:
     enable_timing: bool = False
     visit_count_log_saturation: float = 8.0
     trajectory_history_steps: int = 10
+    frontier_channel_mode: str = FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER
+
+    def __post_init__(self) -> None:
+        mode = str(self.frontier_channel_mode or "").strip().lower()
+        if mode not in FRONTIER_CHANNEL_MODES:
+            available = ", ".join(FRONTIER_CHANNEL_MODES)
+            raise ValueError(
+                f"Unsupported frontier_channel_mode {self.frontier_channel_mode!r}; "
+                f"expected one of: {available}"
+            )
+        object.__setattr__(self, "frontier_channel_mode", mode)
 
 
 class AdvantageStateBuilder:
@@ -78,6 +97,120 @@ class AdvantageStateBuilder:
             self._canvas_cache[shape] = cached
         cached.fill(0.0)
         return cached
+
+    @staticmethod
+    def _local_frontier_mask(
+        cum_map,
+        *,
+        arr_rows: np.ndarray,
+        arr_cols: np.ndarray,
+        inside: np.ndarray,
+        local_shape: tuple[int, int],
+    ) -> np.ndarray:
+        frontier_u8 = np.asarray(cum_map.get_frontier_u8(refresh=False), dtype=np.uint8)
+        if frontier_u8.shape != cum_map.map.shape:
+            raise ValueError(
+                f"frontier_u8 shape mismatch: expected {cum_map.map.shape}, got {frontier_u8.shape}"
+            )
+        local_frontier = np.zeros(local_shape, dtype=bool)
+        if np.any(inside):
+            local_frontier[inside] = frontier_u8[arr_rows[inside], arr_cols[inside]] > 0
+        return local_frontier
+
+    @staticmethod
+    def _semantic_frontier_area_map(
+        cum_map,
+        semantic_snapshot: SharedSemanticSnapshot,
+    ) -> np.ndarray:
+        area_map = np.zeros(cum_map.map.shape, dtype=np.float32)
+        total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
+        map_h = int(cum_map.map.shape[0])
+        map_w = int(cum_map.map.shape[1])
+        for block in semantic_snapshot.accessible_blocks:
+            block_area_ratio = np.float32(float(block.block_area) / total_unknown_area)
+            for frontier_cluster in block.frontier_clusters:
+                rows = np.asarray(frontier_cluster.frontier_geometry.rows, dtype=np.int32)
+                cols = np.asarray(frontier_cluster.frontier_geometry.cols, dtype=np.int32)
+                if rows.size <= 0 or cols.size <= 0:
+                    continue
+                in_bounds = (
+                    (rows >= 0) & (rows < map_h) &
+                    (cols >= 0) & (cols < map_w)
+                )
+                if not np.any(in_bounds):
+                    continue
+                area_map[rows[in_bounds], cols[in_bounds]] = block_area_ratio
+        return area_map
+
+    def _paint_semantic_block_area_raster(
+        self,
+        canvas_channel: np.ndarray,
+        *,
+        semantic_snapshot: SharedSemanticSnapshot,
+        agent_arr: tuple[int, int],
+        local_shape: tuple[int, int],
+    ) -> None:
+        total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
+        for block in semantic_snapshot.accessible_blocks:
+            block_area_ratio = float(block.block_area) / total_unknown_area
+            for frontier_cluster in block.frontier_clusters:
+                self._paint_geometry_value_to_local_canvas(
+                    frontier_cluster.frontier_geometry,
+                    canvas_channel,
+                    value=block_area_ratio,
+                    agent_arr=agent_arr,
+                    local_shape=local_shape,
+                )
+
+    def _paint_local_binary_frontier(
+        self,
+        canvas_channel: np.ndarray,
+        *,
+        local_frontier_mask: np.ndarray,
+    ) -> dict[str, float | str]:
+        canvas_channel[local_frontier_mask] = np.float32(1.0)
+        local_positive = int(np.count_nonzero(local_frontier_mask))
+        window_area = float(max(1, local_frontier_mask.size))
+        return {
+            "frontier_channel_mode": FRONTIER_CHANNEL_MODE_LOCAL_BINARY,
+            "local_frontier_coverage": float(local_positive) / window_area,
+            "local_frontier_positive_count": float(local_positive),
+            "local_frontier_block_area_mean": 0.0,
+        }
+
+    def _paint_local_global_area_frontier(
+        self,
+        canvas_channel: np.ndarray,
+        *,
+        cum_map,
+        arr_rows: np.ndarray,
+        arr_cols: np.ndarray,
+        inside: np.ndarray,
+        local_frontier_mask: np.ndarray,
+        semantic_snapshot: SharedSemanticSnapshot,
+        local_shape: tuple[int, int],
+    ) -> dict[str, float | str]:
+        semantic_area_map = self._semantic_frontier_area_map(cum_map, semantic_snapshot)
+        local_area_values = np.zeros(local_shape, dtype=np.float32)
+        if np.any(inside):
+            local_area_values[inside] = semantic_area_map[arr_rows[inside], arr_cols[inside]]
+        canvas_channel[local_frontier_mask] = local_area_values[local_frontier_mask]
+
+        local_positive = int(np.count_nonzero(local_frontier_mask))
+        assigned_mask = local_frontier_mask & (canvas_channel > 0.0)
+        assigned_positive = int(np.count_nonzero(assigned_mask))
+        unmatched = max(0, local_positive - assigned_positive)
+        window_area = float(max(1, local_frontier_mask.size))
+        return {
+            "frontier_channel_mode": FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA,
+            "local_frontier_coverage": float(local_positive) / window_area,
+            "local_frontier_positive_count": float(local_positive),
+            "local_frontier_global_area_positive_count": float(assigned_positive),
+            "local_frontier_unmatched_count": float(unmatched),
+            "local_frontier_block_area_mean": (
+                float(canvas_channel[assigned_mask].mean()) if assigned_positive > 0 else 0.0
+            ),
+        }
 
     @staticmethod
     def _paint_geometry_value_to_local_canvas(
@@ -153,17 +286,53 @@ class AdvantageStateBuilder:
         canvas[1] = (sampled_map == OBSTACLE)
 
         agent_arr = cum_map.world_to_array(agent_state)
-        total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
-        for block in semantic_snapshot.accessible_blocks:
-            block_area_ratio = float(block.block_area) / total_unknown_area
-            for frontier_cluster in block.frontier_clusters:
-                self._paint_geometry_value_to_local_canvas(
-                    frontier_cluster.frontier_geometry,
+        frontier_channel_mode = str(self.config.frontier_channel_mode)
+        local_frontier_mask = None
+        frontier_meta: dict[str, float | str]
+        if frontier_channel_mode == FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER:
+            self._paint_semantic_block_area_raster(
+                canvas[2],
+                semantic_snapshot=semantic_snapshot,
+                agent_arr=agent_arr,
+                local_shape=local_shape,
+            )
+            frontier_visible_mask = canvas[2] > 0.0
+            frontier_visible = int(np.count_nonzero(frontier_visible_mask))
+            window_area = float(max(1, local_shape[0] * local_shape[1]))
+            frontier_meta = {
+                "frontier_channel_mode": FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
+                "local_frontier_coverage": float(frontier_visible) / window_area,
+                "local_frontier_positive_count": float(frontier_visible),
+                "local_frontier_block_area_mean": (
+                    float(canvas[2][frontier_visible_mask].mean()) if frontier_visible > 0 else 0.0
+                ),
+            }
+        else:
+            local_frontier_mask = self._local_frontier_mask(
+                cum_map,
+                arr_rows=arr_rows,
+                arr_cols=arr_cols,
+                inside=inside,
+                local_shape=local_shape,
+            )
+            if frontier_channel_mode == FRONTIER_CHANNEL_MODE_LOCAL_BINARY:
+                frontier_meta = self._paint_local_binary_frontier(
                     canvas[2],
-                    value=block_area_ratio,
-                    agent_arr=agent_arr,
+                    local_frontier_mask=local_frontier_mask,
+                )
+            elif frontier_channel_mode == FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA:
+                frontier_meta = self._paint_local_global_area_frontier(
+                    canvas[2],
+                    cum_map=cum_map,
+                    arr_rows=arr_rows,
+                    arr_cols=arr_cols,
+                    inside=inside,
+                    local_frontier_mask=local_frontier_mask,
+                    semantic_snapshot=semantic_snapshot,
                     local_shape=local_shape,
                 )
+            else:
+                raise ValueError(f"Unsupported frontier_channel_mode: {frontier_channel_mode!r}")
 
         revisit_count = np.maximum(sampled_visit - 1.0, 0.0).astype(np.float32, copy=False)
         visit_log_denominator = float(np.log1p(max(1e-6, float(self.config.visit_count_log_saturation))))
@@ -186,13 +355,7 @@ class AdvantageStateBuilder:
             local_shape=local_shape,
         )
 
-        window_area = float(max(1, local_shape[0] * local_shape[1]))
-        frontier_visible_mask = canvas[2] > 0.0
-        frontier_visible = np.count_nonzero(frontier_visible_mask)
-        meta = {
-            "local_frontier_coverage": float(frontier_visible) / window_area,
-            "local_frontier_block_area_mean": float(canvas[2][frontier_visible_mask].mean()) if frontier_visible > 0 else 0.0,
-        }
+        meta = dict(frontier_meta)
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0
         return canvas.copy(), meta

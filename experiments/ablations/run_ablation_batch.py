@@ -15,6 +15,7 @@ if __package__ in (None, ""):
 
 from experiments.ablations.ablation_specs import AblationSpec, ablation_slug, get_ablation_spec
 from experiments.ablations.batch_presets import get_batch_preset, list_batch_presets
+from experiments.ablations.frontier_channel_variants import describe_frontier_channel_mode
 from train_q_agent import TrainConfig
 
 
@@ -386,8 +387,14 @@ def _print_dry_run(
             extra_train_args=extra_train_args,
         )
         command = _command_for_ablation(spec, run_stage, train_args)
+        frontier_mode = spec.frontier_channel_mode or train_config.get(
+            "advantage_frontier_channel_mode",
+            "semantic_block_area_raster",
+        )
+        frontier_descriptor = describe_frontier_channel_mode(str(frontier_mode))
         print(f"[batch:dry-run] {spec.short_id}/{spec.ablation_id}")
         print(f"  command: {' '.join(command)}")
+        print(f"  frontier_channel_mode: {frontier_descriptor['frontier_channel_mode']}")
         print(f"  records: {_records_logs_dir(Path(args.records_root), spec)}")
         print("  checkpoint source: outputs/<run_name_timestamp>/checkpoints/last.pt cannot be known before run")
         print(f"  checkpoint target: {_checkpoint_target_path(Path(args.checkpoint_store_root), spec)}")

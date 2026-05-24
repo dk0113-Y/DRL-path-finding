@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from env.advantage_state_builder import (
+    FRONTIER_CHANNEL_MODE_LOCAL_BINARY,
+    FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA,
+)
+from experiments.ablations.frontier_channel_variants import FRONTIER_CHANNEL_VARIANT_GROUP
+
 
 @dataclass(frozen=True)
 class AblationSpec:
@@ -15,6 +21,7 @@ class AblationSpec:
     reward_overrides: dict[str, float] = field(default_factory=dict)
     value_replacement_strategy: str = "none"
     value_tree_enabled: bool | None = None
+    frontier_channel_mode: str | None = None
     recommended: bool = True
     notes: tuple[str, ...] = ()
 
@@ -90,6 +97,38 @@ _SPECS: tuple[AblationSpec, ...] = (
         zeroed_channels=("frontier_block_area_map", "visit_count_log_norm", "recent_trajectory_decay"),
     ),
     AblationSpec(
+        ablation_id="local_frontier_binary_map",
+        short_id="F6",
+        group=FRONTIER_CHANNEL_VARIANT_GROUP,
+        description=(
+            "Local binary frontier channel: replace frontier_block_area_map with an "
+            "agent-centered local frontier mask cropped from the cumulative belief map."
+        ),
+        frontier_channel_mode=FRONTIER_CHANNEL_MODE_LOCAL_BINARY,
+        notes=(
+            "Advantage frontier-channel variant only; reward overrides are none.",
+            "Value tree tensors remain enabled and unchanged.",
+            "Network tensor shape remains the 5-channel advantage canvas.",
+        ),
+    ),
+    AblationSpec(
+        ablation_id="local_frontier_global_area_map",
+        short_id="F7",
+        group=FRONTIER_CHANNEL_VARIANT_GROUP,
+        description=(
+            "Local-indexed frontier channel with global unknown-block area attributes: "
+            "use the cumulative-map local frontier mask as the spatial index and assign "
+            "each local frontier cell the block_area_ratio of its associated global unknown block."
+        ),
+        frontier_channel_mode=FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA,
+        notes=(
+            "Advantage frontier-channel variant only; reward overrides are none.",
+            "Value tree tensors remain enabled and unchanged.",
+            "Network tensor shape remains the 5-channel advantage canvas.",
+            "Unmatched local frontier cells remain zero and are counted in state meta.",
+        ),
+    ),
+    AblationSpec(
         ablation_id="no_step_penalty",
         short_id="R1",
         group="reward_ablation",
@@ -163,6 +202,10 @@ def ablation_slug(spec: AblationSpec) -> str:
 
 def is_channel_ablation(spec: AblationSpec) -> bool:
     return spec.group == "channel_ablation"
+
+
+def is_frontier_channel_variant(spec: AblationSpec) -> bool:
+    return spec.group == FRONTIER_CHANNEL_VARIANT_GROUP
 
 
 def is_reward_ablation(spec: AblationSpec) -> bool:

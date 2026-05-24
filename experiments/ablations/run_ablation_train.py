@@ -15,11 +15,13 @@ from experiments.ablations.ablation_specs import (
     ablation_slug,
     get_ablation_spec,
     is_channel_ablation,
+    is_frontier_channel_variant,
     is_reward_ablation,
     is_semantic_split_ablation,
     is_value_tree_ablation,
     list_ablation_specs,
 )
+from experiments.ablations.frontier_channel_variants import describe_frontier_channel_mode
 from experiments.ablations.reward_overrides import apply_reward_overrides
 from experiments.ablations.semantic_split_ablation import (
     NoSemanticDualStateSplitQNetwork,
@@ -101,6 +103,23 @@ def _apply_ablation_config(
             reward_override={},
             value_replacement_strategy="none",
             value_tree_enabled=True,
+            run_stage=run_stage,
+        )
+    if is_frontier_channel_variant(spec):
+        if not spec.frontier_channel_mode:
+            raise ValueError(f"Frontier channel variant {spec.short_id} is missing frontier_channel_mode.")
+        return replace(
+            cfg,
+            ablation_group=spec.group,
+            ablation_id=spec.ablation_id,
+            experiment_id=spec.experiment_id or spec.short_id,
+            ablation_name=spec.ablation_name or spec.ablation_id,
+            channel_ablation="none",
+            zeroed_advantage_channels=(),
+            reward_override={},
+            value_replacement_strategy="none",
+            value_tree_enabled=True,
+            advantage_frontier_channel_mode=str(spec.frontier_channel_mode),
             run_stage=run_stage,
         )
     if is_value_tree_ablation(spec):
@@ -186,11 +205,13 @@ def _dry_run_payload(
         "reward_turn_penalty_scale": cfg.reward_turn_penalty_scale,
         "reward_timeout_penalty": cfg.reward_timeout_penalty,
     }
+    frontier_descriptor = describe_frontier_channel_mode(cfg.advantage_frontier_channel_mode)
     return {
         "dry_run": True,
         "ablation_spec": asdict(spec),
         "run_name": cfg.run_name,
         "run_stage": run_stage,
+        **frontier_descriptor,
         "zeroed_advantage_channels": list(cfg.zeroed_advantage_channels),
         "reward_override": dict(cfg.reward_override),
         "value_replacement_strategy": cfg.value_replacement_strategy,
@@ -200,6 +221,7 @@ def _dry_run_payload(
         "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
         "model_class": cfg.model_class,
         "model_parameter_count": cfg.model_parameter_count,
+        "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
         "train_args": train_args,
         "train_config": {
             "device": cfg.device,
@@ -214,6 +236,7 @@ def _dry_run_payload(
             "value_replacement_strategy": cfg.value_replacement_strategy,
             "value_tree_enabled": cfg.value_tree_enabled,
             "channel_ablation": cfg.channel_ablation,
+            "advantage_frontier_channel_mode": cfg.advantage_frontier_channel_mode,
             "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
             "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
             "model_class": cfg.model_class,
@@ -224,6 +247,7 @@ def _dry_run_payload(
 
 
 def _manifest_payload(spec: AblationSpec, cfg: train_q_agent.TrainConfig) -> dict[str, object]:
+    frontier_descriptor = describe_frontier_channel_mode(cfg.advantage_frontier_channel_mode)
     return {
         "schema_version": "ablation_manifest/v1",
         "run_stage": cfg.run_stage,
@@ -233,12 +257,14 @@ def _manifest_payload(spec: AblationSpec, cfg: train_q_agent.TrainConfig) -> dic
         "ablation_name": cfg.ablation_name,
         "short_id": spec.short_id,
         "description": spec.description,
+        **frontier_descriptor,
         "zeroed_advantage_channels": list(cfg.zeroed_advantage_channels),
         "reward_override": dict(cfg.reward_override),
         "reward_overrides": "none" if not cfg.reward_override else dict(cfg.reward_override),
         "channel_ablation": cfg.channel_ablation,
         "value_replacement_strategy": cfg.value_replacement_strategy,
         "value_tree_enabled": cfg.value_tree_enabled,
+        "value_tree_unchanged": not bool(is_value_tree_ablation(spec)),
         "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
         "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
         "value_tree_used_by_model": bool(cfg.value_tensors_used_by_model),
@@ -289,10 +315,12 @@ def _print_specs() -> None:
         rewards = ", ".join(f"{k}={v}" for k, v in spec.reward_overrides.items()) or "-"
         value_strategy = spec.value_replacement_strategy or "none"
         recommended = "yes" if spec.recommended else "no"
+        frontier_mode = spec.frontier_channel_mode or "-"
         print(
             f"{spec.short_id:>2}  {spec.ablation_id:<34} "
             f"group={spec.group:<17} recommended={recommended:<3} "
-            f"zeroed=[{zeroed}] reward_overrides=[{rewards}] value_strategy={value_strategy}"
+            f"zeroed=[{zeroed}] reward_overrides=[{rewards}] "
+            f"value_strategy={value_strategy} frontier_mode={frontier_mode}"
         )
 
 

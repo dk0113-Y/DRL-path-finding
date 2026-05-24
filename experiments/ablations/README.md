@@ -24,6 +24,8 @@ Input/channel ablations:
 - F3 `no_recent_trajectory_channel`
 - F4 `no_visit_traj_channels`
 - F5 `occupancy_only_canvas`
+- F6 `local_frontier_binary_map`
+- F7 `local_frontier_global_area_map`
 
 Reward ablations:
 
@@ -48,6 +50,15 @@ The E model does not call `SemanticDuelingHead`, and its aux output marks `no_se
 
 E requires retraining. A, D, F, or R checkpoints cannot be reused as final E performance evidence.
 
+## F6/F7 Frontier Channel Variants
+
+F6 and F7 are advantage frontier-channel diagnostics. They are not reward ablations, do not alter the value tree, and keep the network tensor interface unchanged: the advantage canvas still has the same five channel names, with channel 2 remaining `frontier_block_area_map` for compatibility.
+
+- F6 `F6_ablation_local_frontier_binary_map` tests whether the advantage branch needs a local frontier position cue. Channel 2 is an agent-centered local crop of `cum_map.get_frontier_u8(refresh=False)` from the cumulative belief map. Frontier cells are `1.0`; all other cells are `0.0`.
+- F7 `F7_ablation_local_frontier_global_area_map` tests whether local-indexed frontier positions still benefit from global unknown-block area attributes. Channel 2 uses the same cumulative-map local frontier crop as the primary spatial index, then assigns matched local frontier cells `block.block_area / total_accessible_unknown_area` from `SharedSemanticSnapshot`. Local frontier cells without a semantic block match remain `0.0` and are counted in state meta.
+
+The full method A keeps the default `semantic_block_area_raster` behavior: semantic frontier cluster geometry is projected into the local canvas with block-area ratios. F1 still remains a zeroed-channel ablation and should not be interpreted as either F6 or F7.
+
 ## Naming
 
 Canonical `ablation_id` and `short_id` stay stable. Filesystem slugs use:
@@ -61,6 +72,8 @@ When the canonical id already starts with `<short_id>_ablation_`, the canonical 
 - D: `D_ablation_no_value_tree`
 - E: `E_ablation_no_semantic_dual_state_split`
 - F5: `F5_ablation_occupancy_only_canvas`
+- F6: `F6_ablation_local_frontier_binary_map`
+- F7: `F7_ablation_local_frontier_global_area_map`
 - R5: `R5_ablation_no_efficiency_penalties`
 
 Default outputs run names use `<slug>_<run_stage>`. Curated logs are archived to `experiment_records/ablations/<slug>/logs/`. Checkpoint bodies are copied to `checkpoint_store/ablations/<slug>.pt` by the batch runner and are ignored by Git.
@@ -100,6 +113,7 @@ Available structural presets include:
 - `structural_core_batch`: D only, preserving the original minimum structural check semantics.
 - `semantic_core_batch`: E only.
 - `structural_extended_batch`: D and E.
+- `frontier_channel_variant_batch`: F6 and F7.
 
 Dry-run E through the batch runner:
 
@@ -111,6 +125,18 @@ Run E smoke through the batch runner:
 
 ```powershell
 python experiments\ablations\run_ablation_batch.py --ablation-ids E --run-stage smoke --device cpu
+```
+
+Dry-run F6/F7 frontier channel variants:
+
+```powershell
+python experiments\ablations\run_ablation_batch.py --preset frontier_channel_variant_batch --run-stage smoke --device cpu --dry-run
+```
+
+Or use the smoke-default launcher:
+
+```powershell
+.\scripts\run_f6_f7_frontier_channel_variants.ps1 -RunStage smoke -Device cpu -DryRun
 ```
 
 Wait for a running C baseline formal job and then launch E formal through the

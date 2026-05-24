@@ -16,7 +16,11 @@ import numpy as np
 import torch
 
 from agents.q_value_agent import ExplorationQConfig, ExplorationQNetwork, StateAdapterConfig, StateTensorAdapter
-from env.advantage_state_builder import AdvantageStateConfig
+from env.advantage_state_builder import (
+    FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
+    FRONTIER_CHANNEL_MODES,
+    AdvantageStateConfig,
+)
 from env.shared_semantic_layer import SharedSemanticConfig
 from env.value_state_builder import ValueStateConfig
 from training.checkpointing import CheckpointManager
@@ -162,6 +166,7 @@ class TrainConfig:
     reward_override: dict[str, float] = field(default_factory=dict)
     value_replacement_strategy: str = "none"
     value_tree_enabled: bool = True
+    advantage_frontier_channel_mode: str = FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER
     advantage_canvas_channels: tuple[str, ...] = (
         "free",
         "obstacle",
@@ -758,6 +763,7 @@ def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=Non
         advantage_state=AdvantageStateConfig(
             trajectory_history_steps=int(cfg.trajectory_history_steps),
             enable_timing=bool(cfg.enable_advantage_state_timing),
+            frontier_channel_mode=str(cfg.advantage_frontier_channel_mode),
         ),
         value_state=ValueStateConfig(
             max_accessible_blocks=int(cfg.max_accessible_blocks),
@@ -2279,6 +2285,16 @@ def parse_args() -> TrainConfig:
     p.add_argument("--special-lowcov-absolute-threshold", type=float, default=0.75)
     p.add_argument("--special-lowcov-local-drop-margin", type=float, default=0.12)
     p.add_argument("--special-lowcov-max-plots", type=int, default=5)
+    p.add_argument(
+        "--advantage-frontier-channel-mode",
+        type=str,
+        choices=FRONTIER_CHANNEL_MODES,
+        default=FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
+        help=(
+            "Advantage canvas channel-2 semantics. Default preserves the full-method "
+            "semantic block-area raster."
+        ),
+    )
 
     p.add_argument("--output-root", type=str, default="outputs")
     p.add_argument("--run-name", type=str, default="ddqn_explore_vscode_stage5")
@@ -2431,6 +2447,7 @@ def parse_args() -> TrainConfig:
             special_lowcov_absolute_threshold=args.special_lowcov_absolute_threshold,
             special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
             special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
+            advantage_frontier_channel_mode=str(args.advantage_frontier_channel_mode),
             output_root=args.output_root,
             run_name=args.run_name,
         )
@@ -2542,6 +2559,7 @@ def parse_args() -> TrainConfig:
         special_lowcov_absolute_threshold=args.special_lowcov_absolute_threshold,
         special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
         special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
+        advantage_frontier_channel_mode=str(args.advantage_frontier_channel_mode),
         output_root=args.output_root,
         run_name=args.run_name,
     )
