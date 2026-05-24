@@ -1,0 +1,7 @@
+comparison,baseline_method_id,comparator_method_id,paired_episode_count,map_fingerprint_mismatch_count,coverage_diff_mean,coverage_diff_std,coverage_diff_median,coverage_diff_a_better_count,coverage_diff_tie_count,coverage_diff_a_worse_count,success_diff_mean,success_diff_std,success_diff_median,success_diff_a_better_count,success_diff_tie_count,success_diff_a_worse_count,length_diff_mean,length_diff_std,length_diff_median,length_diff_a_better_count,length_diff_tie_count,length_diff_a_worse_count,timeout_diff_mean,timeout_diff_std,timeout_diff_median,timeout_diff_a_better_count,timeout_diff_tie_count,timeout_diff_a_worse_count
+A_vs_F1,A,F1,100,0,-0.012628,0.08903686341,-0.0004,41,6,53,-0.09,0.514339824,0,9,73,18,35.57,189.9190819,15.5,45,3,52,0.09,0.514339824,0,9,73,18
+A_vs_R1,A,R1,100,0,-0.014549,0.1096685009,-0.0004,41,6,53,-0.04,0.5108914767,0,11,74,15,14.73,181.2898151,0,46,6,48,0.04,0.5108914767,0,11,74,15
+A_vs_R2,A,R2,100,0,-0.021058,0.100479493,-0.0002,40,10,50,-0.06,0.4886592666,0,9,76,15,21.97,196.4435537,11,42,6,52,0.06,0.4886592666,0,9,76,15
+A_vs_R3,A,R3,100,0,-0.017628,0.09959371718,-0.0004,43,6,51,-0.02,0.5120763832,0,12,74,14,10.28,176.3228261,0,45,8,47,0.02,0.5120763832,0,12,74,14
+A_vs_R4,A,R4,100,0,-0.005152,0.1257273051,0,46,7,47,-0.02,0.5501147722,0,14,70,16,13.54,179.4564419,0,46,5,49,0.02,0.5501147722,0,14,70,16
+A_vs_R5,A,R5,100,0,0.06835,0.1683607073,0.0101,67,6,27,0.39,0.6012613005,0,45,49,6,-99.97,215.105821,-73.5,61,15,24,-0.39,0.6012613005,0,45,49,6
