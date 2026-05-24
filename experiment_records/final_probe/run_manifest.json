@@ -1,0 +1,541 @@
+{
+  "schema_version": "final_probe_run_manifest/v1",
+  "created_at": "2026-05-23T22:58:08+08:00",
+  "status": "ok",
+  "repo_root": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF",
+  "git_sha": "b0a99aa3041cecdae8be7d62cd55ccee73fd8d1d",
+  "git_branch": "main",
+  "python": "3.12.7 | packaged by Anaconda, Inc. | (main, Oct  4 2024, 13:17:27) [MSC v.1929 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch_version": "2.5.1",
+  "arguments": {
+    "dry_run": false,
+    "episodes": 100,
+    "seed_base": 20261323,
+    "device": "cuda",
+    "output_root": "experiment_records\\final_probe",
+    "include_r6": false,
+    "allow_missing": false,
+    "continue_on_error": false
+  },
+  "audit": {
+    "created_at": "2026-05-23T20:28:02+08:00",
+    "repo_root": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF",
+    "method_count": 15,
+    "missing_count": 0,
+    "missing": [],
+    "methods": [
+      {
+        "method_id": "B",
+        "display_name": "classical_frontier_greedy",
+        "group": "B",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B\\summary.json",
+        "checkpoint_required": false,
+        "checkpoint_path": null,
+        "checkpoint_status": "not_required",
+        "config_snapshot_path": null,
+        "config_snapshot_status": "not_required",
+        "model_factory": "none",
+        "model_factory_status": "not_checked",
+        "state_adapter_factory": "FrontierGreedyBaselineEvaluator internal StateTensorAdapter",
+        "state_adapter_factory_status": "not_checked",
+        "runner": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\scripts\\run_frontier_greedy_baseline.py",
+        "runner_status": "ok"
+      },
+      {
+        "method_id": "A",
+        "display_name": "full_method_main",
+        "group": "A",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\A",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\A\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\A\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\full_method_main\\A_full_method.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\full_method_main\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1127,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "C",
+        "display_name": "local_state_ddqn",
+        "group": "C",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\C",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\C\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\C\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\baselines\\C_baseline_local_state_ddqn.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\baselines\\C_baseline_local_state_ddqn\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "LocalStateQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "LocalStateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 829,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "D",
+        "display_name": "no_value_tree",
+        "group": "D",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\D",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\D\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\D\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\D_ablation_no_value_tree.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\D_ablation_no_value_tree\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "AblationStateTensorAdapter(value_replacement_strategy=zero_value_state)",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1151,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "E",
+        "display_name": "no_semantic_dual_state_split",
+        "group": "E",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\E",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\E\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\E\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\E_ablation_no_semantic_dual_state_split.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\E_ablation_no_semantic_dual_state_split\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "NoSemanticDualStateSplitQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1002,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "F1",
+        "display_name": "no_frontier_channel",
+        "group": "F",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F1",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F1\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F1\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F1_ablation_no_frontier_channel.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F1_ablation_no_frontier_channel\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['frontier_block_area_map'])",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1140,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "F2",
+        "display_name": "no_visit_count_channel",
+        "group": "F",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F2",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F2\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F2\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F2_ablation_no_visit_count_channel.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F2_ablation_no_visit_count_channel\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['visit_count_log_norm'])",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1070,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "F3",
+        "display_name": "no_recent_trajectory_channel",
+        "group": "F",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F3",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F3\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F3\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F3_ablation_no_recent_trajectory_channel.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F3_ablation_no_recent_trajectory_channel\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['recent_trajectory_decay'])",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1011,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "F4",
+        "display_name": "no_visit_traj_channels",
+        "group": "F",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F4",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F4\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F4\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F4_ablation_no_visit_traj_channels.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F4_ablation_no_visit_traj_channels\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['visit_count_log_norm', 'recent_trajectory_decay'])",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 847,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "F5",
+        "display_name": "occupancy_only_canvas",
+        "group": "F",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F5",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F5\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F5\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F5_ablation_occupancy_only_canvas.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F5_ablation_occupancy_only_canvas\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['frontier_block_area_map', 'visit_count_log_norm', 'recent_trajectory_decay'])",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 845,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "R1",
+        "display_name": "no_step_penalty",
+        "group": "R",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R1",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R1\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R1\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R1_ablation_no_step_penalty.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R1_ablation_no_step_penalty\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1110,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "R2",
+        "display_name": "no_revisit_penalty",
+        "group": "R",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R2",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R2\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R2\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R2_ablation_no_revisit_penalty.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R2_ablation_no_revisit_penalty\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1073,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "R3",
+        "display_name": "no_turn_penalty",
+        "group": "R",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R3",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R3\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R3\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R3_ablation_no_turn_penalty.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R3_ablation_no_turn_penalty\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1084,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "R4",
+        "display_name": "no_timeout_penalty",
+        "group": "R",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R4",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R4\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R4\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R4_ablation_no_timeout_penalty.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R4_ablation_no_timeout_penalty\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1097,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      },
+      {
+        "method_id": "R5",
+        "display_name": "no_efficiency_penalties",
+        "group": "R",
+        "output_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R5",
+        "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R5\\per_episode.csv",
+        "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R5\\summary.json",
+        "checkpoint_required": true,
+        "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R5_ablation_no_efficiency_penalties.pt",
+        "checkpoint_status": "ok",
+        "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R5_ablation_no_efficiency_penalties\\logs\\config_snapshot.json",
+        "config_snapshot_status": "ok",
+        "model_factory": "ExplorationQNetwork",
+        "model_factory_status": "ok",
+        "state_adapter_factory": "StateTensorAdapter",
+        "state_adapter_factory_status": "ok",
+        "checkpoint_train_config_status": "ok",
+        "checkpoint_env_steps": 500000,
+        "checkpoint_learn_steps": 30750,
+        "checkpoint_train_episode_idx": 1049,
+        "load_state_dict": {
+          "missing_keys": [],
+          "unexpected_keys": []
+        }
+      }
+    ],
+    "output_root": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe",
+    "output_files": {
+      "final_probe_summary_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\final_probe_summary.csv",
+      "final_probe_per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\final_probe_per_episode.csv",
+      "final_probe_protocol_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\final_probe_protocol.json",
+      "method_registry_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\method_registry.json",
+      "run_manifest_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\run_manifest.json"
+    },
+    "device": {
+      "requested": "cuda",
+      "resolved": "cuda",
+      "cuda_available": true,
+      "status": "ok"
+    },
+    "baseline_command": [
+      "F:\\Anaconda3\\python.exe",
+      "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\scripts\\run_frontier_greedy_baseline.py",
+      "--episodes",
+      "100",
+      "--fixed-final-probe-seed-base",
+      "20261323",
+      "--use-fixed-final-probe-seeds",
+      "--run-stage",
+      "formal",
+      "--output-dir",
+      "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B"
+    ]
+  },
+  "methods": [
+    {
+      "method_id": "B",
+      "status": "ok",
+      "runtime_sec": 970.1578408000059,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B\\per_episode.csv"
+    },
+    {
+      "method_id": "A",
+      "status": "ok",
+      "runtime_sec": 581.3987931000302,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\A\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\A\\per_episode.csv"
+    },
+    {
+      "method_id": "C",
+      "status": "ok",
+      "runtime_sec": 236.23224109993316,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\C\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\C\\per_episode.csv"
+    },
+    {
+      "method_id": "D",
+      "status": "ok",
+      "runtime_sec": 551.9555544999894,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\D\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\D\\per_episode.csv"
+    },
+    {
+      "method_id": "E",
+      "status": "ok",
+      "runtime_sec": 704.9316866999725,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\E\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\E\\per_episode.csv"
+    },
+    {
+      "method_id": "F1",
+      "status": "ok",
+      "runtime_sec": 476.9755256000208,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F1\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F1\\per_episode.csv"
+    },
+    {
+      "method_id": "F2",
+      "status": "ok",
+      "runtime_sec": 673.0741296999622,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F2\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F2\\per_episode.csv"
+    },
+    {
+      "method_id": "F3",
+      "status": "ok",
+      "runtime_sec": 587.1602965000784,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F3\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F3\\per_episode.csv"
+    },
+    {
+      "method_id": "F4",
+      "status": "ok",
+      "runtime_sec": 857.5726755000651,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F4\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F4\\per_episode.csv"
+    },
+    {
+      "method_id": "F5",
+      "status": "ok",
+      "runtime_sec": 821.0070062000304,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F5\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\F5\\per_episode.csv"
+    },
+    {
+      "method_id": "R1",
+      "status": "ok",
+      "runtime_sec": 463.37270449998323,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R1\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R1\\per_episode.csv"
+    },
+    {
+      "method_id": "R2",
+      "status": "ok",
+      "runtime_sec": 457.7784147999482,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R2\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R2\\per_episode.csv"
+    },
+    {
+      "method_id": "R3",
+      "status": "ok",
+      "runtime_sec": 494.08700200007297,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R3\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R3\\per_episode.csv"
+    },
+    {
+      "method_id": "R4",
+      "status": "ok",
+      "runtime_sec": 489.55525500001386,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R4\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R4\\per_episode.csv"
+    },
+    {
+      "method_id": "R5",
+      "status": "ok",
+      "runtime_sec": 640.6749661000213,
+      "summary_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R5\\summary.json",
+      "per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\R5\\per_episode.csv"
+    }
+  ],
+  "runtime_sec": 9006.111572499969,
+  "output_files": {
+    "final_probe_summary_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\final_probe_summary.csv",
+    "final_probe_per_episode_csv": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\final_probe_per_episode.csv",
+    "final_probe_protocol_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\final_probe_protocol.json",
+    "method_registry_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\method_registry.json",
+    "run_manifest_json": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\run_manifest.json"
+  }
+}

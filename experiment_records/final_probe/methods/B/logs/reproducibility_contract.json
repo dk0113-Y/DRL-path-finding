@@ -1,0 +1,40 @@
+{
+  "artifact_type": "baseline_reproducibility_contract",
+  "run_type": "baseline",
+  "baseline_name": "classical_frontier_greedy_v1",
+  "run_stage": "formal",
+  "source_of_truth_repo": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF",
+  "git_sha": "b0a99aa3041cecdae8be7d62cd55ccee73fd8d1d",
+  "git_branch": "main",
+  "argv": [
+    "run_final_probe_matrix.py",
+    "--episodes",
+    "100",
+    "--fixed-final-probe-seed-base",
+    "20261323",
+    "--use-fixed-final-probe-seeds",
+    "--run-stage",
+    "formal",
+    "--output-dir",
+    "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B"
+  ],
+  "python": "3.12.7 | packaged by Anaconda, Inc. | (main, Oct  4 2024, 13:17:27) [MSC v.1929 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "numpy_version": "1.26.4",
+  "seed_policy": {
+    "use_fixed_final_probe_seeds": true,
+    "fixed_final_probe_seed_base": 20261323,
+    "episode_seed_rule": "seed_base + zero_based_episode_index"
+  },
+  "decision_input_contract": {
+    "uses_cumulative_belief_map": true,
+    "uses_frontier_cache": true,
+    "uses_shared_semantic_snapshot": true,
+    "uses_valid_action_set": true,
+    "uses_recent_trajectory_positions": true,
+    "uses_ground_truth_full_map_for_decision": false
+  },
+  "no_training": true,
+  "no_q_network": true,
+  "no_checkpoint": true
+}

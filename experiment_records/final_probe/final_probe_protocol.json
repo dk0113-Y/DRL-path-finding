@@ -1,0 +1,30 @@
+{
+  "protocol_name": "final_probe_matrix_v1",
+  "created_at": "2026-05-23T20:28:02+08:00",
+  "episodes": 100,
+  "seed_base": 20261323,
+  "episode_seed_rule": "seed_base + zero_based_episode_index",
+  "device": "cuda",
+  "run_order": [
+    "B",
+    "A",
+    "C",
+    "D",
+    "E",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+  ],
+  "b_group_rule": "B classical frontier greedy baseline runs first and requires no checkpoint.",
+  "checkpoint_rule": "A/C/D/E/F/R are loaded from checkpoint_store with method-aware model and state adapter factories.",
+  "include_r6": false,
+  "r6_default": "excluded unless --include-r6 is specified",
+  "checkpoint_copy_policy": "checkpoints are referenced in place and are not copied into experiment_records"
+}

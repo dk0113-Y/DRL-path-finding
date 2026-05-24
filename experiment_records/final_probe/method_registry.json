@@ -1,0 +1,219 @@
+{
+  "schema_version": "final_probe_method_registry/v1",
+  "created_at": "2026-05-23T20:28:02+08:00",
+  "methods": [
+    {
+      "method_id": "B",
+      "group": "B",
+      "display_name": "classical_frontier_greedy",
+      "runner": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\scripts\\run_frontier_greedy_baseline.py",
+      "checkpoint_required": false,
+      "checkpoint_path": null,
+      "config_snapshot_path": null,
+      "model_factory": "none",
+      "state_adapter_factory": "FrontierGreedyBaselineEvaluator internal StateTensorAdapter",
+      "evaluation_order": 0
+    },
+    {
+      "method_id": "A",
+      "group": "A",
+      "display_name": "full_method_main",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\full_method_main\\A_full_method.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\full_method_main\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "evaluation_order": 1
+    },
+    {
+      "method_id": "C",
+      "group": "C",
+      "display_name": "local_state_ddqn",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\baselines\\C_baseline_local_state_ddqn.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\baselines\\C_baseline_local_state_ddqn\\logs\\config_snapshot.json",
+      "model_factory": "LocalStateQNetwork",
+      "state_adapter_factory": "LocalStateTensorAdapter",
+      "evaluation_order": 2
+    },
+    {
+      "method_id": "D",
+      "group": "D",
+      "display_name": "no_value_tree",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\D_ablation_no_value_tree.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\D_ablation_no_value_tree\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "AblationStateTensorAdapter(value_replacement_strategy=zero_value_state)",
+      "value_replacement_strategy": "zero_value_state",
+      "evaluation_order": 3
+    },
+    {
+      "method_id": "E",
+      "group": "E",
+      "display_name": "no_semantic_dual_state_split",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\E_ablation_no_semantic_dual_state_split.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\E_ablation_no_semantic_dual_state_split\\logs\\config_snapshot.json",
+      "model_factory": "NoSemanticDualStateSplitQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "evaluation_order": 4
+    },
+    {
+      "method_id": "F1",
+      "group": "F",
+      "display_name": "no_frontier_channel",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F1_ablation_no_frontier_channel.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F1_ablation_no_frontier_channel\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['frontier_block_area_map'])",
+      "zeroed_advantage_channels": [
+        "frontier_block_area_map"
+      ],
+      "reward_override": {},
+      "evaluation_order": 5
+    },
+    {
+      "method_id": "F2",
+      "group": "F",
+      "display_name": "no_visit_count_channel",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F2_ablation_no_visit_count_channel.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F2_ablation_no_visit_count_channel\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['visit_count_log_norm'])",
+      "zeroed_advantage_channels": [
+        "visit_count_log_norm"
+      ],
+      "reward_override": {},
+      "evaluation_order": 6
+    },
+    {
+      "method_id": "F3",
+      "group": "F",
+      "display_name": "no_recent_trajectory_channel",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F3_ablation_no_recent_trajectory_channel.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F3_ablation_no_recent_trajectory_channel\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['recent_trajectory_decay'])",
+      "zeroed_advantage_channels": [
+        "recent_trajectory_decay"
+      ],
+      "reward_override": {},
+      "evaluation_order": 7
+    },
+    {
+      "method_id": "F4",
+      "group": "F",
+      "display_name": "no_visit_traj_channels",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F4_ablation_no_visit_traj_channels.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F4_ablation_no_visit_traj_channels\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['visit_count_log_norm', 'recent_trajectory_decay'])",
+      "zeroed_advantage_channels": [
+        "visit_count_log_norm",
+        "recent_trajectory_decay"
+      ],
+      "reward_override": {},
+      "evaluation_order": 8
+    },
+    {
+      "method_id": "F5",
+      "group": "F",
+      "display_name": "occupancy_only_canvas",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\F5_ablation_occupancy_only_canvas.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\F5_ablation_occupancy_only_canvas\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "AblationStateTensorAdapter(zeroed_channels=['frontier_block_area_map', 'visit_count_log_norm', 'recent_trajectory_decay'])",
+      "zeroed_advantage_channels": [
+        "frontier_block_area_map",
+        "visit_count_log_norm",
+        "recent_trajectory_decay"
+      ],
+      "reward_override": {},
+      "evaluation_order": 9
+    },
+    {
+      "method_id": "R1",
+      "group": "R",
+      "display_name": "no_step_penalty",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R1_ablation_no_step_penalty.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R1_ablation_no_step_penalty\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "zeroed_advantage_channels": [],
+      "reward_override": {
+        "reward_step_penalty": 0.0
+      },
+      "evaluation_order": 10
+    },
+    {
+      "method_id": "R2",
+      "group": "R",
+      "display_name": "no_revisit_penalty",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R2_ablation_no_revisit_penalty.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R2_ablation_no_revisit_penalty\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "zeroed_advantage_channels": [],
+      "reward_override": {
+        "reward_revisit_penalty": 0.0
+      },
+      "evaluation_order": 11
+    },
+    {
+      "method_id": "R3",
+      "group": "R",
+      "display_name": "no_turn_penalty",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R3_ablation_no_turn_penalty.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R3_ablation_no_turn_penalty\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "zeroed_advantage_channels": [],
+      "reward_override": {
+        "reward_turn_penalty_scale": 0.0
+      },
+      "evaluation_order": 12
+    },
+    {
+      "method_id": "R4",
+      "group": "R",
+      "display_name": "no_timeout_penalty",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R4_ablation_no_timeout_penalty.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R4_ablation_no_timeout_penalty\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "zeroed_advantage_channels": [],
+      "reward_override": {
+        "reward_timeout_penalty": 0.0
+      },
+      "evaluation_order": 13
+    },
+    {
+      "method_id": "R5",
+      "group": "R",
+      "display_name": "no_efficiency_penalties",
+      "checkpoint_required": true,
+      "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\ablations\\R5_ablation_no_efficiency_penalties.pt",
+      "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\ablations\\R5_ablation_no_efficiency_penalties\\logs\\config_snapshot.json",
+      "model_factory": "ExplorationQNetwork",
+      "state_adapter_factory": "StateTensorAdapter",
+      "zeroed_advantage_channels": [],
+      "reward_override": {
+        "reward_step_penalty": 0.0,
+        "reward_revisit_penalty": 0.0,
+        "reward_turn_penalty_scale": 0.0,
+        "reward_timeout_penalty": 0.0
+      },
+      "evaluation_order": 14
+    }
+  ]
+}

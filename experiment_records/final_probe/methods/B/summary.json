@@ -1,0 +1,79 @@
+{
+  "method_id": "B",
+  "group": "B",
+  "display_name": "classical_frontier_greedy",
+  "status": "ok",
+  "checkpoint_path": null,
+  "run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B",
+  "episodes": 100,
+  "seed_base": 20261323,
+  "summary": {
+    "episodes": 100,
+    "metrics": {
+      "reward": 24.117748260498047,
+      "coverage": 0.6428810358047485,
+      "success_rate": 0.20999999344348907,
+      "episode_length": 515.5900268554688,
+      "repeat_visit_ratio": 0.6665165424346924
+    },
+    "reward_breakdown": {
+      "info_reward_sum": 92.87287902832031,
+      "step_penalty_sum": -10.311799049377441,
+      "recent_revisit_penalty_sum": -39.737998962402344,
+      "turn_penalty_sum": -16.5853328704834,
+      "timeout_penalty_sum": -6.320000171661377,
+      "terminal_bonus_sum": 4.199999809265137
+    },
+    "reward_events": {
+      "delta_empty_sum": 919.6300048828125,
+      "delta_obstacle_sum": 211.72999572753906,
+      "empty_info_gain_sum": 29.27273178100586,
+      "obstacle_info_gain_sum": 6.739575386047363,
+      "weighted_obstacle_info_gain_sum": 1.6848938465118408,
+      "weighted_info_gain_sum": 30.957626342773438,
+      "empty_info_reward_sum": 87.81820678710938,
+      "obstacle_info_reward_sum": 5.054681301116943,
+      "obstacle_info_contribution_ratio": 0.053754907101392746,
+      "recent_revisit_trigger_count": 397.3800048828125,
+      "stall_trigger_count": 394.04998779296875,
+      "zero_info_step_count": 414.7099914550781,
+      "turn_ge_90_count": 345.5199890136719,
+      "turn_135_count": 2.5799999237060547,
+      "turn_180_count": 323.510009765625,
+      "turn_penalty_weight_sum": 331.7066650390625,
+      "timeout_flag": 0.7900000214576721
+    },
+    "semantic_monitoring": {
+      "accessible_block_count": 2.316737174987793,
+      "total_accessible_unknown_area": 426.96234130859375,
+      "total_frontier_cluster_count": 5.5809431076049805,
+      "mean_block_area": 227.5044708251953,
+      "local_frontier_coverage": 0.02738422341644764,
+      "local_frontier_block_area_mean": 0.582942545413971,
+      "value_total_block_count_before_cap": 2.316737174987793,
+      "value_packed_block_count": 2.316737174987793,
+      "value_truncated_block_count": 0.0,
+      "value_block_cap_hit_flag": 0.0,
+      "value_total_entry_count_before_cap": 5.5809431076049805,
+      "value_packed_entry_count": 5.568002700805664,
+      "value_truncated_entry_count": 0.012939980253577232,
+      "value_entry_cap_hit_block_count": 0.011830457486212254,
+      "value_entry_cap_hit_flag": 0.011830457486212254,
+      "value_max_frontier_clusters_per_block": 3.708709478378296,
+      "value_mean_frontier_clusters_per_block": 2.695082187652588
+    },
+    "derived_diagnostics": {
+      "coverage_gain_per_step": 0.0017567063914611936,
+      "weighted_info_gain_per_step": 0.08688198029994965,
+      "zero_info_rate": 0.7135465145111084,
+      "recent_revisit_rate": 0.6660242676734924,
+      "stall_rate": 0.6604240536689758,
+      "turn_burden_rate": 0.5636395812034607,
+      "timeout_rate": 0.7900000214576721
+    },
+    "policy_decision_counts": {
+      "frontier_target": 51559,
+      "fallback_information_gain": 0
+    }
+  }
+}

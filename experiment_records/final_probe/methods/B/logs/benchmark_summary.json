@@ -1,0 +1,13 @@
+{
+  "artifact_type": "baseline_benchmark_summary",
+  "run_type": "baseline",
+  "baseline_name": "classical_frontier_greedy_v1",
+  "run_stage": "formal",
+  "run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe\\methods\\B",
+  "total_runtime_sec": 969.7937228999799,
+  "final_probe_episodes": 100,
+  "fixed_final_probe_seed_base": 20261323,
+  "no_training": true,
+  "no_q_network": true,
+  "no_checkpoint": true
+}
