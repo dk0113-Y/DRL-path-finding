@@ -1,0 +1,38 @@
+{
+  "protocol_name": "a_epsilon_final_probe_diagnostic_v1",
+  "created_at": "2026-05-24T14:47:34+08:00",
+  "diagnostic_scope": "A_only_epsilon_probe",
+  "purpose": "Diagnose whether greedy determinization contributes to A_full_method_main final-probe drop.",
+  "not_replacement_for": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe",
+  "method_id": "A",
+  "episodes": 100,
+  "epsilon": 0.04,
+  "policy": "epsilon_greedy",
+  "epsilon_rule": "per step, sample a random valid action with probability epsilon; otherwise choose the greedy valid action",
+  "random_action_seed_rule": "numpy.default_rng(episode_seed + 1000003)",
+  "seed_blocks": {
+    "official_final_seed_block": 20261323,
+    "train_seed_block": 20259323
+  },
+  "episode_seed_rule": "seed_base + zero_based_episode_index",
+  "device": "cuda",
+  "checkpoint_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\checkpoint_store\\full_method_main\\A_full_method.pt",
+  "config_snapshot_path": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\full_method_main\\logs\\config_snapshot.json",
+  "method_loading": {
+    "model_factory": "ExplorationQNetwork",
+    "state_adapter_factory": "StateTensorAdapter"
+  },
+  "env_params": {
+    "rows": 40,
+    "cols": 60,
+    "obs_size": 6,
+    "scan_radius": 10,
+    "obstacle_ratio": 0.2,
+    "max_episode_steps": 600,
+    "coverage_stop_threshold": 0.95,
+    "trajectory_history_steps": 10
+  },
+  "checkpoint_copy_policy": "checkpoint is referenced in place and is not copied into experiment_records",
+  "official_final_probe_reference": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe",
+  "train_seed_greedy_reference": "C:\\Users\\Dk\\Desktop\\SCI\\DRL_PF\\experiment_records\\final_probe_train_seed_diagnostic"
+}
