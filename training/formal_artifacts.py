@@ -1543,7 +1543,9 @@ def build_config_snapshot(
                 "overrides": config_dict.get("reward_override") or {},
                 "semantic": "none_when_applied_false",
             },
+            "advantage_canvas_schema": config_dict.get("advantage_canvas_schema"),
             "advantage_canvas_channels": config_dict.get("advantage_canvas_channels"),
+            "frontier_raster_used": bool(config_dict.get("frontier_raster_used", True)),
             "safe_zero_dummy_value_state": False,
         },
         "default_main_baseline": {

@@ -255,8 +255,10 @@ def state_adapter_config_from_train_config(cfg: TrainConfig) -> StateAdapterConf
     return StateAdapterConfig(
         shared_semantics=SharedSemanticConfig(enable_timing=False),
         advantage_state=AdvantageStateConfig(
+            advantage_canvas_schema=str(cfg.advantage_canvas_schema),
             trajectory_history_steps=int(cfg.trajectory_history_steps),
             enable_timing=False,
+            frontier_channel_mode=str(cfg.advantage_frontier_channel_mode),
         ),
         value_state=ValueStateConfig(
             max_accessible_blocks=int(cfg.max_accessible_blocks),

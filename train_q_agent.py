@@ -16,10 +16,16 @@ import numpy as np
 import torch
 
 from agents.q_value_agent import ExplorationQConfig, ExplorationQNetwork, StateAdapterConfig, StateTensorAdapter
+from encoders.advantage_encoder import AdvantageEncoderConfig
 from env.advantage_state_builder import (
+    ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
+    ADVANTAGE_CANVAS_SCHEMAS,
     FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
     FRONTIER_CHANNEL_MODES,
     AdvantageStateConfig,
+    advantage_canvas_channels_for_schema,
+    advantage_canvas_uses_frontier_raster,
+    normalize_advantage_canvas_schema,
 )
 from env.shared_semantic_layer import SharedSemanticConfig
 from env.value_state_builder import ValueStateConfig
@@ -160,12 +166,15 @@ class TrainConfig:
     ablation_group: str = "none"
     ablation_id: str = "none"
     experiment_id: str = "A"
+    method_id: str = "A"
+    method_name: str = "legacy_5ch_frontier_raster"
     ablation_name: str = "none"
     channel_ablation: str = "none"
     zeroed_advantage_channels: tuple[str, ...] = ()
     reward_override: dict[str, float] = field(default_factory=dict)
     value_replacement_strategy: str = "none"
     value_tree_enabled: bool = True
+    advantage_canvas_schema: str = ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER
     advantage_frontier_channel_mode: str = FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER
     advantage_canvas_channels: tuple[str, ...] = (
         "free",
@@ -174,6 +183,11 @@ class TrainConfig:
         "visit_count_log_norm",
         "recent_trajectory_decay",
     )
+    advantage_canvas_channel_count: int = 5
+    frontier_raster_used: bool = True
+    value_tree_unchanged: bool = True
+    value_branch_source: str = "SharedSemanticSnapshot"
+    value_branch_representation: str = "structured_frontier_block_value_tree"
     baseline_id: str = "none"
     baseline_group: str = "none"
     baseline_name: str = "none"
@@ -212,6 +226,35 @@ class TrainConfig:
 
     output_root: str = "outputs"
     run_name: str = "ddqn_explore_vscode_stage5"
+
+    def __post_init__(self) -> None:
+        schema = normalize_advantage_canvas_schema(self.advantage_canvas_schema)
+        schema_channels = tuple(advantage_canvas_channels_for_schema(schema))
+        configured_channels = tuple(str(channel) for channel in (self.advantage_canvas_channels or ()))
+        known_schema_channels = {
+            tuple(advantage_canvas_channels_for_schema(candidate_schema))
+            for candidate_schema in ADVANTAGE_CANVAS_SCHEMAS
+        }
+        if not configured_channels or configured_channels in known_schema_channels:
+            channels = schema_channels
+        else:
+            channels = configured_channels
+
+        object.__setattr__(self, "advantage_canvas_schema", schema)
+        object.__setattr__(self, "advantage_canvas_channels", channels)
+        object.__setattr__(self, "advantage_canvas_channel_count", int(len(channels)))
+        object.__setattr__(
+            self,
+            "frontier_raster_used",
+            bool("frontier_block_area_map" in channels and advantage_canvas_uses_frontier_raster(schema)),
+        )
+
+        experiment_id = str(self.experiment_id or "A")
+        method_id = str(self.method_id or experiment_id)
+        method_name = str(self.method_name or schema)
+        object.__setattr__(self, "experiment_id", experiment_id)
+        object.__setattr__(self, "method_id", method_id)
+        object.__setattr__(self, "method_name", method_name)
 
 
 def linear_epsilon(step: int, cfg: TrainConfig) -> float:
@@ -556,6 +599,11 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"device={cfg.device} "
         f"profiling_enabled={profiling_enabled} "
         f"budget_mode={budget_mode} "
+        f"experiment_id={cfg.experiment_id} "
+        f"method_id={cfg.method_id} "
+        f"advantage_canvas_schema={cfg.advantage_canvas_schema} "
+        f"advantage_canvas_channel_count={int(cfg.advantage_canvas_channel_count)} "
+        f"frontier_raster_used={bool(cfg.frontier_raster_used)} "
         f"total_env_steps={int(cfg.total_env_steps)} "
         f"epsilon_decay_steps={int(cfg.epsilon_decay_steps)} "
         f"epsilon_end={float(cfg.epsilon_end):.4f} "
@@ -746,7 +794,16 @@ def _print_timing_summary(env_steps: int, collector, learner, replay, state_adap
 
 def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=None):
     if model_factory is None:
-        q_cfg = ExplorationQConfig()
+        advantage_canvas_channels = tuple(
+            cfg.advantage_canvas_channels
+            or advantage_canvas_channels_for_schema(cfg.advantage_canvas_schema)
+        )
+        q_cfg = ExplorationQConfig(
+            advantage_encoder=AdvantageEncoderConfig(
+                canvas_in_channels=len(advantage_canvas_channels),
+                canvas_channels=advantage_canvas_channels,
+            )
+        )
         raw_online_net = ExplorationQNetwork(q_cfg)
     else:
         raw_online_net = model_factory(cfg=cfg)
@@ -761,6 +818,7 @@ def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=Non
             enable_timing=bool(cfg.enable_shared_semantic_timing),
         ),
         advantage_state=AdvantageStateConfig(
+            advantage_canvas_schema=str(cfg.advantage_canvas_schema),
             trajectory_history_steps=int(cfg.trajectory_history_steps),
             enable_timing=bool(cfg.enable_advantage_state_timing),
             frontier_channel_mode=str(cfg.advantage_frontier_channel_mode),
@@ -1917,6 +1975,10 @@ def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser(description="Double DQN training with post-hoc formal checkpoint selection")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--experiment-id", type=str, default="A")
+    p.add_argument("--method-id", type=str, default=None)
+    p.add_argument("--method-name", type=str, default=None)
+    p.add_argument("--run-stage", type=str, choices=("smoke", "pilot", "formal"), default=None)
     p.add_argument(
         "--enable-amp",
         action=argparse.BooleanOptionalAction,
@@ -2286,6 +2348,16 @@ def parse_args() -> TrainConfig:
     p.add_argument("--special-lowcov-local-drop-margin", type=float, default=0.12)
     p.add_argument("--special-lowcov-max-plots", type=int, default=5)
     p.add_argument(
+        "--advantage-canvas-schema",
+        type=str,
+        choices=ADVANTAGE_CANVAS_SCHEMAS,
+        default=ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
+        help=(
+            "Advantage canvas schema. The default preserves the legacy 5-channel frontier raster; "
+            "final_4ch_no_frontier_raster explicitly removes the frontier raster channel."
+        ),
+    )
+    p.add_argument(
         "--advantage-frontier-channel-mode",
         type=str,
         choices=FRONTIER_CHANNEL_MODES,
@@ -2342,11 +2414,20 @@ def parse_args() -> TrainConfig:
         if args.enable_best_checkpoint_selection is not None
         else str(args.formal_protocol) == "formal_best_checkpoint_v3"
     )
+    advantage_canvas_channels = advantage_canvas_channels_for_schema(args.advantage_canvas_schema)
+    frontier_raster_used = advantage_canvas_uses_frontier_raster(args.advantage_canvas_schema)
+    resolved_run_stage = str(args.run_stage or ("smoke" if args.smoke else "formal"))
+    resolved_method_id = str(args.method_id or args.experiment_id)
+    resolved_method_name = str(args.method_name or args.advantage_canvas_schema)
 
     if args.smoke:
         return TrainConfig(
             device=args.device,
             seed=args.seed,
+            experiment_id=args.experiment_id,
+            method_id=resolved_method_id,
+            method_name=resolved_method_name,
+            run_stage=resolved_run_stage,
             enable_amp=enable_amp,
             enable_inference_amp=enable_inference_amp,
             amp_dtype=args.amp_dtype,
@@ -2447,7 +2528,11 @@ def parse_args() -> TrainConfig:
             special_lowcov_absolute_threshold=args.special_lowcov_absolute_threshold,
             special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
             special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
+            advantage_canvas_schema=str(args.advantage_canvas_schema),
             advantage_frontier_channel_mode=str(args.advantage_frontier_channel_mode),
+            advantage_canvas_channels=advantage_canvas_channels,
+            advantage_canvas_channel_count=len(advantage_canvas_channels),
+            frontier_raster_used=bool(frontier_raster_used),
             output_root=args.output_root,
             run_name=args.run_name,
         )
@@ -2455,6 +2540,10 @@ def parse_args() -> TrainConfig:
     return TrainConfig(
         device=args.device,
         seed=args.seed,
+        experiment_id=args.experiment_id,
+        method_id=resolved_method_id,
+        method_name=resolved_method_name,
+        run_stage=resolved_run_stage,
         enable_amp=enable_amp,
         enable_inference_amp=enable_inference_amp,
         amp_dtype=args.amp_dtype,
@@ -2559,7 +2648,11 @@ def parse_args() -> TrainConfig:
         special_lowcov_absolute_threshold=args.special_lowcov_absolute_threshold,
         special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
         special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
+        advantage_canvas_schema=str(args.advantage_canvas_schema),
         advantage_frontier_channel_mode=str(args.advantage_frontier_channel_mode),
+        advantage_canvas_channels=advantage_canvas_channels,
+        advantage_canvas_channel_count=len(advantage_canvas_channels),
+        frontier_raster_used=bool(frontier_raster_used),
         output_root=args.output_root,
         run_name=args.run_name,
     )

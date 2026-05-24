@@ -30,6 +30,7 @@ from experiments.ablations.semantic_split_ablation import (
 )
 from experiments.ablations.state_adapter_wrapper import AblationStateTensorAdapter
 from experiments.ablations.value_tree_ablation import VALUE_REPLACEMENT_STRATEGY_ZERO
+from env.advantage_state_builder import ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER
 import train_q_agent
 
 
@@ -50,6 +51,11 @@ def _build_train_args(spec: AblationSpec, run_stage: str, passthrough: list[str]
         train_args.extend(["--run-name", f"{ablation_slug(spec)}_{run_stage}"])
     if not _has_option(train_args, "--output-root"):
         train_args.extend(["--output-root", "outputs"])
+    if not _has_option(train_args, "--advantage-canvas-schema"):
+        train_args.extend([
+            "--advantage-canvas-schema",
+            ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
+        ])
     return train_args
 
 
@@ -76,10 +82,17 @@ def _apply_ablation_config(
     spec: AblationSpec,
     run_stage: str,
 ) -> train_q_agent.TrainConfig:
+    legacy_canvas_fields = {
+        "method_id": spec.experiment_id or spec.short_id,
+        "method_name": spec.ablation_name or spec.ablation_id,
+        "advantage_canvas_schema": ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
+        "value_tree_unchanged": not bool(is_value_tree_ablation(spec)),
+    }
     if is_reward_ablation(spec):
         cfg = apply_reward_overrides(cfg, spec)
         return replace(
             cfg,
+            **legacy_canvas_fields,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
             experiment_id=spec.experiment_id or spec.short_id,
@@ -94,6 +107,7 @@ def _apply_ablation_config(
     if is_channel_ablation(spec):
         return replace(
             cfg,
+            **legacy_canvas_fields,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
             experiment_id=spec.experiment_id or spec.short_id,
@@ -110,6 +124,7 @@ def _apply_ablation_config(
             raise ValueError(f"Frontier channel variant {spec.short_id} is missing frontier_channel_mode.")
         return replace(
             cfg,
+            **legacy_canvas_fields,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
             experiment_id=spec.experiment_id or spec.short_id,
@@ -125,6 +140,7 @@ def _apply_ablation_config(
     if is_value_tree_ablation(spec):
         return replace(
             cfg,
+            **legacy_canvas_fields,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
             experiment_id=spec.experiment_id or spec.short_id,
@@ -140,6 +156,7 @@ def _apply_ablation_config(
         model_parameter_count = count_model_parameters(NoSemanticDualStateSplitQNetwork())
         return replace(
             cfg,
+            **legacy_canvas_fields,
             ablation_group=spec.group,
             ablation_id=spec.ablation_id,
             experiment_id=spec.experiment_id or spec.short_id,
@@ -209,19 +226,28 @@ def _dry_run_payload(
     return {
         "dry_run": True,
         "ablation_spec": asdict(spec),
+        "method_id": cfg.method_id,
+        "method_name": cfg.method_name,
+        "experiment_id": cfg.experiment_id,
         "run_name": cfg.run_name,
         "run_stage": run_stage,
         **frontier_descriptor,
+        "advantage_canvas_schema": cfg.advantage_canvas_schema,
+        "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
+        "advantage_canvas_channel_count": int(cfg.advantage_canvas_channel_count),
+        "frontier_raster_used": bool(cfg.frontier_raster_used),
         "zeroed_advantage_channels": list(cfg.zeroed_advantage_channels),
         "reward_override": dict(cfg.reward_override),
         "value_replacement_strategy": cfg.value_replacement_strategy,
         "value_tree_enabled": cfg.value_tree_enabled,
+        "value_tree_unchanged": bool(cfg.value_tree_unchanged),
+        "value_branch_source": cfg.value_branch_source,
+        "value_branch_representation": cfg.value_branch_representation,
         "channel_ablation": cfg.channel_ablation,
         "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
         "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
         "model_class": cfg.model_class,
         "model_parameter_count": cfg.model_parameter_count,
-        "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
         "train_args": train_args,
         "train_config": {
             "device": cfg.device,
@@ -229,14 +255,21 @@ def _dry_run_payload(
             "total_env_steps": cfg.total_env_steps,
             "final_greedy_episodes": cfg.final_greedy_episodes,
             "experiment_id": cfg.experiment_id,
+            "method_id": cfg.method_id,
+            "method_name": cfg.method_name,
             "ablation_group": cfg.ablation_group,
             "ablation_id": cfg.ablation_id,
             "ablation_name": cfg.ablation_name,
             "run_stage": cfg.run_stage,
             "value_replacement_strategy": cfg.value_replacement_strategy,
             "value_tree_enabled": cfg.value_tree_enabled,
+            "value_tree_unchanged": cfg.value_tree_unchanged,
             "channel_ablation": cfg.channel_ablation,
+            "advantage_canvas_schema": cfg.advantage_canvas_schema,
+            "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
+            "advantage_canvas_channel_count": int(cfg.advantage_canvas_channel_count),
             "advantage_frontier_channel_mode": cfg.advantage_frontier_channel_mode,
+            "frontier_raster_used": bool(cfg.frontier_raster_used),
             "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
             "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
             "model_class": cfg.model_class,
@@ -252,6 +285,8 @@ def _manifest_payload(spec: AblationSpec, cfg: train_q_agent.TrainConfig) -> dic
         "schema_version": "ablation_manifest/v1",
         "run_stage": cfg.run_stage,
         "experiment_id": cfg.experiment_id,
+        "method_id": cfg.method_id,
+        "method_name": cfg.method_name,
         "ablation_group": cfg.ablation_group,
         "ablation_id": cfg.ablation_id,
         "ablation_name": cfg.ablation_name,
@@ -264,14 +299,19 @@ def _manifest_payload(spec: AblationSpec, cfg: train_q_agent.TrainConfig) -> dic
         "channel_ablation": cfg.channel_ablation,
         "value_replacement_strategy": cfg.value_replacement_strategy,
         "value_tree_enabled": cfg.value_tree_enabled,
-        "value_tree_unchanged": not bool(is_value_tree_ablation(spec)),
+        "value_tree_unchanged": bool(cfg.value_tree_unchanged),
+        "value_branch_source": cfg.value_branch_source,
+        "value_branch_representation": cfg.value_branch_representation,
         "no_semantic_dual_state_split": bool(is_semantic_split_ablation(spec)),
         "semantic_dual_state_split_used": not is_semantic_split_ablation(spec),
         "value_tree_used_by_model": bool(cfg.value_tensors_used_by_model),
         "model_class": cfg.model_class,
         "model_parameter_count": cfg.model_parameter_count,
         "safe_zero_dummy_value_state": False,
+        "advantage_canvas_schema": cfg.advantage_canvas_schema,
         "advantage_canvas_channels": list(cfg.advantage_canvas_channels),
+        "advantage_canvas_channel_count": int(cfg.advantage_canvas_channel_count),
+        "frontier_raster_used": bool(cfg.frontier_raster_used),
         "full_method_default_unchanged": True,
         "source_entrypoint": "experiments/ablations/run_ablation_train.py",
         "notes": list(spec.notes),

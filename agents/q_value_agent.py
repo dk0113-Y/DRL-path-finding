@@ -16,7 +16,7 @@ import torch.nn as nn
 from encoders.advantage_encoder import AdvantageCanvasEncoder, AdvantageEncoderConfig
 from encoders.value_encoder import ValueEncoderConfig, ValueTreeEncoder
 from env.advantage_state_builder import (
-    ADVANTAGE_CANVAS_CHANNEL_COUNT,
+    LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS,
     AdvantageStateBuilder,
     AdvantageStateConfig,
 )
@@ -91,10 +91,16 @@ class ExplorationQNetwork(nn.Module):
             raise ValueError(
                 f"Decision head action_dim must be {ACTION_DIM}, got {self.cfg.decision_head.action_dim}"
             )
-        if int(self.cfg.advantage_encoder.canvas_in_channels) != int(ADVANTAGE_CANVAS_CHANNEL_COUNT):
+        advantage_canvas_channels = tuple(
+            getattr(self.cfg.advantage_encoder, "canvas_channels", LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS)
+        )
+        expected_canvas_channels = int(len(advantage_canvas_channels))
+        if expected_canvas_channels <= 0:
+            raise ValueError("Advantage encoder canvas_channels cannot be empty")
+        if int(self.cfg.advantage_encoder.canvas_in_channels) != expected_canvas_channels:
             raise ValueError(
                 "Advantage canvas channel mismatch: "
-                f"expected {ADVANTAGE_CANVAS_CHANNEL_COUNT}, got {self.cfg.advantage_encoder.canvas_in_channels}"
+                f"expected {expected_canvas_channels}, got {self.cfg.advantage_encoder.canvas_in_channels}"
             )
         if int(self.cfg.value_encoder.block_input_dim) != int(VALUE_BLOCK_FEATURE_COUNT):
             raise ValueError(

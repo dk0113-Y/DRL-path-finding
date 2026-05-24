@@ -7,17 +7,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from env.advantage_state_builder import ADVANTAGE_CANVAS_CHANNEL_COUNT
+from env.advantage_state_builder import LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS
 from env.grid_topology import ACTIONS_8
 
 
 @dataclass(frozen=True)
 class AdvantageEncoderConfig:
-    canvas_in_channels: int = ADVANTAGE_CANVAS_CHANNEL_COUNT
+    canvas_in_channels: int = len(LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS)
+    canvas_channels: tuple[str, ...] = LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS
     action_dim: int = len(ACTIONS_8)
     base_dim: int = 64
     action_state_dim: int = 160
     dropout: float = 0.1
+
+    def __post_init__(self) -> None:
+        channels = tuple(str(channel) for channel in self.canvas_channels)
+        if int(self.canvas_in_channels) != len(channels):
+            raise ValueError(
+                "canvas_in_channels must match canvas_channels length: "
+                f"{self.canvas_in_channels} != {len(channels)}"
+            )
+        object.__setattr__(self, "canvas_channels", channels)
 
 
 class _ResidualBlock(nn.Module):
@@ -169,9 +179,17 @@ class AdvantageCanvasEncoder(nn.Module):
         if not return_aux:
             return action_state
 
+        channel_index = {name: idx for idx, name in enumerate(tuple(self.cfg.canvas_channels))}
+
+        def channel_mean(channel_name: str) -> torch.Tensor:
+            idx = channel_index.get(channel_name)
+            if idx is None:
+                return canvas.new_zeros((canvas.shape[0],))
+            return canvas[:, idx].mean(dim=(1, 2))
+
         aux: Dict[str, torch.Tensor] = {
-            "advantage_canvas_frontier_block_area_mean": canvas[:, 2].mean(dim=(1, 2)),
-            "advantage_canvas_visit_pressure_mean": canvas[:, 3].mean(dim=(1, 2)),
-            "advantage_canvas_trajectory_mean": canvas[:, 4].mean(dim=(1, 2)),
+            "advantage_canvas_frontier_block_area_mean": channel_mean("frontier_block_area_map"),
+            "advantage_canvas_visit_pressure_mean": channel_mean("visit_count_log_norm"),
+            "advantage_canvas_trajectory_mean": channel_mean("recent_trajectory_decay"),
         }
         return action_state, aux

@@ -36,6 +36,8 @@ Reward ablations:
 - R5 `no_efficiency_penalties`
 - R6 `sparse_reward_variant`
 
+These R-series entries are the legacy A_old / 5-channel frontier-raster reward ablations. The A_new final 4-channel reward ablations use `Anew_R1` through `Anew_R5` under `experiments/final_method/` and must be used for reward-ablation claims if A_new is the final main method.
+
 ## E Structural Ablation
 
 E tests whether explicitly separating value-state and action-conditioned advantage-state before dueling fusion is beneficial. It does not test whether value-tree information exists; value-tree tensors remain enabled and are consumed by `ValueTreeEncoder`.
@@ -58,6 +60,14 @@ F6 and F7 are advantage frontier-channel diagnostics. They are not reward ablati
 - F7 `F7_ablation_local_frontier_global_area_map` tests whether local-indexed frontier positions still benefit from global unknown-block area attributes. Channel 2 uses the same cumulative-map local frontier crop as the primary spatial index, then assigns matched local frontier cells `block.block_area / total_accessible_unknown_area` from `SharedSemanticSnapshot`. Local frontier cells without a semantic block match remain `0.0` and are counted in state meta.
 
 The full method A keeps the default `semantic_block_area_raster` behavior: semantic frontier cluster geometry is projected into the local canvas with block-area ratios. F1 still remains a zeroed-channel ablation and should not be interpreted as either F6 or F7.
+
+## A_new Relationship
+
+`A_new` is not an F-group ablation. It is the final 4-channel main-method candidate under `experiments/final_method/`.
+
+F1 provided the diagnostic evidence that the frontier-raster input is unnecessary or harmful in the advantage branch. F1 keeps the legacy 5-channel interface and zeros `frontier_block_area_map`; `A_new` removes that unused raster slot entirely and retrains a 4-channel final model. The value branch remains the structured frontier-block value tree built from `SharedSemanticSnapshot`.
+
+Legacy F1/F6/F7 reproduction must continue to use `legacy_5ch_frontier_raster`.
 
 ## Naming
 
