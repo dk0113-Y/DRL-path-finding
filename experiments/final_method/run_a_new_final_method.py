@@ -174,9 +174,9 @@ def manifest_payload(
         "source_entrypoint": "train_q_agent.py",
         "runner_entrypoint": runner_entrypoint,
         "notes": [
-            "A_new removes frontier_block_area_map from the advantage canvas.",
+            "A_new uses a four-channel advantage canvas with no frontier raster.",
             "The structured frontier-block value tree remains enabled and unchanged.",
-            "F1 remains a legacy 5-channel zero-frontier diagnostic, not the final network schema.",
+            "Legacy frontier-raster diagnostics are archived outside active main.",
         ],
     }
 
@@ -238,6 +238,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     cfg = _parse_train_config(train_args)
+    print("[A_new] runtime_contract:")
+    print(json.dumps(
+        manifest_payload(
+            cfg=cfg,
+            runner_entrypoint="experiments/final_method/run_a_new_final_method.py",
+        ),
+        indent=2,
+        ensure_ascii=False,
+    ))
     run_dir = train_q_agent.run_training(cfg, run_mode=f"final_method_{args.run_stage}")
     manifest_path = run_dir / "logs" / "final_method_manifest.json"
     _write_json(

@@ -16,7 +16,7 @@ import torch.nn as nn
 from encoders.advantage_encoder import AdvantageCanvasEncoder, AdvantageEncoderConfig
 from encoders.value_encoder import ValueEncoderConfig, ValueTreeEncoder
 from env.advantage_state_builder import (
-    LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS,
+    FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS,
     AdvantageStateBuilder,
     AdvantageStateConfig,
 )
@@ -66,7 +66,7 @@ class ExplorationQNetwork(nn.Module):
     Shared-semantic dueling exploration network.
 
     Data flow:
-       advantage_canvas (local occupancy/frontier canvas + revisit pressure + short trajectory decay)
+       advantage_canvas (4-channel local occupancy + revisit pressure + short trajectory decay)
          -> advantage encoder -> per-action advantage states
        value block-tree (parent block scalars + child frontier-entry set)
          -> block-conditioned child encoder -> state value context
@@ -92,11 +92,14 @@ class ExplorationQNetwork(nn.Module):
                 f"Decision head action_dim must be {ACTION_DIM}, got {self.cfg.decision_head.action_dim}"
             )
         advantage_canvas_channels = tuple(
-            getattr(self.cfg.advantage_encoder, "canvas_channels", LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS)
+            getattr(self.cfg.advantage_encoder, "canvas_channels", FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS)
         )
-        expected_canvas_channels = int(len(advantage_canvas_channels))
-        if expected_canvas_channels <= 0:
-            raise ValueError("Advantage encoder canvas_channels cannot be empty")
+        if advantage_canvas_channels != FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS:
+            raise ValueError(
+                "ExplorationQNetwork expects the final A_new advantage canvas channels: "
+                f"{FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS}; got {advantage_canvas_channels}"
+            )
+        expected_canvas_channels = int(len(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS))
         if int(self.cfg.advantage_encoder.canvas_in_channels) != expected_canvas_channels:
             raise ValueError(
                 "Advantage canvas channel mismatch: "

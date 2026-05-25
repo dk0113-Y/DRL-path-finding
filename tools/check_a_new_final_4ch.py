@@ -15,9 +15,7 @@ from agents.q_value_agent import ExplorationQConfig, ExplorationQNetwork  # noqa
 from encoders.advantage_encoder import AdvantageEncoderConfig  # noqa: E402
 from env.advantage_state_builder import (  # noqa: E402
     ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER,
-    ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
     FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS,
-    LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS,
     AdvantageStateBuilder,
     AdvantageStateConfig,
 )
@@ -48,7 +46,7 @@ class DummyCumMap:
         return int(world_rc[0]), int(world_rc[1])
 
     def get_frontier_u8(self, refresh: bool = False) -> np.ndarray:
-        raise AssertionError("final 4-channel A_new must not request a frontier raster")
+        raise AssertionError("A_new final 4-channel canvas must not request a frontier raster")
 
 
 def _geometry_from_cells(cells: list[tuple[int, int]]) -> SparseMaskGeometry:
@@ -120,6 +118,13 @@ def _first_conv_in_channels(model: ExplorationQNetwork) -> int:
     return int(first.in_channels)
 
 
+def _load_json_from_output(output: str) -> dict[str, object]:
+    start = output.find("{")
+    if start < 0:
+        raise AssertionError(f"No JSON object found in output:\n{output}")
+    return json.loads(output[start:])
+
+
 def _check_final_canvas() -> None:
     cum_map = DummyCumMap()
     snapshot = _snapshot()
@@ -128,12 +133,6 @@ def _check_final_canvas() -> None:
             advantage_canvas_schema=ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER,
         )
     )
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("final 4-channel A_new must not paint any frontier raster")
-
-    builder._paint_semantic_block_area_raster = forbidden  # type: ignore[method-assign]
-    builder._local_frontier_mask = forbidden  # type: ignore[method-assign]
 
     canvas, meta = builder.build(
         cum_map,
@@ -146,25 +145,9 @@ def _check_final_canvas() -> None:
         tuple(builder.config.advantage_canvas_channels) == FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS,
         "final channel order mismatch",
     )
-    _assert("frontier_block_area_map" not in builder.config.advantage_canvas_channels, "frontier channel still present")
+    _assert("frontier_block_area_map" not in builder.config.advantage_canvas_channels, "frontier raster channel still present")
     _assert(meta.get("frontier_raster_used") is False, "frontier_raster_used must be false")
     _assert(float(meta.get("advantage_canvas_channel_count", 0.0)) == 4.0, "final channel count meta must be 4")
-
-
-def _check_legacy_canvas() -> None:
-    class LegacyCumMap(DummyCumMap):
-        def get_frontier_u8(self, refresh: bool = False) -> np.ndarray:
-            return np.zeros_like(self.map, dtype=np.uint8)
-
-    builder = AdvantageStateBuilder(
-        AdvantageStateConfig(
-            advantage_canvas_schema=ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
-        )
-    )
-    canvas, meta = builder.build(LegacyCumMap(), (3, 3), _snapshot())
-    _assert(canvas.shape == (5, 5, 5), f"expected legacy canvas shape (5,5,5), got {canvas.shape}")
-    _assert(tuple(builder.config.advantage_canvas_channels) == LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS, "legacy order mismatch")
-    _assert(meta.get("frontier_raster_used") is True, "legacy frontier_raster_used must be true")
 
 
 def _check_network_and_value_tree() -> None:
@@ -187,36 +170,84 @@ def _check_network_and_value_tree() -> None:
     _assert(float(meta["value_packed_entry_count"]) >= 1.0, "value entry metadata was not built")
 
 
-def _check_legacy_ablation_dry_runs() -> None:
-    for ablation_id in ("F1", "F6", "F7"):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "experiments/ablations/run_ablation_train.py",
-                "--ablation-id",
-                ablation_id,
-                "--run-stage",
-                "smoke",
-                "--dry-run",
-            ],
-            cwd=str(REPO_ROOT),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        payload = json.loads(result.stdout)
-        _assert(
-            payload["advantage_canvas_schema"] == ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
-            f"{ablation_id} must remain legacy 5-channel",
-        )
-        _assert(int(payload["advantage_canvas_channel_count"]) == 5, f"{ablation_id} channel count changed")
+def _check_a_new_final_dry_run() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "experiments/final_method/run_a_new_final_method.py",
+            "--run-stage",
+            "smoke",
+            "--device",
+            "cpu",
+            "--dry-run",
+        ],
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = _load_json_from_output(result.stdout)
+    _assert(payload["method_id"] == "A_new", "A_new dry-run method_id mismatch")
+    _assert(payload["method_name"] == "final_4ch_no_frontier_raster", "A_new method_name mismatch")
+    _assert(payload["advantage_canvas_schema"] == ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER, "schema mismatch")
+    _assert(payload["advantage_canvas_channels"] == list(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS), "channel list mismatch")
+    _assert(int(payload["advantage_canvas_channel_count"]) == 4, "A_new dry-run channel count must be 4")
+    _assert(payload["frontier_raster_used"] is False, "A_new dry-run frontier_raster_used must be false")
+    _assert(payload["value_tree_enabled"] is True, "value tree must stay enabled")
+    _assert(payload["model_class"] == "ExplorationQNetwork", "model class mismatch")
+    _assert(int(payload["advantage_encoder.canvas_in_channels"]) == 4, "advantage encoder input channels must be 4")
+
+
+def _check_reward_ablation_dry_run() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "experiments/final_method/run_a_new_reward_ablation_batch.py",
+            "--reward-ablation-ids",
+            "R1,R2,R3,R4,R5",
+            "--run-stage",
+            "smoke",
+            "--device",
+            "cpu",
+            "--dry-run",
+        ],
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = _load_json_from_output(result.stdout)
+    expected_overrides = {
+        "Anew_R1": {"reward_step_penalty": 0.0},
+        "Anew_R2": {"reward_revisit_penalty": 0.0},
+        "Anew_R3": {"reward_turn_penalty_scale": 0.0},
+        "Anew_R4": {"reward_timeout_penalty": 0.0},
+        "Anew_R5": {
+            "reward_step_penalty": 0.0,
+            "reward_revisit_penalty": 0.0,
+            "reward_turn_penalty_scale": 0.0,
+            "reward_timeout_penalty": 0.0,
+        },
+    }
+    _assert(payload["baseline_method"] == "A_new_final_4ch_no_frontier_raster", "baseline method mismatch")
+    methods = payload["methods"]
+    _assert(isinstance(methods, list) and len(methods) == 5, "expected five Anew_R dry-run methods")
+    for method in methods:
+        method_id = str(method["method_id"])
+        _assert(method["advantage_canvas_schema"] == ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER, f"{method_id} schema mismatch")
+        _assert(method["advantage_canvas_channels"] == list(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS), f"{method_id} channel list mismatch")
+        _assert(int(method["advantage_canvas_channel_count"]) == 4, f"{method_id} channel count must be 4")
+        _assert(method["frontier_raster_used"] is False, f"{method_id} frontier_raster_used must be false")
+        _assert(method["value_tree_enabled"] is True, f"{method_id} value tree must stay enabled")
+        _assert(int(method["advantage_encoder.canvas_in_channels"]) == 4, f"{method_id} encoder channels must be 4")
+        _assert(method["reward_override"] == expected_overrides[method_id], f"{method_id} reward override mismatch")
 
 
 def main() -> int:
     _check_final_canvas()
-    _check_legacy_canvas()
     _check_network_and_value_tree()
-    _check_legacy_ablation_dry_runs()
+    _check_a_new_final_dry_run()
+    _check_reward_ablation_dry_run()
     print("A_new final 4-channel checks passed")
     return 0
 

@@ -18,10 +18,9 @@ import torch
 from agents.q_value_agent import ExplorationQConfig, ExplorationQNetwork, StateAdapterConfig, StateTensorAdapter
 from encoders.advantage_encoder import AdvantageEncoderConfig
 from env.advantage_state_builder import (
-    ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
+    ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER,
     ADVANTAGE_CANVAS_SCHEMAS,
-    FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
-    FRONTIER_CHANNEL_MODES,
+    FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS,
     AdvantageStateConfig,
     advantage_canvas_channels_for_schema,
     advantage_canvas_uses_frontier_raster,
@@ -165,26 +164,19 @@ class TrainConfig:
 
     ablation_group: str = "none"
     ablation_id: str = "none"
-    experiment_id: str = "A"
-    method_id: str = "A"
-    method_name: str = "legacy_5ch_frontier_raster"
+    experiment_id: str = "A_new"
+    method_id: str = "A_new"
+    method_name: str = "final_4ch_no_frontier_raster"
     ablation_name: str = "none"
     channel_ablation: str = "none"
     zeroed_advantage_channels: tuple[str, ...] = ()
     reward_override: dict[str, float] = field(default_factory=dict)
     value_replacement_strategy: str = "none"
     value_tree_enabled: bool = True
-    advantage_canvas_schema: str = ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER
-    advantage_frontier_channel_mode: str = FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER
-    advantage_canvas_channels: tuple[str, ...] = (
-        "free",
-        "obstacle",
-        "frontier_block_area_map",
-        "visit_count_log_norm",
-        "recent_trajectory_decay",
-    )
-    advantage_canvas_channel_count: int = 5
-    frontier_raster_used: bool = True
+    advantage_canvas_schema: str = ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER
+    advantage_canvas_channels: tuple[str, ...] = FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS
+    advantage_canvas_channel_count: int = 4
+    frontier_raster_used: bool = False
     value_tree_unchanged: bool = True
     value_branch_source: str = "SharedSemanticSnapshot"
     value_branch_representation: str = "structured_frontier_block_value_tree"
@@ -231,14 +223,12 @@ class TrainConfig:
         schema = normalize_advantage_canvas_schema(self.advantage_canvas_schema)
         schema_channels = tuple(advantage_canvas_channels_for_schema(schema))
         configured_channels = tuple(str(channel) for channel in (self.advantage_canvas_channels or ()))
-        known_schema_channels = {
-            tuple(advantage_canvas_channels_for_schema(candidate_schema))
-            for candidate_schema in ADVANTAGE_CANVAS_SCHEMAS
-        }
-        if not configured_channels or configured_channels in known_schema_channels:
-            channels = schema_channels
-        else:
-            channels = configured_channels
+        if configured_channels and configured_channels != schema_channels:
+            raise ValueError(
+                "A_new main only supports the final 4-channel advantage canvas: "
+                f"{schema_channels}; got {configured_channels}"
+            )
+        channels = schema_channels
 
         object.__setattr__(self, "advantage_canvas_schema", schema)
         object.__setattr__(self, "advantage_canvas_channels", channels)
@@ -246,10 +236,10 @@ class TrainConfig:
         object.__setattr__(
             self,
             "frontier_raster_used",
-            bool("frontier_block_area_map" in channels and advantage_canvas_uses_frontier_raster(schema)),
+            bool(advantage_canvas_uses_frontier_raster(schema)),
         )
 
-        experiment_id = str(self.experiment_id or "A")
+        experiment_id = str(self.experiment_id or "A_new")
         method_id = str(self.method_id or experiment_id)
         method_name = str(self.method_name or schema)
         object.__setattr__(self, "experiment_id", experiment_id)
@@ -601,9 +591,14 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"budget_mode={budget_mode} "
         f"experiment_id={cfg.experiment_id} "
         f"method_id={cfg.method_id} "
+        f"method_name={cfg.method_name} "
         f"advantage_canvas_schema={cfg.advantage_canvas_schema} "
         f"advantage_canvas_channel_count={int(cfg.advantage_canvas_channel_count)} "
+        f"advantage_canvas_channels={list(cfg.advantage_canvas_channels)} "
         f"frontier_raster_used={bool(cfg.frontier_raster_used)} "
+        f"value_tree_enabled={bool(cfg.value_tree_enabled)} "
+        f"model_class={cfg.model_class} "
+        f"advantage_encoder.canvas_in_channels={int(cfg.advantage_canvas_channel_count)} "
         f"total_env_steps={int(cfg.total_env_steps)} "
         f"epsilon_decay_steps={int(cfg.epsilon_decay_steps)} "
         f"epsilon_end={float(cfg.epsilon_end):.4f} "
@@ -821,7 +816,6 @@ def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=Non
             advantage_canvas_schema=str(cfg.advantage_canvas_schema),
             trajectory_history_steps=int(cfg.trajectory_history_steps),
             enable_timing=bool(cfg.enable_advantage_state_timing),
-            frontier_channel_mode=str(cfg.advantage_frontier_channel_mode),
         ),
         value_state=ValueStateConfig(
             max_accessible_blocks=int(cfg.max_accessible_blocks),
@@ -1663,8 +1657,8 @@ def run_training(cfg: TrainConfig, *, run_mode: str = "cli", state_adapter_facto
                 run_model_select_validation(int(env_steps))
 
         if not model_select_rows:
-            # Short smoke runs or explicitly disabled legacy selection still
-            # publish best.pt by promoting last.pt without extra selection episodes.
+            # Short smoke runs or disabled model selection still publish best.pt
+            # by promoting last.pt without extra selection episodes.
             best_checkpoint_path = ckpt.save_best_from_checkpoint(
                 last_ckpt_path,
                 selection_metadata={
@@ -1975,7 +1969,7 @@ def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser(description="Double DQN training with post-hoc formal checkpoint selection")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--experiment-id", type=str, default="A")
+    p.add_argument("--experiment-id", type=str, default="A_new")
     p.add_argument("--method-id", type=str, default=None)
     p.add_argument("--method-name", type=str, default=None)
     p.add_argument("--run-stage", type=str, choices=("smoke", "pilot", "formal"), default=None)
@@ -2351,21 +2345,8 @@ def parse_args() -> TrainConfig:
         "--advantage-canvas-schema",
         type=str,
         choices=ADVANTAGE_CANVAS_SCHEMAS,
-        default=ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER,
-        help=(
-            "Advantage canvas schema. The default preserves the legacy 5-channel frontier raster; "
-            "final_4ch_no_frontier_raster explicitly removes the frontier raster channel."
-        ),
-    )
-    p.add_argument(
-        "--advantage-frontier-channel-mode",
-        type=str,
-        choices=FRONTIER_CHANNEL_MODES,
-        default=FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
-        help=(
-            "Advantage canvas channel-2 semantics. Default preserves the full-method "
-            "semantic block-area raster."
-        ),
+        default=ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER,
+        help="Advantage canvas schema. Main only supports final_4ch_no_frontier_raster.",
     )
 
     p.add_argument("--output-root", type=str, default="outputs")
@@ -2529,7 +2510,6 @@ def parse_args() -> TrainConfig:
             special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
             special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
             advantage_canvas_schema=str(args.advantage_canvas_schema),
-            advantage_frontier_channel_mode=str(args.advantage_frontier_channel_mode),
             advantage_canvas_channels=advantage_canvas_channels,
             advantage_canvas_channel_count=len(advantage_canvas_channels),
             frontier_raster_used=bool(frontier_raster_used),
@@ -2649,7 +2629,6 @@ def parse_args() -> TrainConfig:
         special_lowcov_local_drop_margin=args.special_lowcov_local_drop_margin,
         special_lowcov_max_plots=max(0, args.special_lowcov_max_plots),
         advantage_canvas_schema=str(args.advantage_canvas_schema),
-        advantage_frontier_channel_mode=str(args.advantage_frontier_channel_mode),
         advantage_canvas_channels=advantage_canvas_channels,
         advantage_canvas_channel_count=len(advantage_canvas_channels),
         frontier_raster_used=bool(frontier_raster_used),

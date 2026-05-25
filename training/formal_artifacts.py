@@ -1545,7 +1545,7 @@ def build_config_snapshot(
             },
             "advantage_canvas_schema": config_dict.get("advantage_canvas_schema"),
             "advantage_canvas_channels": config_dict.get("advantage_canvas_channels"),
-            "frontier_raster_used": bool(config_dict.get("frontier_raster_used", True)),
+            "frontier_raster_used": bool(config_dict.get("frontier_raster_used", False)),
             "safe_zero_dummy_value_state": False,
         },
         "default_main_baseline": {

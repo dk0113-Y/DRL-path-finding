@@ -10,15 +10,7 @@ from env.grid_topology import EMPTY, INVISIBLE, OBSTACLE
 from env.shared_semantic_layer import SharedSemanticSnapshot
 
 
-ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER = "legacy_5ch_frontier_raster"
 ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER = "final_4ch_no_frontier_raster"
-LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS = (
-    "free",
-    "obstacle",
-    "frontier_block_area_map",
-    "visit_count_log_norm",
-    "recent_trajectory_decay",
-)
 FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS = (
     "free",
     "obstacle",
@@ -26,26 +18,15 @@ FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS = (
     "recent_trajectory_decay",
 )
 ADVANTAGE_CANVAS_CHANNELS_BY_SCHEMA = {
-    ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER: LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS,
     ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER: FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS,
 }
 ADVANTAGE_CANVAS_SCHEMAS = tuple(ADVANTAGE_CANVAS_CHANNELS_BY_SCHEMA.keys())
-ADVANTAGE_CANVAS_CHANNELS = ADVANTAGE_CANVAS_CHANNELS_BY_SCHEMA[
-    ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER
-]
+ADVANTAGE_CANVAS_CHANNELS = FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS
 ADVANTAGE_CANVAS_CHANNEL_COUNT = len(ADVANTAGE_CANVAS_CHANNELS)
-FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER = "semantic_block_area_raster"
-FRONTIER_CHANNEL_MODE_LOCAL_BINARY = "local_binary"
-FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA = "local_global_area"
-FRONTIER_CHANNEL_MODES = (
-    FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
-    FRONTIER_CHANNEL_MODE_LOCAL_BINARY,
-    FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA,
-)
 
 
 def normalize_advantage_canvas_schema(schema: str | None) -> str:
-    normalized = str(schema or ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER).strip().lower()
+    normalized = str(schema or ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER).strip().lower()
     if normalized not in ADVANTAGE_CANVAS_CHANNELS_BY_SCHEMA:
         available = ", ".join(ADVANTAGE_CANVAS_SCHEMAS)
         raise ValueError(
@@ -63,7 +44,8 @@ def advantage_canvas_channel_count_for_schema(schema: str | None) -> int:
 
 
 def advantage_canvas_uses_frontier_raster(schema: str | None) -> bool:
-    return "frontier_block_area_map" in advantage_canvas_channels_for_schema(schema)
+    normalize_advantage_canvas_schema(schema)
+    return False
 
 
 frontier_raster_used_for_schema = advantage_canvas_uses_frontier_raster
@@ -72,22 +54,13 @@ frontier_raster_used_for_schema = advantage_canvas_uses_frontier_raster
 @dataclass(frozen=True)
 class AdvantageStateConfig:
     enable_timing: bool = False
-    advantage_canvas_schema: str = ADVANTAGE_CANVAS_SCHEMA_LEGACY_5CH_FRONTIER_RASTER
+    advantage_canvas_schema: str = ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER
     visit_count_log_saturation: float = 8.0
     trajectory_history_steps: int = 10
-    frontier_channel_mode: str = FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER
 
     def __post_init__(self) -> None:
         schema = normalize_advantage_canvas_schema(self.advantage_canvas_schema)
-        mode = str(self.frontier_channel_mode or "").strip().lower()
-        if mode not in FRONTIER_CHANNEL_MODES:
-            available = ", ".join(FRONTIER_CHANNEL_MODES)
-            raise ValueError(
-                f"Unsupported frontier_channel_mode {self.frontier_channel_mode!r}; "
-                f"expected one of: {available}"
-            )
         object.__setattr__(self, "advantage_canvas_schema", schema)
-        object.__setattr__(self, "frontier_channel_mode", mode)
 
     @property
     def advantage_canvas_channels(self) -> tuple[str, ...]:
@@ -106,18 +79,17 @@ class AdvantageStateBuilder:
     """
     Build the local decision canvas consumed by the advantage branch.
 
-    Canvas size is tied directly to the radar observation window (`cum_map.local_shape`),
-    so the advantage branch always reasons over the same local scale that the
-    agent can currently observe. The canvas exposes every locally visible
-    frontier cluster plus a projected block-area attribute on those frontier
-    cells, plus a cumulative revisit-pressure channel derived from the
-    cumulative belief map visit counters. This revisit signal is deliberately
-    cumulative rather than recent-recency based, so the advantage branch can
-    distinguish pushing into fresh space from circling over established old
-    routes without introducing a short-horizon recency heuristic. A separate
-    recent-trajectory channel paints the last few occupied cells with a linear
-    time decay, so the advantage branch can also see the short-horizon motion
-    geometry that led into the current local situation.
+    The final A_new schema is a 4-channel local spatial representation tied to
+    the radar observation window (`cum_map.local_shape`). Its channels are
+    free-space occupancy, obstacle occupancy, cumulative revisit pressure, and
+    recent trajectory decay. The final schema does not include a frontier raster
+    channel in the local advantage canvas.
+
+    Frontier and unknown-block semantics remain represented by the structured
+    value-tree branch through `SharedSemanticSnapshot`; they are not painted
+    into the local advantage canvas. The historical 5-channel frontier-raster
+    diagnostics were archived before this cleanup on `legacy/pre-a-new-cleanup`
+    and tag `legacy-pre-a-new-cleanup-20260525`.
     """
 
     def __init__(self, config: Optional[AdvantageStateConfig] = None):
@@ -156,147 +128,6 @@ class AdvantageStateBuilder:
         return cached
 
     @staticmethod
-    def _local_frontier_mask(
-        cum_map,
-        *,
-        arr_rows: np.ndarray,
-        arr_cols: np.ndarray,
-        inside: np.ndarray,
-        local_shape: tuple[int, int],
-    ) -> np.ndarray:
-        frontier_u8 = np.asarray(cum_map.get_frontier_u8(refresh=False), dtype=np.uint8)
-        if frontier_u8.shape != cum_map.map.shape:
-            raise ValueError(
-                f"frontier_u8 shape mismatch: expected {cum_map.map.shape}, got {frontier_u8.shape}"
-            )
-        local_frontier = np.zeros(local_shape, dtype=bool)
-        if np.any(inside):
-            local_frontier[inside] = frontier_u8[arr_rows[inside], arr_cols[inside]] > 0
-        return local_frontier
-
-    @staticmethod
-    def _semantic_frontier_area_map(
-        cum_map,
-        semantic_snapshot: SharedSemanticSnapshot,
-    ) -> np.ndarray:
-        area_map = np.zeros(cum_map.map.shape, dtype=np.float32)
-        total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
-        map_h = int(cum_map.map.shape[0])
-        map_w = int(cum_map.map.shape[1])
-        for block in semantic_snapshot.accessible_blocks:
-            block_area_ratio = np.float32(float(block.block_area) / total_unknown_area)
-            for frontier_cluster in block.frontier_clusters:
-                rows = np.asarray(frontier_cluster.frontier_geometry.rows, dtype=np.int32)
-                cols = np.asarray(frontier_cluster.frontier_geometry.cols, dtype=np.int32)
-                if rows.size <= 0 or cols.size <= 0:
-                    continue
-                in_bounds = (
-                    (rows >= 0) & (rows < map_h) &
-                    (cols >= 0) & (cols < map_w)
-                )
-                if not np.any(in_bounds):
-                    continue
-                area_map[rows[in_bounds], cols[in_bounds]] = block_area_ratio
-        return area_map
-
-    def _paint_semantic_block_area_raster(
-        self,
-        canvas_channel: np.ndarray,
-        *,
-        semantic_snapshot: SharedSemanticSnapshot,
-        agent_arr: tuple[int, int],
-        local_shape: tuple[int, int],
-    ) -> None:
-        total_unknown_area = float(max(1, semantic_snapshot.total_accessible_unknown_area))
-        for block in semantic_snapshot.accessible_blocks:
-            block_area_ratio = float(block.block_area) / total_unknown_area
-            for frontier_cluster in block.frontier_clusters:
-                self._paint_geometry_value_to_local_canvas(
-                    frontier_cluster.frontier_geometry,
-                    canvas_channel,
-                    value=block_area_ratio,
-                    agent_arr=agent_arr,
-                    local_shape=local_shape,
-                )
-
-    def _paint_local_binary_frontier(
-        self,
-        canvas_channel: np.ndarray,
-        *,
-        local_frontier_mask: np.ndarray,
-    ) -> dict[str, float | str]:
-        canvas_channel[local_frontier_mask] = np.float32(1.0)
-        local_positive = int(np.count_nonzero(local_frontier_mask))
-        window_area = float(max(1, local_frontier_mask.size))
-        return {
-            "frontier_channel_mode": FRONTIER_CHANNEL_MODE_LOCAL_BINARY,
-            "local_frontier_coverage": float(local_positive) / window_area,
-            "local_frontier_positive_count": float(local_positive),
-            "local_frontier_block_area_mean": 0.0,
-        }
-
-    def _paint_local_global_area_frontier(
-        self,
-        canvas_channel: np.ndarray,
-        *,
-        cum_map,
-        arr_rows: np.ndarray,
-        arr_cols: np.ndarray,
-        inside: np.ndarray,
-        local_frontier_mask: np.ndarray,
-        semantic_snapshot: SharedSemanticSnapshot,
-        local_shape: tuple[int, int],
-    ) -> dict[str, float | str]:
-        semantic_area_map = self._semantic_frontier_area_map(cum_map, semantic_snapshot)
-        local_area_values = np.zeros(local_shape, dtype=np.float32)
-        if np.any(inside):
-            local_area_values[inside] = semantic_area_map[arr_rows[inside], arr_cols[inside]]
-        canvas_channel[local_frontier_mask] = local_area_values[local_frontier_mask]
-
-        local_positive = int(np.count_nonzero(local_frontier_mask))
-        assigned_mask = local_frontier_mask & (canvas_channel > 0.0)
-        assigned_positive = int(np.count_nonzero(assigned_mask))
-        unmatched = max(0, local_positive - assigned_positive)
-        window_area = float(max(1, local_frontier_mask.size))
-        return {
-            "frontier_channel_mode": FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA,
-            "local_frontier_coverage": float(local_positive) / window_area,
-            "local_frontier_positive_count": float(local_positive),
-            "local_frontier_global_area_positive_count": float(assigned_positive),
-            "local_frontier_unmatched_count": float(unmatched),
-            "local_frontier_block_area_mean": (
-                float(canvas_channel[assigned_mask].mean()) if assigned_positive > 0 else 0.0
-            ),
-        }
-
-    @staticmethod
-    def _paint_geometry_value_to_local_canvas(
-        geometry,
-        canvas_channel: np.ndarray,
-        *,
-        value: float,
-        agent_arr: tuple[int, int],
-        local_shape: tuple[int, int],
-    ) -> None:
-        rows = np.asarray(geometry.rows, dtype=np.int32)
-        cols = np.asarray(geometry.cols, dtype=np.int32)
-        if rows.size <= 0 or cols.size <= 0:
-            return
-        h = int(local_shape[0])
-        w = int(local_shape[1])
-        center_r = h // 2
-        center_c = w // 2
-        local_rows = rows - int(agent_arr[0]) + center_r
-        local_cols = cols - int(agent_arr[1]) + center_c
-        inside = (
-            (local_rows >= 0) & (local_rows < h) &
-            (local_cols >= 0) & (local_cols < w)
-        )
-        if not np.any(inside):
-            return
-        canvas_channel[local_rows[inside], local_cols[inside]] = np.float32(value)
-
-    @staticmethod
     def _paint_recent_trajectory_to_local_canvas(
         trajectory_arr_positions: Sequence[tuple[int, int]],
         canvas_channel: np.ndarray,
@@ -330,6 +161,7 @@ class AdvantageStateBuilder:
         recent_trajectory_positions: Optional[Sequence[tuple[int, int]]] = None,
     ) -> tuple[np.ndarray, dict[str, float]]:
         t0 = time.perf_counter() if self._timing_enabled else 0.0
+        _ = semantic_snapshot
         local_shape = (int(cum_map.local_shape[0]), int(cum_map.local_shape[1]))
         canvas = self._canvas_buffer(local_shape)
         arr_rows, arr_cols, inside = self._local_index_arrays(cum_map, agent_state)
@@ -344,66 +176,8 @@ class AdvantageStateBuilder:
 
         agent_arr = cum_map.world_to_array(agent_state)
         canvas_schema = str(self.config.advantage_canvas_schema)
-        frontier_raster_used = advantage_canvas_uses_frontier_raster(canvas_schema)
         visit_channel_index = 2
         trajectory_channel_index = 3
-        frontier_channel_mode = str(self.config.frontier_channel_mode)
-        frontier_meta: dict[str, float | str]
-        if frontier_raster_used and frontier_channel_mode == FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER:
-            visit_channel_index = 3
-            trajectory_channel_index = 4
-            self._paint_semantic_block_area_raster(
-                canvas[2],
-                semantic_snapshot=semantic_snapshot,
-                agent_arr=agent_arr,
-                local_shape=local_shape,
-            )
-            frontier_visible_mask = canvas[2] > 0.0
-            frontier_visible = int(np.count_nonzero(frontier_visible_mask))
-            window_area = float(max(1, local_shape[0] * local_shape[1]))
-            frontier_meta = {
-                "frontier_channel_mode": FRONTIER_CHANNEL_MODE_SEMANTIC_BLOCK_AREA_RASTER,
-                "local_frontier_coverage": float(frontier_visible) / window_area,
-                "local_frontier_positive_count": float(frontier_visible),
-                "local_frontier_block_area_mean": (
-                    float(canvas[2][frontier_visible_mask].mean()) if frontier_visible > 0 else 0.0
-                ),
-            }
-        elif frontier_raster_used:
-            visit_channel_index = 3
-            trajectory_channel_index = 4
-            local_frontier_mask = self._local_frontier_mask(
-                cum_map,
-                arr_rows=arr_rows,
-                arr_cols=arr_cols,
-                inside=inside,
-                local_shape=local_shape,
-            )
-            if frontier_channel_mode == FRONTIER_CHANNEL_MODE_LOCAL_BINARY:
-                frontier_meta = self._paint_local_binary_frontier(
-                    canvas[2],
-                    local_frontier_mask=local_frontier_mask,
-                )
-            elif frontier_channel_mode == FRONTIER_CHANNEL_MODE_LOCAL_GLOBAL_AREA:
-                frontier_meta = self._paint_local_global_area_frontier(
-                    canvas[2],
-                    cum_map=cum_map,
-                    arr_rows=arr_rows,
-                    arr_cols=arr_cols,
-                    inside=inside,
-                    local_frontier_mask=local_frontier_mask,
-                    semantic_snapshot=semantic_snapshot,
-                    local_shape=local_shape,
-                )
-            else:
-                raise ValueError(f"Unsupported frontier_channel_mode: {frontier_channel_mode!r}")
-        else:
-            frontier_meta = {
-                "frontier_channel_mode": "none",
-                "local_frontier_coverage": 0.0,
-                "local_frontier_positive_count": 0.0,
-                "local_frontier_block_area_mean": 0.0,
-            }
 
         revisit_count = np.maximum(sampled_visit - 1.0, 0.0).astype(np.float32, copy=False)
         visit_log_denominator = float(np.log1p(max(1e-6, float(self.config.visit_count_log_saturation))))
@@ -426,14 +200,14 @@ class AdvantageStateBuilder:
             local_shape=local_shape,
         )
 
-        meta = dict(frontier_meta)
-        meta.update(
-            {
-                "advantage_canvas_schema": canvas_schema,
-                "advantage_canvas_channel_count": float(canvas.shape[0]),
-                "frontier_raster_used": bool(frontier_raster_used),
-            }
-        )
+        meta = {
+            "advantage_canvas_schema": canvas_schema,
+            "advantage_canvas_channel_count": float(canvas.shape[0]),
+            "frontier_raster_used": False,
+            "local_frontier_coverage": 0.0,
+            "local_frontier_positive_count": 0.0,
+            "local_frontier_block_area_mean": 0.0,
+        }
         if self._timing_enabled:
             self.build_time += time.perf_counter() - t0
         return canvas.copy(), meta

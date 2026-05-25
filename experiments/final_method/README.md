@@ -1,10 +1,11 @@
 # Final Method Launchers
 
-This directory contains final-method candidate launchers that are separate from the legacy full-method and ablation entries.
+This directory is the active experiment entry point for main. It keeps only the
+A_new final method and the Anew_R1-Anew_R5 reward ablations.
 
 ## A_new Final 4-Channel Method
 
-`A_new` is the final 4-channel no-frontier-raster method:
+`A_new` is the current full_method_main:
 
 - `method_id = A_new`
 - `method_name = final_4ch_no_frontier_raster`
@@ -17,20 +18,44 @@ This directory contains final-method candidate launchers that are separate from 
 - `model_class = ExplorationQNetwork`
 - `advantage_encoder.canvas_in_channels = 4`
 
-F1 provided the diagnostic evidence that the frontier-raster input is unnecessary or harmful in the advantage branch. F1 remains a legacy 5-channel zero-frontier diagnostic: it keeps the old tensor slot and zeros `frontier_block_area_map`. `A_new` is the final engineering structure: it removes that unused raster slot and must be retrained from scratch because the first advantage-encoder convolution changes from 5 input channels to 4.
+The advantage branch no longer uses a frontier raster. Frontier and unknown-block
+semantics remain in the structured value-tree branch built from
+`SharedSemanticSnapshot`.
 
-F6 and F7 also remain legacy 5-channel frontier-channel diagnostics. They are not `A_new` and continue to use `legacy_5ch_frontier_raster`.
+Legacy A/F1/F6/F7/ABCDEFR experiment entries and records were removed from active
+main and archived before cleanup at:
 
-Smoke is the default stage. Formal 500000-step training is never the default and must be requested explicitly.
+- branch: `legacy/pre-a-new-cleanup`
+- tag: `legacy-pre-a-new-cleanup-20260525`
 
-Dry-run:
+## Reward Ablations
+
+The supported reward ablation launchers are Anew_R1 through Anew_R5. Every one of
+them keeps the A_new final 4-channel schema and changes only the reward override:
+
+- `Anew_R1`: `reward_step_penalty = 0.0`
+- `Anew_R2`: `reward_revisit_penalty = 0.0`
+- `Anew_R3`: `reward_turn_penalty_scale = 0.0`
+- `Anew_R4`: `reward_timeout_penalty = 0.0`
+- `Anew_R5`: all four efficiency penalties above set to `0.0`
+
+Smoke is the default stage. Formal 500000-step training must be requested
+explicitly.
+
+Dry-run A_new:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu -DryRun
 ```
 
-Smoke:
+Smoke A_new:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu
+```
+
+Dry-run reward ablations:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_reward_ablations.ps1 -RunStage smoke -Device cpu -DryRun
 ```

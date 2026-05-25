@@ -7,14 +7,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from env.advantage_state_builder import LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS
+from env.advantage_state_builder import FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS
 from env.grid_topology import ACTIONS_8
 
 
 @dataclass(frozen=True)
 class AdvantageEncoderConfig:
-    canvas_in_channels: int = len(LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS)
-    canvas_channels: tuple[str, ...] = LEGACY_5CH_ADVANTAGE_CANVAS_CHANNELS
+    canvas_in_channels: int = len(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS)
+    canvas_channels: tuple[str, ...] = FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS
     action_dim: int = len(ACTIONS_8)
     base_dim: int = 64
     action_state_dim: int = 160
@@ -49,11 +49,11 @@ class AdvantageCanvasEncoder(nn.Module):
     """
     Encode the local decision canvas into one action-specific state per move.
 
-    The same semantic canvas is shared across all actions, but each action reads
+    The same local canvas is shared across all actions, but each action reads
     it through its own directional spatial template and landing-cell view. The
-    canvas now includes both cumulative revisit pressure and a short-horizon
-    trajectory-decay channel in addition to the occupancy/frontier geometry
-    channels, but the encoder architecture itself stays unchanged.
+    final A_new canvas contains occupancy, cumulative revisit pressure, and a
+    short-horizon trajectory-decay channel. Frontier semantics are supplied to
+    the value branch, not as an advantage-canvas raster.
     """
 
     def __init__(self, cfg: Optional[AdvantageEncoderConfig] = None):
@@ -188,7 +188,6 @@ class AdvantageCanvasEncoder(nn.Module):
             return canvas[:, idx].mean(dim=(1, 2))
 
         aux: Dict[str, torch.Tensor] = {
-            "advantage_canvas_frontier_block_area_mean": channel_mean("frontier_block_area_map"),
             "advantage_canvas_visit_pressure_mean": channel_mean("visit_count_log_norm"),
             "advantage_canvas_trajectory_mean": channel_mean("recent_trajectory_decay"),
         }
