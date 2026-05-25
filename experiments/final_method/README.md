@@ -2,7 +2,8 @@
 
 This directory is the active experiment entry point for main. It keeps the A_new
 final method, Anew_R1-Anew_R5 reward ablations, the A_new-aligned B classical
-frontier greedy baseline, and A_new-aligned D/F_key ablation launchers.
+frontier greedy baseline, the A_new-aligned C local-state DDQN learning
+baseline, and A_new-aligned D/F_key ablation launchers.
 
 ## A_new Final 4-Channel Method
 
@@ -116,6 +117,49 @@ Formal benchmark B:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu
+```
+
+## Anew_C Local-State DDQN Learning Baseline
+
+`Anew_C_local_state_ddqn` is the A_new-aligned C group learning baseline. It
+tests A_new against a simpler DDQN agent whose model input is only a local
+belief patch:
+
+- channels: `known_free`, `known_obstacle`, `unknown`
+- patch size: `2 * scan_radius + 1`; under the current `scan_radius = 10`, this is `21 x 21`
+- source: cumulative belief map sampled around the current agent pose
+- carrier key: `advantage_canvas`, with `local_state_canvas_role = baseline_local_state_input`
+- model: `LocalStateQNetwork`
+
+This row does not use the structured frontier-block value tree,
+`SharedSemanticSnapshot` as a value branch, behavior-memory channels,
+frontier raster input, full-map decision input, or any legacy C artifact. It
+also does not restore the old `baselines/` or `experiments/ablations/`
+frameworks. Zero value tensors are supplied only to satisfy the existing DDQN
+interface, and `LocalStateQNetwork` ignores them.
+
+C keeps the current A_new environment, reward, seed, and train-side-only metric
+contract, including `reward_override = {}` and `train_side_only_tuning = true`.
+Smoke and pilot are local checks only. Formal train-side-only artifacts can
+support a simpler learning-baseline comparison after artifact review, but C does
+not replace B classical comparison or D/F/R internal ablations.
+
+Dry-run C:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_local_state_ddqn_baseline.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Smoke C:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_local_state_ddqn_baseline.ps1 -RunStage smoke -Device cpu
+```
+
+Formal train-side-only C:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_local_state_ddqn_baseline.ps1 -RunStage formal -Device cuda
 ```
 
 ## Anew_D No-Value-Tree Ablation

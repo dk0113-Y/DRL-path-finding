@@ -193,7 +193,11 @@ class TrainConfig:
     baseline_group: str = "none"
     baseline_name: str = "none"
     baseline_type: str = "none"
+    is_learning_baseline: bool = False
     is_ablation: bool = False
+    uses_structured_value_tree: bool = True
+    behavior_memory_channels_used: bool = True
+    checkpoint_source: str = "trained_from_scratch"
     no_shared_semantic_dual_state: bool = False
     no_value_tree: bool = False
     no_frontier_cluster_input: bool = False
@@ -201,6 +205,7 @@ class TrainConfig:
     no_ground_truth_map_for_decision: bool = False
     local_state_channels: tuple[str, ...] = ()
     local_state_patch_size: int = 0
+    local_state_source: str = "none"
     local_state_carrier_key: str = "none"
     local_state_canvas_role: str = "full_method_advantage_canvas"
     model_class: str = "ExplorationQNetwork"
@@ -250,6 +255,9 @@ class TrainConfig:
         object.__setattr__(self, "zeroed_advantage_channels", zeroed_advantage_channels)
         if zeroed_advantage_channels:
             object.__setattr__(self, "is_ablation", True)
+        behavior_memory_channels = {"visit_count_log_norm", "recent_trajectory_decay"}
+        if behavior_memory_channels.issubset(set(zeroed_advantage_channels)):
+            object.__setattr__(self, "behavior_memory_channels_used", False)
         object.__setattr__(
             self,
             "frontier_raster_used",
@@ -265,6 +273,7 @@ class TrainConfig:
             object.__setattr__(self, "no_value_tree", True)
             object.__setattr__(self, "value_tree_enabled", False)
             object.__setattr__(self, "value_tree_unchanged", False)
+            object.__setattr__(self, "uses_structured_value_tree", False)
             object.__setattr__(self, "is_ablation", True)
             object.__setattr__(self, "dummy_value_tensors_for_interface", True)
             object.__setattr__(self, "value_tensors_used_by_model", True)

@@ -19,6 +19,18 @@ indices only; simulator map access is for stepping, sensing, termination, and
 metrics. Smoke and pilot outputs are not Results evidence and should not be
 written here as formal records.
 
+`Anew_C_local_state_ddqn` records, when formal train-side-only runs are
+performed, must be treated as A_new-aligned simpler learning baseline records.
+C trains `LocalStateQNetwork` from scratch with a three-channel cumulative-belief
+patch (`known_free`, `known_obstacle`, `unknown`) and the current A_new
+environment, reward, seed, and train-side-only metric contract. C does not use a
+structured value tree, behavior-memory channels, frontier raster, full-map
+decision input, legacy C artifacts, legacy `baselines/`, or the old
+`experiments/ablations/` framework. Smoke and pilot outputs are not Results
+evidence and should not be written here as formal records. Formal C artifacts
+can support only a simpler learning-baseline comparison after audit; they cannot
+replace B, D, F, or R evidence.
+
 `Anew_D_no_value_tree` records, when formal runs are performed, must be treated
 as A_new-aligned no-value-tree structural ablation records. Smoke and pilot
 outputs are not Results evidence and should not be written here as formal
