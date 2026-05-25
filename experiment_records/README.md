@@ -1,14 +1,23 @@
 # Experiment Records
 
 `main` reserves tracked record space for the active A_new final method, the
-Anew_R1-Anew_R5 reward ablations, and A_new-aligned structural ablations such as
-`Anew_D_no_value_tree`.
+Anew_R1-Anew_R5 reward ablations, the A_new-aligned B classical baseline, and
+A_new-aligned structural ablations such as `Anew_D_no_value_tree`.
 
 - Active lightweight records belong under `experiment_records/final_method/`.
 - Do not commit raw smoke outputs, raw run directories, checkpoint bodies, or
   large logs.
 - Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, `.pt`, `.pth`, or
   `.ckpt` files.
+
+`Anew_B_classical_frontier_greedy` records, when formal benchmark runs are
+performed, must be treated as A_new-aligned traditional non-learning baseline
+records. B does not train a model, does not use a checkpoint, does not use
+`ExplorationQNetwork`, and must not inherit legacy B or old baseline artifacts.
+The policy uses belief-derived frontier/shared-semantic state and valid action
+indices only; simulator map access is for stepping, sensing, termination, and
+metrics. Smoke and pilot outputs are not Results evidence and should not be
+written here as formal records.
 
 `Anew_D_no_value_tree` records, when formal runs are performed, must be treated
 as A_new-aligned no-value-tree structural ablation records. Smoke and pilot

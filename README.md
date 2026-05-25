@@ -57,7 +57,8 @@ active main 移除，并在清理前归档到：
   block / cluster 构造逻辑。
 - `env/value_state_builder.py`: structured frontier-block value tree。
 - `experiments/final_method/`: A_new final method, Anew_R1-Anew_R5 reward
-  ablations, Anew_D no-value-tree, and Anew_F3 no-behavior-memory launchers.
+  ablations, Anew_B classical frontier greedy baseline, Anew_D no-value-tree,
+  and Anew_F3 no-behavior-memory launchers.
 
 ## 运行方式
 
@@ -99,6 +100,50 @@ reward overrides are:
 - `Anew_R3`: `reward_turn_penalty_scale = 0.0`
 - `Anew_R4`: `reward_timeout_penalty = 0.0`
 - `Anew_R5`: all four efficiency penalties above set to `0.0`
+
+## Anew_B Classical Frontier Greedy Baseline
+
+`Anew_B_classical_frontier_greedy` is the A_new-aligned B group classical
+frontier greedy baseline. It is a traditional non-learning baseline: it does
+not train a model, does not load a checkpoint, and does not use
+`ExplorationQNetwork`.
+
+The policy uses only belief-derived frontier/shared-semantic state, the current
+pose, and valid action indices. It selects the lowest-BFS-cost reachable
+frontier target over known-free belief cells, then takes a valid action toward
+that target. If no reachable frontier exists, it falls back to deterministic
+immediate information-gain over currently unknown belief cells, then to the
+first valid action in `ACTIONS_8` order.
+
+The runner keeps the current A_new environment, reward, seed, and metric
+contract, including the default reward parameters. It does not restore legacy B
+artifacts, does not inherit the old baseline framework, and does not restore
+`baselines/` or `experiments/ablations/`. Simulator internals may use the map for
+stepping, sensing, termination, and metrics, but the policy decision path does
+not receive the full map.
+
+Smoke and pilot runs are local checks only, not paper Results. A B formal
+benchmark can support a classical baseline comparison after artifact review, but
+it cannot replace D/F/R internal ablations or explain neural representation
+contributions.
+
+Anew_B dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu -DryRun
+```
+
+Anew_B smoke:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage smoke -Device cpu
+```
+
+Anew_B formal benchmark:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu
+```
 
 ## Anew_D No-Value-Tree Structural Ablation
 

@@ -1,8 +1,8 @@
 # Final Method Launchers
 
 This directory is the active experiment entry point for main. It keeps the A_new
-final method, Anew_R1-Anew_R5 reward ablations, and A_new-aligned D/F_key
-ablation launchers.
+final method, Anew_R1-Anew_R5 reward ablations, the A_new-aligned B classical
+frontier greedy baseline, and A_new-aligned D/F_key ablation launchers.
 
 ## A_new Final 4-Channel Method
 
@@ -76,6 +76,46 @@ Dry-run reward ablations:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_reward_ablations.ps1 -RunStage smoke -Device cpu -DryRun
+```
+
+## Anew_B Classical Frontier Greedy Baseline
+
+`Anew_B_classical_frontier_greedy` is the A_new-aligned classical frontier greedy
+baseline for the B group. It is a traditional non-learning policy and does not
+train a neural model, load a checkpoint, use `ExplorationQNetwork`, restore
+legacy B artifacts, or inherit the old baseline framework.
+
+The policy decision path uses only belief-derived frontier geometry,
+`SharedSemanticSnapshot` candidates, the current pose, and valid action indices.
+It selects the reachable frontier target with minimum BFS cost over known-free
+belief cells and takes one valid action toward that target. If no reachable
+frontier exists, it chooses the valid next action with the largest immediate
+unknown-belief footprint; remaining ties use the repository `ACTIONS_8` order:
+N, NE, E, SE, S, SW, W, NW.
+
+The runner uses the current A_new environment, reward, seed, and metric
+contract. Simulator-side map access is limited to environment stepping, sensor
+updates, termination, and metric computation; the policy is not given the full
+map. Smoke and pilot runs are not Results. Formal B benchmark artifacts can
+support a classical baseline comparison after artifact review, but B cannot
+replace D/F/R internal ablations or neural representation evidence.
+
+Dry-run B:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu -DryRun
+```
+
+Smoke B:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage smoke -Device cpu
+```
+
+Formal benchmark B:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu
 ```
 
 ## Anew_D No-Value-Tree Ablation
