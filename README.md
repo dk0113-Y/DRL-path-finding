@@ -56,8 +56,8 @@ active main 移除，并在清理前归档到：
 - `env/shared_semantic_layer.py`: shared semantic snapshot，包括 frontier / unknown
   block / cluster 构造逻辑。
 - `env/value_state_builder.py`: structured frontier-block value tree。
-- `experiments/final_method/`: A_new final method 与 Anew_R1-Anew_R5 reward
-  ablation launchers。
+- `experiments/final_method/`: A_new final method, Anew_R1-Anew_R5 reward
+  ablations, Anew_D no-value-tree, and Anew_F3 no-behavior-memory launchers.
 
 ## 运行方式
 
@@ -142,6 +142,57 @@ Anew_D formal train-side-only:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage formal -Device cuda
+```
+
+## Anew_F3 No-Behavior-Memory F_key Ablation
+
+`Anew_F3_no_behavior_memory` is the A_new-aligned F_key input-state ablation. It
+keeps the current A_new 4-channel no-frontier-raster advantage canvas schema,
+retains `free` and `obstacle`, and zeros the behavior-memory channels
+`visit_count_log_norm` and `recent_trajectory_decay`.
+
+- `experiment_id = Anew_F`
+- `method_id = Anew_F3_no_behavior_memory`
+- `method_name = no_behavior_memory`
+- `ablation_group = input_state`
+- `channel_ablation = no_behavior_memory`
+- `zeroed_advantage_channels = ["visit_count_log_norm", "recent_trajectory_decay"]`
+- `advantage_canvas_schema = final_4ch_no_frontier_raster`
+- `advantage_canvas_channel_count = 4`
+- `frontier_raster_used = false`
+- `value_tree_enabled = true`
+- `value_tree_unchanged = true`
+- `reward_override = {}`
+- `train_side_only_tuning = true` by current default
+
+Under the current schema, this is equivalent to an occupancy-only advantage
+canvas, so `Anew_F4_occupancy_only` is only an alias-level explanation and is not
+kept as a separate formal row, run name, or artifact row. This row does not
+restore legacy 5-channel inputs, does not restore `frontier_block_area_map`, and
+does not inherit legacy F artifacts. It keeps the current A_new matched default
+training parameters and does not change reward defaults.
+
+Smoke and pilot runs are local checks only, not paper Results. Formal
+train-side-only outputs can be used for contract-aligned comparison against the
+current A_new train-side-only runs, but they do not automatically substitute for
+unrun final-probe evidence.
+
+Anew_F3 dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Anew_F3 smoke:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage smoke -Device cpu
+```
+
+Anew_F3 formal train-side-only:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda
 ```
 
 ## Repository Hygiene

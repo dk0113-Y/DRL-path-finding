@@ -25,6 +25,7 @@ from env.advantage_state_builder import (
     advantage_canvas_channels_for_schema,
     advantage_canvas_uses_frontier_raster,
     normalize_advantage_canvas_schema,
+    normalize_zeroed_advantage_channels,
 )
 from env.shared_semantic_layer import SharedSemanticConfig
 from env.value_state_builder import (
@@ -237,10 +238,18 @@ class TrainConfig:
                 f"{schema_channels}; got {configured_channels}"
             )
         channels = schema_channels
+        zeroed_advantage_channels = normalize_zeroed_advantage_channels(
+            self.zeroed_advantage_channels,
+            schema=schema,
+        )
 
         object.__setattr__(self, "advantage_canvas_schema", schema)
         object.__setattr__(self, "advantage_canvas_channels", channels)
         object.__setattr__(self, "advantage_canvas_channel_count", int(len(channels)))
+        object.__setattr__(self, "channel_ablation", str(self.channel_ablation or "none"))
+        object.__setattr__(self, "zeroed_advantage_channels", zeroed_advantage_channels)
+        if zeroed_advantage_channels:
+            object.__setattr__(self, "is_ablation", True)
         object.__setattr__(
             self,
             "frontier_raster_used",
@@ -634,6 +643,8 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"advantage_canvas_channel_count={int(cfg.advantage_canvas_channel_count)} "
         f"advantage_canvas_channels={list(cfg.advantage_canvas_channels)} "
         f"frontier_raster_used={bool(cfg.frontier_raster_used)} "
+        f"channel_ablation={cfg.channel_ablation} "
+        f"zeroed_advantage_channels={list(cfg.zeroed_advantage_channels)} "
         f"value_tree_enabled={bool(cfg.value_tree_enabled)} "
         f"value_replacement_strategy={cfg.value_replacement_strategy} "
         f"model_class={cfg.model_class} "
@@ -854,6 +865,7 @@ def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=Non
         advantage_state=AdvantageStateConfig(
             advantage_canvas_schema=str(cfg.advantage_canvas_schema),
             trajectory_history_steps=int(cfg.trajectory_history_steps),
+            zeroed_advantage_channels=tuple(cfg.zeroed_advantage_channels),
             enable_timing=bool(cfg.enable_advantage_state_timing),
         ),
         value_state=ValueStateConfig(
@@ -2016,6 +2028,13 @@ def parse_args() -> TrainConfig:
     p.add_argument("--ablation-group", type=str, default="none")
     p.add_argument("--ablation-id", type=str, default="none")
     p.add_argument("--ablation-name", type=str, default="none")
+    p.add_argument("--channel-ablation", type=str, default="none")
+    p.add_argument(
+        "--zeroed-advantage-channels",
+        type=str,
+        default="",
+        help="Comma-separated A_new advantage canvas channels to zero after state construction.",
+    )
     p.add_argument(
         "--value-replacement-strategy",
         type=str,
@@ -2456,6 +2475,11 @@ def parse_args() -> TrainConfig:
     resolved_run_stage = str(args.run_stage or ("smoke" if args.smoke else "formal"))
     resolved_method_id = str(args.method_id or args.experiment_id)
     resolved_method_name = str(args.method_name or args.advantage_canvas_schema)
+    zeroed_advantage_channels = normalize_zeroed_advantage_channels(
+        args.zeroed_advantage_channels,
+        schema=args.advantage_canvas_schema,
+    )
+    channel_ablation = str(args.channel_ablation or "none")
     value_replacement_strategy = normalize_value_replacement_strategy(args.value_replacement_strategy)
     no_value_tree = bool(args.no_value_tree) or (
         value_replacement_strategy == VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE
@@ -2463,7 +2487,14 @@ def parse_args() -> TrainConfig:
     ablation_group = str(args.ablation_group or "none")
     ablation_id = str(args.ablation_id or "none")
     ablation_name = str(args.ablation_name or "none")
-    is_ablation = bool(no_value_tree or ablation_group != "none" or ablation_id != "none" or ablation_name != "none")
+    is_ablation = bool(
+        no_value_tree
+        or ablation_group != "none"
+        or ablation_id != "none"
+        or ablation_name != "none"
+        or channel_ablation != "none"
+        or zeroed_advantage_channels
+    )
     dummy_value_block_shape = (
         (max(1, int(args.max_accessible_blocks)), VALUE_BLOCK_FEATURE_COUNT)
         if no_value_tree else ()
@@ -2484,6 +2515,8 @@ def parse_args() -> TrainConfig:
             ablation_group=ablation_group,
             ablation_id=ablation_id,
             ablation_name=ablation_name,
+            channel_ablation=channel_ablation,
+            zeroed_advantage_channels=zeroed_advantage_channels,
             is_ablation=is_ablation,
             value_replacement_strategy=value_replacement_strategy,
             value_tree_enabled=not no_value_tree,
@@ -2612,6 +2645,8 @@ def parse_args() -> TrainConfig:
         ablation_group=ablation_group,
         ablation_id=ablation_id,
         ablation_name=ablation_name,
+        channel_ablation=channel_ablation,
+        zeroed_advantage_channels=zeroed_advantage_channels,
         is_ablation=is_ablation,
         value_replacement_strategy=value_replacement_strategy,
         value_tree_enabled=not no_value_tree,

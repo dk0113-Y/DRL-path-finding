@@ -1,7 +1,8 @@
 # Final Method Launchers
 
-This directory is the active experiment entry point for main. It keeps only the
-A_new final method and the Anew_R1-Anew_R5 reward ablations.
+This directory is the active experiment entry point for main. It keeps the A_new
+final method, Anew_R1-Anew_R5 reward ablations, and A_new-aligned D/F_key
+ablation launchers.
 
 ## A_new Final 4-Channel Method
 
@@ -108,4 +109,47 @@ Smoke D:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage smoke -Device cpu
+```
+
+## Anew_F3 No-Behavior-Memory F_key Ablation
+
+`Anew_F3_no_behavior_memory` is the A_new-aligned F_key input-state ablation. It
+keeps the A_new final 4-channel no-frontier-raster schema and changes only the
+behavior-memory channels in the advantage branch:
+
+- `free`: kept unchanged
+- `obstacle`: kept unchanged
+- `visit_count_log_norm`: zeroed
+- `recent_trajectory_decay`: zeroed
+
+The row keeps the structured frontier-block value tree enabled and unchanged,
+uses `reward_override = {}`, and inherits the current matched A_new default
+training parameters, including `train_side_only_tuning = true`.
+
+In the current schema, this is equivalent to an occupancy-only advantage canvas.
+`Anew_F4_occupancy_only` is therefore not a separate formal experiment row, run
+name, or artifact row. This launcher does not restore legacy 5-channel inputs,
+does not restore `frontier_block_area_map`, and does not inherit legacy F
+artifacts.
+
+Smoke and pilot runs are local checks only, not Results. Formal train-side-only
+outputs can be compared to current A_new train-side-only runs under the same
+contract, but they do not automatically replace unrun final-probe evidence.
+
+Dry-run F_key:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Smoke F_key:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage smoke -Device cpu
+```
+
+Formal train-side-only F_key:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda
 ```

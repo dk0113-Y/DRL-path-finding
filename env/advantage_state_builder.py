@@ -51,16 +51,52 @@ def advantage_canvas_uses_frontier_raster(schema: str | None) -> bool:
 frontier_raster_used_for_schema = advantage_canvas_uses_frontier_raster
 
 
+def normalize_zeroed_advantage_channels(
+    channels: Sequence[str] | str | None,
+    *,
+    schema: str | None = None,
+) -> tuple[str, ...]:
+    if channels is None:
+        return ()
+    if isinstance(channels, str):
+        raw_channels = channels.replace(";", ",").split(",")
+    else:
+        raw_channels = channels
+
+    allowed_channels = advantage_canvas_channels_for_schema(schema)
+    allowed_set = set(allowed_channels)
+    normalized: list[str] = []
+    for raw_channel in raw_channels:
+        channel = str(raw_channel).strip()
+        if not channel:
+            continue
+        if channel not in allowed_set:
+            available = ", ".join(allowed_channels)
+            raise ValueError(
+                f"Unsupported zeroed advantage channel {channel!r}; "
+                f"expected one of: {available}"
+            )
+        if channel not in normalized:
+            normalized.append(channel)
+    return tuple(normalized)
+
+
 @dataclass(frozen=True)
 class AdvantageStateConfig:
     enable_timing: bool = False
     advantage_canvas_schema: str = ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER
     visit_count_log_saturation: float = 8.0
     trajectory_history_steps: int = 10
+    zeroed_advantage_channels: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         schema = normalize_advantage_canvas_schema(self.advantage_canvas_schema)
         object.__setattr__(self, "advantage_canvas_schema", schema)
+        object.__setattr__(
+            self,
+            "zeroed_advantage_channels",
+            normalize_zeroed_advantage_channels(self.zeroed_advantage_channels, schema=schema),
+        )
 
     @property
     def advantage_canvas_channels(self) -> tuple[str, ...]:
@@ -200,10 +236,19 @@ class AdvantageStateBuilder:
             local_shape=local_shape,
         )
 
+        if self.config.zeroed_advantage_channels:
+            channel_index = {
+                channel_name: idx
+                for idx, channel_name in enumerate(self.config.advantage_canvas_channels)
+            }
+            for channel_name in self.config.zeroed_advantage_channels:
+                canvas[channel_index[channel_name]].fill(0.0)
+
         meta = {
             "advantage_canvas_schema": canvas_schema,
             "advantage_canvas_channel_count": float(canvas.shape[0]),
             "frontier_raster_used": False,
+            "zeroed_advantage_channel_count": float(len(self.config.zeroed_advantage_channels)),
             "local_frontier_coverage": 0.0,
             "local_frontier_positive_count": 0.0,
             "local_frontier_block_area_mean": 0.0,
