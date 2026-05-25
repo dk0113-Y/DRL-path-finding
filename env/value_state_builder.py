@@ -34,6 +34,24 @@ VALUE_DIAGNOSTIC_FIELDS = (
 )
 VALUE_BLOCK_FEATURE_COUNT = len(VALUE_BLOCK_FEATURES)
 VALUE_ENTRY_FEATURE_COUNT = len(VALUE_ENTRY_FEATURES)
+VALUE_REPLACEMENT_STRATEGY_NONE = "none"
+VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE = "zero_value_state"
+VALUE_REPLACEMENT_STRATEGIES = (
+    VALUE_REPLACEMENT_STRATEGY_NONE,
+    VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE,
+)
+
+
+def normalize_value_replacement_strategy(strategy: str | None) -> str:
+    normalized = str(strategy or VALUE_REPLACEMENT_STRATEGY_NONE).strip().lower()
+    if normalized in {"zero", "dummy", "dummy_value_state", "no_value_tree"}:
+        normalized = VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE
+    if normalized not in VALUE_REPLACEMENT_STRATEGIES:
+        available = ", ".join(VALUE_REPLACEMENT_STRATEGIES)
+        raise ValueError(
+            f"Unsupported value_replacement_strategy {strategy!r}; expected one of: {available}"
+        )
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -41,6 +59,14 @@ class ValueStateConfig:
     max_accessible_blocks: int = 16
     max_entries_per_block: int = 8
     enable_timing: bool = False
+    value_replacement_strategy: str = VALUE_REPLACEMENT_STRATEGY_NONE
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "value_replacement_strategy",
+            normalize_value_replacement_strategy(self.value_replacement_strategy),
+        )
 
 
 class ValueStateBuilder:
@@ -74,6 +100,12 @@ class ValueStateBuilder:
         entry_features = np.zeros((max_blocks, max_entries, VALUE_ENTRY_FEATURE_COUNT), dtype=np.float32)
         block_mask = np.zeros((max_blocks,), dtype=bool)
         entry_mask = np.zeros((max_blocks, max_entries), dtype=bool)
+
+        if self.config.value_replacement_strategy == VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE:
+            value_meta = {field_name: 0.0 for field_name in VALUE_DIAGNOSTIC_FIELDS}
+            if self._timing_enabled:
+                self.build_time += time.perf_counter() - t0
+            return block_features, entry_features, block_mask, entry_mask, value_meta
 
         accessible_blocks = list(semantic_snapshot.accessible_blocks)
         total_block_count = int(len(accessible_blocks))

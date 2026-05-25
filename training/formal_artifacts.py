@@ -1546,7 +1546,11 @@ def build_config_snapshot(
             "advantage_canvas_schema": config_dict.get("advantage_canvas_schema"),
             "advantage_canvas_channels": config_dict.get("advantage_canvas_channels"),
             "frontier_raster_used": bool(config_dict.get("frontier_raster_used", False)),
-            "safe_zero_dummy_value_state": False,
+            "safe_zero_dummy_value_state": bool(
+                config_dict.get("dummy_value_tensors_for_interface")
+                and str(config_dict.get("value_replacement_strategy") or "").lower()
+                in {"zero_value_state", "dummy_value_state", "no_value_tree"}
+            ),
         },
         "default_main_baseline": {
             "identifier": baseline_identifier,

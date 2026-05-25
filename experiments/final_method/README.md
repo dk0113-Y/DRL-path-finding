@@ -76,3 +76,36 @@ Dry-run reward ablations:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_reward_ablations.ps1 -RunStage smoke -Device cpu -DryRun
 ```
+
+## Anew_D No-Value-Tree Ablation
+
+`Anew_D_no_value_tree` is the A_new-aligned D structural ablation for the planned
+matrix. It removes structured frontier-block value-tree information by feeding a
+shape-compatible zero value state with all value masks set false. The
+`ExplorationQNetwork` interface and parameter count stay aligned with A_new.
+
+The D row keeps the current A_new advantage canvas unchanged:
+
+- `advantage_canvas_schema = final_4ch_no_frontier_raster`
+- channels: `free`, `obstacle`, `visit_count_log_norm`, `recent_trajectory_decay`
+- `advantage_canvas_channel_count = 4`
+- `frontier_raster_used = false`
+
+It does not restore legacy 5-channel inputs, does not restore
+`frontier_block_area_map`, and does not inherit legacy D artifacts. It also keeps
+the current matched A_new default training parameters and uses `reward_override =
+{}`. Smoke and pilot runs are not Results. Formal train-side-only outputs can be
+used for contract-aligned comparison against A_new train-side-only runs, but they
+do not automatically substitute for unrun final probe evidence.
+
+Dry-run D:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Smoke D:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage smoke -Device cpu
+```

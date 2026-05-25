@@ -100,6 +100,50 @@ reward overrides are:
 - `Anew_R4`: `reward_timeout_penalty = 0.0`
 - `Anew_R5`: all four efficiency penalties above set to `0.0`
 
+## Anew_D No-Value-Tree Structural Ablation
+
+`Anew_D_no_value_tree` is the A_new-aligned D group implementation from the
+planned matrix. It tests the overall contribution of the structured
+frontier-block value tree while preserving the current A_new local advantage
+canvas:
+
+- `method_id = Anew_D_no_value_tree`
+- `method_name = no_value_tree`
+- `ablation_group = structural`
+- `ablation_name = no_value_tree`
+- `advantage_canvas_schema = final_4ch_no_frontier_raster`
+- `advantage_canvas_channel_count = 4`
+- `frontier_raster_used = false`
+- `value_tree_enabled = false`
+- `value_replacement_strategy = zero_value_state`
+- `reward_override = {}`
+- `train_side_only_tuning = true` by default
+
+This row does not restore the legacy 5-channel advantage canvas, does not
+restore `frontier_block_area_map`, and does not inherit any legacy D artifacts.
+It uses the current A_new matched default training parameters. Smoke and pilot
+runs are local checks only, not paper Results. Formal train-side-only outputs can
+be compared to the current A_new train-side contract, but they do not replace
+unrun final-probe evidence.
+
+Anew_D dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Anew_D smoke:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage smoke -Device cpu
+```
+
+Anew_D formal train-side-only:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage formal -Device cuda
+```
+
 ## Repository Hygiene
 
 Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, or checkpoint files

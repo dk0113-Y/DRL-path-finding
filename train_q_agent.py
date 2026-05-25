@@ -27,7 +27,15 @@ from env.advantage_state_builder import (
     normalize_advantage_canvas_schema,
 )
 from env.shared_semantic_layer import SharedSemanticConfig
-from env.value_state_builder import ValueStateConfig
+from env.value_state_builder import (
+    VALUE_BLOCK_FEATURE_COUNT,
+    VALUE_ENTRY_FEATURE_COUNT,
+    VALUE_REPLACEMENT_STRATEGIES,
+    VALUE_REPLACEMENT_STRATEGY_NONE,
+    VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE,
+    ValueStateConfig,
+    normalize_value_replacement_strategy,
+)
 from training.checkpointing import CheckpointManager
 from training.collector import (
     CollectorConfig,
@@ -238,6 +246,36 @@ class TrainConfig:
             "frontier_raster_used",
             bool(advantage_canvas_uses_frontier_raster(schema)),
         )
+
+        value_replacement_strategy = normalize_value_replacement_strategy(self.value_replacement_strategy)
+        no_value_tree = bool(self.no_value_tree) or (
+            value_replacement_strategy == VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE
+        )
+        object.__setattr__(self, "value_replacement_strategy", value_replacement_strategy)
+        if no_value_tree:
+            object.__setattr__(self, "no_value_tree", True)
+            object.__setattr__(self, "value_tree_enabled", False)
+            object.__setattr__(self, "value_tree_unchanged", False)
+            object.__setattr__(self, "is_ablation", True)
+            object.__setattr__(self, "dummy_value_tensors_for_interface", True)
+            object.__setattr__(self, "value_tensors_used_by_model", True)
+            object.__setattr__(self, "dummy_value_mask_rule", "all_false")
+            object.__setattr__(
+                self,
+                "dummy_value_block_shape",
+                (int(self.max_accessible_blocks), int(VALUE_BLOCK_FEATURE_COUNT)),
+            )
+            object.__setattr__(
+                self,
+                "dummy_value_entry_shape",
+                (
+                    int(self.max_accessible_blocks),
+                    int(self.max_entries_per_block),
+                    int(VALUE_ENTRY_FEATURE_COUNT),
+                ),
+            )
+            object.__setattr__(self, "value_branch_source", "zero_value_state")
+            object.__setattr__(self, "value_branch_representation", "zero_value_state")
 
         experiment_id = str(self.experiment_id or "A_new")
         method_id = str(self.method_id or experiment_id)
@@ -597,6 +635,7 @@ def _print_startup_summary(cfg: TrainConfig, run_mode: str) -> None:
         f"advantage_canvas_channels={list(cfg.advantage_canvas_channels)} "
         f"frontier_raster_used={bool(cfg.frontier_raster_used)} "
         f"value_tree_enabled={bool(cfg.value_tree_enabled)} "
+        f"value_replacement_strategy={cfg.value_replacement_strategy} "
         f"model_class={cfg.model_class} "
         f"advantage_encoder.canvas_in_channels={int(cfg.advantage_canvas_channel_count)} "
         f"total_env_steps={int(cfg.total_env_steps)} "
@@ -821,6 +860,7 @@ def build_system(cfg: TrainConfig, state_adapter_factory=None, model_factory=Non
             max_accessible_blocks=int(cfg.max_accessible_blocks),
             max_entries_per_block=int(cfg.max_entries_per_block),
             enable_timing=bool(cfg.enable_value_state_timing),
+            value_replacement_strategy=str(cfg.value_replacement_strategy),
         ),
         pin_memory=True,
         non_blocking_transfer=True,
@@ -1973,6 +2013,21 @@ def parse_args() -> TrainConfig:
     p.add_argument("--method-id", type=str, default=None)
     p.add_argument("--method-name", type=str, default=None)
     p.add_argument("--run-stage", type=str, choices=("smoke", "pilot", "formal"), default=None)
+    p.add_argument("--ablation-group", type=str, default="none")
+    p.add_argument("--ablation-id", type=str, default="none")
+    p.add_argument("--ablation-name", type=str, default="none")
+    p.add_argument(
+        "--value-replacement-strategy",
+        type=str,
+        choices=VALUE_REPLACEMENT_STRATEGIES,
+        default=VALUE_REPLACEMENT_STRATEGY_NONE,
+        help="A_new structural ablation input replacement for the value branch.",
+    )
+    p.add_argument(
+        "--no-value-tree",
+        action="store_true",
+        help="Use a zero-value-state tensor adapter while preserving the ExplorationQNetwork interface.",
+    )
     p.add_argument(
         "--enable-amp",
         action=argparse.BooleanOptionalAction,
@@ -2401,6 +2456,23 @@ def parse_args() -> TrainConfig:
     resolved_run_stage = str(args.run_stage or ("smoke" if args.smoke else "formal"))
     resolved_method_id = str(args.method_id or args.experiment_id)
     resolved_method_name = str(args.method_name or args.advantage_canvas_schema)
+    value_replacement_strategy = normalize_value_replacement_strategy(args.value_replacement_strategy)
+    no_value_tree = bool(args.no_value_tree) or (
+        value_replacement_strategy == VALUE_REPLACEMENT_STRATEGY_ZERO_VALUE_STATE
+    )
+    ablation_group = str(args.ablation_group or "none")
+    ablation_id = str(args.ablation_id or "none")
+    ablation_name = str(args.ablation_name or "none")
+    is_ablation = bool(no_value_tree or ablation_group != "none" or ablation_id != "none" or ablation_name != "none")
+    dummy_value_block_shape = (
+        (max(1, int(args.max_accessible_blocks)), VALUE_BLOCK_FEATURE_COUNT)
+        if no_value_tree else ()
+    )
+    dummy_value_entry_shape = (
+        (max(1, int(args.max_accessible_blocks)), max(1, int(args.max_entries_per_block)), VALUE_ENTRY_FEATURE_COUNT)
+        if no_value_tree else ()
+    )
+    dummy_value_mask_rule = "all_false" if no_value_tree else "none"
 
     if args.smoke:
         return TrainConfig(
@@ -2409,6 +2481,19 @@ def parse_args() -> TrainConfig:
             experiment_id=args.experiment_id,
             method_id=resolved_method_id,
             method_name=resolved_method_name,
+            ablation_group=ablation_group,
+            ablation_id=ablation_id,
+            ablation_name=ablation_name,
+            is_ablation=is_ablation,
+            value_replacement_strategy=value_replacement_strategy,
+            value_tree_enabled=not no_value_tree,
+            value_tree_unchanged=not no_value_tree,
+            no_value_tree=no_value_tree,
+            dummy_value_tensors_for_interface=no_value_tree,
+            value_tensors_used_by_model=True,
+            dummy_value_block_shape=dummy_value_block_shape,
+            dummy_value_entry_shape=dummy_value_entry_shape,
+            dummy_value_mask_rule=dummy_value_mask_rule,
             run_stage=resolved_run_stage,
             enable_amp=enable_amp,
             enable_inference_amp=enable_inference_amp,
@@ -2524,6 +2609,19 @@ def parse_args() -> TrainConfig:
         experiment_id=args.experiment_id,
         method_id=resolved_method_id,
         method_name=resolved_method_name,
+        ablation_group=ablation_group,
+        ablation_id=ablation_id,
+        ablation_name=ablation_name,
+        is_ablation=is_ablation,
+        value_replacement_strategy=value_replacement_strategy,
+        value_tree_enabled=not no_value_tree,
+        value_tree_unchanged=not no_value_tree,
+        no_value_tree=no_value_tree,
+        dummy_value_tensors_for_interface=no_value_tree,
+        value_tensors_used_by_model=True,
+        dummy_value_block_shape=dummy_value_block_shape,
+        dummy_value_entry_shape=dummy_value_entry_shape,
+        dummy_value_mask_rule=dummy_value_mask_rule,
         run_stage=resolved_run_stage,
         enable_amp=enable_amp,
         enable_inference_amp=enable_inference_amp,
