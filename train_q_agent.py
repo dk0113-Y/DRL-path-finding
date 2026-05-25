@@ -102,14 +102,14 @@ class TrainConfig:
     warmup_steps: int = 4_000
     warmup_episodes: int = 0
     collect_steps_per_iter: int = 16
-    learner_updates_per_iter: int = 2
+    learner_updates_per_iter: int = 1
     train_every_env_steps: int = 16
     log_interval: int = 500
     log_interval_episodes: int = 10
 
     recent_episode_window: int = 100
     formal_protocol: str = POSTHOC_PROTOCOL_NAME
-    train_side_only_tuning: bool = False
+    train_side_only_tuning: bool = True
     final_greedy_episodes: int = 100
     train_print_interval_episodes: int = 20
     use_fixed_train_episode_seeds: bool = True
@@ -132,7 +132,7 @@ class TrainConfig:
 
     replay_capacity: int = 100_000
     batch_size: int = 128
-    min_replay_size: int = 4_000
+    min_replay_size: int = 8_000
 
     gamma: float = 0.99
     n_step: int = 3
@@ -143,17 +143,17 @@ class TrainConfig:
     target_update_interval: int = 1_000
 
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.03
-    epsilon_decay_steps: int = 400_000
+    epsilon_end: float = 0.04
+    epsilon_decay_steps: int = 240_000
 
     max_episode_steps: int = 600  # tune with map scale as needed
     coverage_stop_threshold: float = 0.95
 
-    reward_info_scale: float = 3.0
-    reward_obstacle_weight: float = 0.25
+    reward_info_scale: float = 3.1
+    reward_obstacle_weight: float = 0.20
     reward_step_penalty: float = 0.02
     reward_terminal_bonus: float = 20.0
-    # Current working default reward combo is turn=0.05 / revisit=0.10; historical baselines remain useful for A/B runs.
+    # Candidate formal defaults align A_new training/reward settings to the matched legacy A/F1 contract.
     reward_revisit_penalty: float = 0.10
     reward_turn_penalty_scale: float = 0.05  # total turn penalty scale; angle-specific weights are configured below.
     reward_turn_weight_45: float = 0.0
@@ -2186,10 +2186,10 @@ def parse_args() -> TrainConfig:
     p.add_argument("--warmup-steps", type=int, default=4_000)
     p.add_argument("--warmup-episodes", type=int, default=0)
     p.add_argument("--batch-size", type=int, default=128)
-    p.add_argument("--min-replay-size", type=int, default=4_000)
+    p.add_argument("--min-replay-size", type=int, default=8_000)
     p.add_argument("--replay-capacity", type=int, default=100_000)
     p.add_argument("--collect-steps-per-iter", type=int, default=16)
-    p.add_argument("--learner-updates-per-iter", type=int, default=2)
+    p.add_argument("--learner-updates-per-iter", type=int, default=1)
     p.add_argument("--train-every-env-steps", type=int, default=16)
     p.add_argument("--n-step", type=int, default=3)
     p.add_argument("--gamma", type=float, default=0.99)
@@ -2199,8 +2199,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--grad-clip-norm", type=float, default=10.0)
 
     p.add_argument("--epsilon-start", type=float, default=1.0)
-    p.add_argument("--epsilon-end", type=float, default=0.03)
-    p.add_argument("--epsilon-decay-steps", type=int, default=400_000)
+    p.add_argument("--epsilon-end", type=float, default=0.04)
+    p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
 
     p.add_argument("--recent-episode-window", type=int, default=100)
     p.add_argument(
@@ -2213,10 +2213,11 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--train-side-only-tuning",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "Formal tuning mode that preserves train-side logging and endpoint checkpoints while skipping "
-            "posthoc selection, candidate scoring, final_probe, best-vs-last comparison, and automatic winner selection."
+            "posthoc selection, candidate scoring, final_probe, best-vs-last comparison, and automatic winner selection. "
+            "Enabled by default to match the legacy A/F1 formal training contract."
         ),
     )
     p.add_argument(
@@ -2301,13 +2302,13 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--reward-info-scale",
         type=float,
-        default=3.0,
+        default=3.1,
         help="weighted information gain scale under the fixed half-perimeter normalization rule",
     )
     p.add_argument(
         "--reward-obstacle-weight",
         type=float,
-        default=0.25,
+        default=0.20,
         help="obstacle reveal weight inside the fixed half-perimeter information gain",
     )
     p.add_argument("--reward-step-penalty", type=float, default=0.02, help="step penalty")
@@ -2727,10 +2728,10 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         warmup_steps=4_000,
         warmup_episodes=0,
         collect_steps_per_iter=16,
-        learner_updates_per_iter=2,
+        learner_updates_per_iter=1,
         train_every_env_steps=16,
         batch_size=128,
-        min_replay_size=4_000,
+        min_replay_size=8_000,
         replay_capacity=100_000,
         gamma=0.99,
         n_step=3,
@@ -2738,10 +2739,11 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         target_update_interval=1_000,
         grad_clip_norm=10.0,
         epsilon_start=1.0,
-        epsilon_end=0.03,
-        epsilon_decay_steps=400_000,
+        epsilon_end=0.04,
+        epsilon_decay_steps=240_000,
         recent_episode_window=100,
         formal_protocol=POSTHOC_PROTOCOL_NAME,
+        train_side_only_tuning=True,
         final_greedy_episodes=100,
         train_print_interval_episodes=20,
         use_fixed_train_episode_seeds=True,
@@ -2765,8 +2767,8 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         log_interval_episodes=10,
         max_episode_steps=600,
         coverage_stop_threshold=0.95,
-        reward_info_scale=3.0,
-        reward_obstacle_weight=0.25,
+        reward_info_scale=3.1,
+        reward_obstacle_weight=0.20,
         reward_step_penalty=0.02,
         reward_terminal_bonus=20.0,
         reward_revisit_penalty=0.10,

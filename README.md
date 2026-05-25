@@ -20,6 +20,24 @@ frontier-block value tree。
 - `value_branch_representation = structured_frontier_block_value_tree`
 - `model_class = ExplorationQNetwork`
 
+## Formal Defaults
+
+A_new formal defaults are aligned to the matched legacy A/F1 training
+configuration for a controlled A_new rerun. This is a candidate formal
+configuration pending validation, not an optimal or proven setting.
+
+- `reward_info_scale = 3.1`
+- `reward_obstacle_weight = 0.2`
+- `learner_updates_per_iter = 1`
+- `min_replay_size = 8000`
+- `epsilon_end = 0.04`
+- `epsilon_decay_steps = 240000`
+- `train_side_only_tuning = true`
+
+The method contract remains A_new: final 4-channel no-frontier-raster advantage
+canvas, structured value tree from `SharedSemanticSnapshot`, and
+`ExplorationQNetwork`. Legacy 5-channel frontier raster inputs are not restored.
+
 Advantage canvas 不再包含 frontier raster。frontier、unknown block 和 frontier
 cluster 语义仍保留在 shared semantic layer 与 value tree 中，用于 value branch。
 

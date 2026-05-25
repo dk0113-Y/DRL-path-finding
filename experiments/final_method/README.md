@@ -22,6 +22,23 @@ The advantage branch no longer uses a frontier raster. Frontier and unknown-bloc
 semantics remain in the structured value-tree branch built from
 `SharedSemanticSnapshot`.
 
+## Formal Defaults
+
+The current A_new formal defaults are aligned to the matched legacy A/F1
+training configuration for a controlled A_new rerun. This is a candidate formal
+configuration pending validation, not an optimal or proven setting.
+
+- `reward_info_scale = 3.1`
+- `reward_obstacle_weight = 0.2`
+- `learner_updates_per_iter = 1`
+- `min_replay_size = 8000`
+- `epsilon_end = 0.04`
+- `epsilon_decay_steps = 240000`
+- `train_side_only_tuning = true`
+
+A_new still uses the final 4-channel no-frontier-raster schema; no legacy
+5-channel frontier raster or F1 compatibility experiment is restored.
+
 Legacy A/F1/F6/F7/ABCDEFR experiment entries and records were removed from active
 main and archived before cleanup at:
 
