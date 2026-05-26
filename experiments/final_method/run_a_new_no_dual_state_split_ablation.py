@@ -24,6 +24,12 @@ from env.advantage_state_builder import (
     advantage_canvas_channels_for_schema,
     advantage_canvas_uses_frontier_raster,
 )
+from experiments.final_method.artifact_archiving import (
+    DEFAULT_CHECKPOINT_STORE_ROOT,
+    DEFAULT_RECORDS_ROOT,
+    archive_dry_run_payload,
+    archive_training_run,
+)
 
 
 DEFAULT_EXPERIMENT_ID = "Anew_E"
@@ -245,8 +251,17 @@ def dry_run_payload(
     command: list[str],
     train_args: list[str],
     runner_entrypoint: str,
+    records_root: Path,
+    checkpoint_store_root: Path,
+    copy_checkpoints: bool,
 ) -> dict[str, Any]:
     return {
+        **archive_dry_run_payload(
+            method_id=cfg.method_id,
+            records_root=records_root,
+            checkpoint_store_root=checkpoint_store_root,
+            copy_checkpoints=copy_checkpoints,
+        ),
         "dry_run": True,
         "method_family": "A_new_structural_ablation",
         "baseline_method": "A_new_final_4ch_no_frontier_raster",
@@ -330,6 +345,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--method-id", type=str, default=DEFAULT_METHOD_ID)
     parser.add_argument("--method-name", type=str, default=DEFAULT_METHOD_NAME)
     parser.add_argument("--run-name", type=str, default=None)
+    parser.add_argument("--records-root", type=Path, default=DEFAULT_RECORDS_ROOT)
+    parser.add_argument("--checkpoint-store-root", type=Path, default=DEFAULT_CHECKPOINT_STORE_ROOT)
+    parser.add_argument("--copy-checkpoints", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--advantage-canvas-schema",
         choices=ADVANTAGE_CANVAS_SCHEMAS,
@@ -375,6 +393,9 @@ def main(argv: list[str] | None = None) -> int:
                 command=command,
                 train_args=train_args,
                 runner_entrypoint=RUNNER_ENTRYPOINT,
+                records_root=args.records_root,
+                checkpoint_store_root=args.checkpoint_store_root,
+                copy_checkpoints=bool(args.copy_checkpoints),
             ),
             indent=2,
             ensure_ascii=False,
@@ -404,6 +425,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     _try_append_artifact_index(run_dir, manifest_path)
+    archive_record = archive_training_run(
+        run_dir=run_dir,
+        method_id=cfg.method_id,
+        method_name=cfg.method_name,
+        run_stage=args.run_stage,
+        records_root=args.records_root,
+        checkpoint_store_root=args.checkpoint_store_root,
+        copy_checkpoints=bool(args.copy_checkpoints),
+    )
+    print(f"archive_record_json: {archive_record['run_record_path']}")
+    print(f"checkpoint_store_path: {archive_record['checkpoint_store_path']}")
+    print(f"records_logs_dir: {archive_record['records_logs_dir']}")
     print(f"final_method_manifest_json: {manifest_path}")
     return 0
 

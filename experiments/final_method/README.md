@@ -24,19 +24,23 @@ The advantage branch no longer uses a frontier raster. Frontier and unknown-bloc
 semantics remain in the structured value-tree branch built from
 `SharedSemanticSnapshot`.
 
-## Candidate Formal Defaults
+## Frozen V1 Formal Defaults
 
-The current A_new formal defaults are aligned to the matched legacy A/F1
-training configuration for a controlled A_new rerun. This is a candidate formal
-configuration pending validation, not an optimal, best, or frozen formal
-setting.
+The current A_new formal defaults are frozen to the AN_tuned_v1 last.pt-oriented
+training contract. The formal experiment matrix should inherit these defaults
+without per-run hyperparameter overrides; final-probe evaluation is deferred to a
+later unified last.pt evaluation pass.
 
 - `reward_info_scale = 3.1`
 - `reward_obstacle_weight = 0.2`
 - `learner_updates_per_iter = 1`
 - `min_replay_size = 8000`
-- `epsilon_end = 0.04`
-- `epsilon_decay_steps = 240000`
+- `total_env_steps = 650000`
+- `epsilon_end = 0.03`
+- `epsilon_decay_steps = 300000`
+- `reward_revisit_penalty = 0.12`
+- `reward_turn_penalty_scale = 0.06`
+- `reward_timeout_penalty = 10.0`
 - `train_side_only_tuning = true`
 
 A_new still uses the final 4-channel no-frontier-raster schema; no legacy
@@ -59,7 +63,7 @@ them keeps the A_new final 4-channel schema and changes only the reward override
 - `Anew_R4`: `reward_timeout_penalty = 0.0`
 - `Anew_R5`: all four efficiency penalties above set to `0.0`
 
-Smoke is the default stage. Formal 500000-step training must be requested
+Smoke is the default stage. Formal 650000-step training must be requested
 explicitly.
 
 Dry-run A_new:
@@ -256,8 +260,8 @@ Default run order:
 
 The batch launcher follows the current A_new default training configuration at
 execution time. It does not hardcode final training parameter values. A_new
-parameters are still candidate / tuning; the formal configuration is not yet
-frozen. Once the A_new candidate is finalized, update `TrainConfig` or the
+parameters are frozen to the AN_tuned_v1 last.pt-oriented formal training
+contract. If the A_new candidate changes later, update `TrainConfig` or the
 relevant runner defaults, then launch this batch.
 
 The default batch does not run `A_new`, because A_new is tuned separately. It
@@ -265,6 +269,14 @@ also does not run `Anew_B_classical_frontier_greedy`; B can be run independently
 or included with `-IncludeB`, and the batch launches B as a CPU non-learning
 benchmark. `R_key` means `Anew_R5`; `-IncludeAllRewardAblations` expands the R
 command to `Anew_R1` through `Anew_R5` for full reward analysis.
+
+Successful C/D/E/F_key runs archive all top-level `logs/` files to
+`experiment_records/final_method/A_new_minimum_closure/<method_id>/logs/` and
+copy `checkpoints/last.pt` to
+`checkpoint_store/final_method/A_new_minimum_closure/<method_id>.pt`. R_key
+keeps the existing reward-ablation archive roots under
+`experiment_records/final_method/A_new_reward_ablations/` and
+`checkpoint_store/final_method/A_new_reward_ablations/`.
 
 Dry-run the formal plan:
 

@@ -32,6 +32,12 @@ from experiments.final_method.a_new_local_state_ddqn import (
     local_state_patch_size_from_scan_radius,
 )
 from agents.local_state_q_network import local_state_model_parameter_count
+from experiments.final_method.artifact_archiving import (
+    DEFAULT_CHECKPOINT_STORE_ROOT,
+    DEFAULT_RECORDS_ROOT,
+    archive_dry_run_payload,
+    archive_training_run,
+)
 
 
 RUNNER_ENTRYPOINT = "experiments/final_method/run_a_new_local_state_ddqn_baseline.py"
@@ -275,10 +281,19 @@ def dry_run_payload(
     command: list[str],
     train_args: list[str],
     runner_entrypoint: str,
+    records_root: Path,
+    checkpoint_store_root: Path,
+    copy_checkpoints: bool,
 ) -> dict[str, Any]:
     manifest = _baseline_manifest(cfg=cfg, runner_entrypoint=runner_entrypoint)
     return {
         **manifest,
+        **archive_dry_run_payload(
+            method_id=METHOD_ID,
+            records_root=records_root,
+            checkpoint_store_root=checkpoint_store_root,
+            copy_checkpoints=copy_checkpoints,
+        ),
         "dry_run": True,
         "method_family": "A_new_learning_baseline",
         "baseline_method": "A_new_final_4ch_no_frontier_raster",
@@ -364,6 +379,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--method-id", type=str, default=METHOD_ID)
     parser.add_argument("--method-name", type=str, default=METHOD_NAME)
     parser.add_argument("--run-name", type=str, default=None)
+    parser.add_argument("--records-root", type=Path, default=DEFAULT_RECORDS_ROOT)
+    parser.add_argument("--checkpoint-store-root", type=Path, default=DEFAULT_CHECKPOINT_STORE_ROOT)
+    parser.add_argument("--copy-checkpoints", action=argparse.BooleanOptionalAction, default=True)
     args, passthrough = parser.parse_known_args(argv)
     passthrough = _normalize_passthrough(passthrough)
 
@@ -398,6 +416,9 @@ def main(argv: list[str] | None = None) -> int:
                 command=command,
                 train_args=train_args,
                 runner_entrypoint=RUNNER_ENTRYPOINT,
+                records_root=args.records_root,
+                checkpoint_store_root=args.checkpoint_store_root,
+                copy_checkpoints=bool(args.copy_checkpoints),
             ),
             indent=2,
             ensure_ascii=False,
@@ -419,6 +440,18 @@ def main(argv: list[str] | None = None) -> int:
     manifest_path = run_dir / "logs" / "baseline_manifest.json"
     _write_json(manifest_path, _baseline_manifest(cfg=cfg, runner_entrypoint=RUNNER_ENTRYPOINT))
     _try_append_artifact_index(run_dir, manifest_path)
+    archive_record = archive_training_run(
+        run_dir=run_dir,
+        method_id=METHOD_ID,
+        method_name=METHOD_NAME,
+        run_stage=args.run_stage,
+        records_root=args.records_root,
+        checkpoint_store_root=args.checkpoint_store_root,
+        copy_checkpoints=bool(args.copy_checkpoints),
+    )
+    print(f"archive_record_json: {archive_record['run_record_path']}")
+    print(f"checkpoint_store_path: {archive_record['checkpoint_store_path']}")
+    print(f"records_logs_dir: {archive_record['records_logs_dir']}")
     print(f"baseline_manifest_json: {manifest_path}")
     return 0
 

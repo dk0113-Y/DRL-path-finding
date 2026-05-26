@@ -21,12 +21,12 @@ B is a CPU non-learning benchmark that can be run independently or with
 
 The batch launcher follows the current A_new default training configuration at
 execution time. It does not hardcode final training parameter values. Current
-A_new training parameters are still candidate / tuning; the formal
-configuration is not yet frozen.
+A_new training parameters are frozen to the AN_tuned_v1 last.pt-oriented formal
+training contract.
 
-After the A_new final candidate is determined, update the default `TrainConfig`
-or the relevant A_new runner defaults, then run this batch. Do not treat the
-current candidate values as optimal, best, or frozen formal configuration.
+If the A_new final candidate changes later, update the default `TrainConfig` or
+the relevant A_new runner defaults before running a new matrix. Final-probe
+evaluation is intentionally deferred to a later unified last.pt evaluation pass.
 
 ## Commands
 
@@ -56,6 +56,25 @@ powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch
 
 Use `-ContinueOnFailure` to continue later commands after a child failure. The
 default behavior is to stop at the first failure.
+
+## Artifact Archive
+
+The formal child runners write full raw run directories under `outputs/`. In
+addition, successful C/D/E/F_key runs copy all top-level `logs/` files to:
+
+```text
+experiment_records/final_method/A_new_minimum_closure/<method_id>/logs/
+```
+
+They also copy `checkpoints/last.pt` to:
+
+```text
+checkpoint_store/final_method/A_new_minimum_closure/<method_id>.pt
+```
+
+R_key keeps its existing reward-ablation archive paths:
+`experiment_records/final_method/A_new_reward_ablations/<method_id>/logs/` and
+`checkpoint_store/final_method/A_new_reward_ablations/<method_id>.pt`.
 
 ## Evidence Boundary
 

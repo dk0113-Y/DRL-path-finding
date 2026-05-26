@@ -40,8 +40,12 @@ current A_new matched default training parameters:
 - `reward_obstacle_weight = 0.2`
 - `learner_updates_per_iter = 1`
 - `min_replay_size = 8000`
-- `epsilon_end = 0.04`
-- `epsilon_decay_steps = 240000`
+- `total_env_steps = 650000`
+- `epsilon_end = 0.03`
+- `epsilon_decay_steps = 300000`
+- `reward_revisit_penalty = 0.12`
+- `reward_turn_penalty_scale = 0.06`
+- `reward_timeout_penalty = 10.0`
 - `train_side_only_tuning = true`
 
 Smoke and pilot runs are local checks only and are not paper Results evidence.

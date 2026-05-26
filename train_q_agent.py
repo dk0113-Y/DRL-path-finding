@@ -106,7 +106,7 @@ class TrainConfig:
     max_entries_per_block: int = 8
 
     budget_mode: str = "env_steps"
-    total_env_steps: int = 500_000
+    total_env_steps: int = 650_000
     total_train_episodes: int = 600
     warmup_steps: int = 4_000
     warmup_episodes: int = 0
@@ -152,8 +152,8 @@ class TrainConfig:
     target_update_interval: int = 1_000
 
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.04
-    epsilon_decay_steps: int = 240_000
+    epsilon_end: float = 0.03
+    epsilon_decay_steps: int = 300_000
 
     max_episode_steps: int = 600  # tune with map scale as needed
     coverage_stop_threshold: float = 0.95
@@ -162,14 +162,14 @@ class TrainConfig:
     reward_obstacle_weight: float = 0.20
     reward_step_penalty: float = 0.02
     reward_terminal_bonus: float = 20.0
-    # Candidate formal defaults align A_new training/reward settings to the matched legacy A/F1 contract.
-    reward_revisit_penalty: float = 0.10
-    reward_turn_penalty_scale: float = 0.05  # total turn penalty scale; angle-specific weights are configured below.
+    # Formal defaults are pinned to the AN_tuned_v1 last.pt-oriented training contract.
+    reward_revisit_penalty: float = 0.12
+    reward_turn_penalty_scale: float = 0.06  # total turn penalty scale; angle-specific weights are configured below.
     reward_turn_weight_45: float = 0.0
     reward_turn_weight_90: float = 1.0 / 3.0
     reward_turn_weight_135: float = 2.0 / 3.0
     reward_turn_weight_180: float = 1.0
-    reward_timeout_penalty: float = 8.0
+    reward_timeout_penalty: float = 10.0
 
     ablation_group: str = "none"
     ablation_id: str = "none"
@@ -2271,7 +2271,7 @@ def parse_args() -> TrainConfig:
     )
 
     p.add_argument("--budget-mode", type=str, choices=("env_steps", "episodes"), default="env_steps")
-    p.add_argument("--total-env-steps", type=int, default=500_000)
+    p.add_argument("--total-env-steps", type=int, default=650_000)
     p.add_argument("--total-train-episodes", type=int, default=600)
     p.add_argument("--warmup-steps", type=int, default=4_000)
     p.add_argument("--warmup-episodes", type=int, default=0)
@@ -2289,8 +2289,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--grad-clip-norm", type=float, default=10.0)
 
     p.add_argument("--epsilon-start", type=float, default=1.0)
-    p.add_argument("--epsilon-end", type=float, default=0.04)
-    p.add_argument("--epsilon-decay-steps", type=int, default=240_000)
+    p.add_argument("--epsilon-end", type=float, default=0.03)
+    p.add_argument("--epsilon-decay-steps", type=int, default=300_000)
 
     p.add_argument("--recent-episode-window", type=int, default=100)
     p.add_argument(
@@ -2406,20 +2406,20 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--reward-revisit-penalty",
         type=float,
-        default=0.10,
+        default=0.12,
         help="recent revisit penalty; its horizon is fixed to trajectory_history_steps",
     )
     p.add_argument(
         "--reward-turn-penalty-scale",
         type=float,
-        default=0.05,
+        default=0.06,
         help="overall turn penalty scale; the final per-step penalty is this scale times the explicit angle weight",
     )
     p.add_argument("--reward-turn-weight-45", type=float, default=0.0, help="turn-penalty weight for 45-degree turns")
     p.add_argument("--reward-turn-weight-90", type=float, default=(1.0 / 3.0), help="turn-penalty weight for 90-degree turns")
     p.add_argument("--reward-turn-weight-135", type=float, default=(2.0 / 3.0), help="turn-penalty weight for 135-degree turns")
     p.add_argument("--reward-turn-weight-180", type=float, default=1.0, help="turn-penalty weight for 180-degree turns")
-    p.add_argument("--reward-timeout-penalty", type=float, default=8.0, help="timeout penalty")
+    p.add_argument("--reward-timeout-penalty", type=float, default=10.0, help="timeout penalty")
     p.add_argument("--special-highcov-timeout-min-coverage", type=float, default=0.85)
     p.add_argument("--special-highcov-timeout-max-plots", type=int, default=5)
     p.add_argument("--special-long-success-gate-coverage", type=float, default=0.80)
@@ -2872,7 +2872,7 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         max_accessible_blocks=16,
         max_entries_per_block=8,
         budget_mode="env_steps",
-        total_env_steps=500_000,
+        total_env_steps=650_000,
         total_train_episodes=600,
         warmup_steps=4_000,
         warmup_episodes=0,
@@ -2888,8 +2888,8 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         target_update_interval=1_000,
         grad_clip_norm=10.0,
         epsilon_start=1.0,
-        epsilon_end=0.04,
-        epsilon_decay_steps=240_000,
+        epsilon_end=0.03,
+        epsilon_decay_steps=300_000,
         recent_episode_window=100,
         formal_protocol=POSTHOC_PROTOCOL_NAME,
         train_side_only_tuning=True,
@@ -2920,13 +2920,13 @@ def _build_vscode_preset(*, enable_profiling: bool) -> TrainConfig:
         reward_obstacle_weight=0.20,
         reward_step_penalty=0.02,
         reward_terminal_bonus=20.0,
-        reward_revisit_penalty=0.10,
-        reward_turn_penalty_scale=0.05,
+        reward_revisit_penalty=0.12,
+        reward_turn_penalty_scale=0.06,
         reward_turn_weight_45=0.0,
         reward_turn_weight_90=(1.0 / 3.0),
         reward_turn_weight_135=(2.0 / 3.0),
         reward_turn_weight_180=1.0,
-        reward_timeout_penalty=8.0,
+        reward_timeout_penalty=10.0,
         special_highcov_timeout_min_coverage=0.85,
         special_highcov_timeout_max_plots=5,
         special_long_success_gate_coverage=0.80,
