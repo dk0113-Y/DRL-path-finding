@@ -1509,6 +1509,15 @@ def build_config_snapshot(
             "run_stage": config_dict.get("run_stage"),
             "value_replacement_strategy": config_dict.get("value_replacement_strategy"),
             "value_tree_enabled": config_dict.get("value_tree_enabled"),
+            "dual_state_split": {
+                "enabled": bool(config_dict.get("dual_state_split_enabled", True)),
+                "explicit_advantage_value_split": bool(config_dict.get("explicit_advantage_value_split", True)),
+                "semantic_dueling_head_used": bool(config_dict.get("semantic_dueling_head_used", True)),
+                "no_semantic_dueling_head": bool(config_dict.get("no_semantic_dueling_head", False)),
+                "value_tree_information_used": bool(config_dict.get("value_tree_information_used", True)),
+                "value_tree_branch_separate": bool(config_dict.get("value_tree_branch_separate", True)),
+                "value_tree_summary_injected": bool(config_dict.get("value_tree_summary_injected", False)),
+            },
             "learning_baseline": {
                 "applied": bool(config_dict.get("baseline_id") and config_dict.get("baseline_id") != "none"),
                 "id": config_dict.get("baseline_id"),

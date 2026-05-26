@@ -199,6 +199,13 @@ class TrainConfig:
     behavior_memory_channels_used: bool = True
     checkpoint_source: str = "trained_from_scratch"
     no_shared_semantic_dual_state: bool = False
+    dual_state_split_enabled: bool = True
+    explicit_advantage_value_split: bool = True
+    semantic_dueling_head_used: bool = True
+    no_semantic_dueling_head: bool = False
+    value_tree_information_used: bool = True
+    value_tree_branch_separate: bool = True
+    value_tree_summary_injected: bool = False
     no_value_tree: bool = False
     no_frontier_cluster_input: bool = False
     no_accessible_unknown_block_input: bool = False
