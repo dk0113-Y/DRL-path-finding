@@ -20,11 +20,12 @@ frontier-block value tree。
 - `value_branch_representation = structured_frontier_block_value_tree`
 - `model_class = ExplorationQNetwork`
 
-## Formal Defaults
+## Candidate Formal Defaults
 
 A_new formal defaults are aligned to the matched legacy A/F1 training
 configuration for a controlled A_new rerun. This is a candidate formal
-configuration pending validation, not an optimal or proven setting.
+configuration pending validation, not an optimal, best, or frozen formal
+setting.
 
 - `reward_info_scale = 3.1`
 - `reward_obstacle_weight = 0.2`
@@ -283,6 +284,42 @@ Anew_F3 formal train-side-only:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda
 ```
+
+## A_new Minimum-Closure Batch
+
+`scripts/run_a_new_minimum_closure_batch.ps1` is a batch orchestration launcher
+for starting the staged minimum-closure train-side experiments after the final
+A_new candidate training configuration has been reviewed and frozen.
+
+Default formal run set:
+
+- `Anew_C_local_state_ddqn`
+- `Anew_D_no_value_tree`
+- `Anew_E_no_dual_state_split`
+- `Anew_F3_no_behavior_memory` as `F_key`
+- `Anew_R5` as `R_key` / `no_efficiency_penalties`
+
+The batch follows the current A_new default training configuration at execution
+time and does not hardcode final training parameter values. A_new parameters are
+still candidate / tuning; the formal configuration is not yet frozen. After the
+A_new final candidate is determined, update the default `TrainConfig` or the
+relevant A_new runner defaults, then run the batch.
+
+The default run set does not include `A_new`, because A_new is tuned separately.
+It also does not include `Anew_B_classical_frontier_greedy`; B is an optional CPU
+non-learning benchmark available with `-IncludeB` or as a separate run. Use
+`-IncludeAllRewardAblations` only when running the full R1-R5 reward-analysis
+enhancement.
+
+Minimum-closure dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Smoke and pilot runs are local checks only, not paper Results. Formal
+train-side-only outputs require artifact audit before being written into
+paper_work, and they do not automatically replace unrun final-probe evidence.
 
 ## Repository Hygiene
 

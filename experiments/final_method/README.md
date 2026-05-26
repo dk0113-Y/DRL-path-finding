@@ -24,11 +24,12 @@ The advantage branch no longer uses a frontier raster. Frontier and unknown-bloc
 semantics remain in the structured value-tree branch built from
 `SharedSemanticSnapshot`.
 
-## Formal Defaults
+## Candidate Formal Defaults
 
 The current A_new formal defaults are aligned to the matched legacy A/F1
 training configuration for a controlled A_new rerun. This is a candidate formal
-configuration pending validation, not an optimal or proven setting.
+configuration pending validation, not an optimal, best, or frozen formal
+setting.
 
 - `reward_info_scale = 3.1`
 - `reward_obstacle_weight = 0.2`
@@ -237,3 +238,42 @@ Formal train-side-only F_key:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda
 ```
+
+## A_new Minimum-Closure Batch
+
+`run_a_new_minimum_closure_batch.py` and
+`scripts/run_a_new_minimum_closure_batch.ps1` provide a one-command batch for
+the staged minimum-closure train-side runs after the A_new final candidate is
+reviewed and frozen.
+
+Default run order:
+
+1. `Anew_C_local_state_ddqn`
+2. `Anew_D_no_value_tree`
+3. `Anew_E_no_dual_state_split`
+4. `Anew_F3_no_behavior_memory` as `F_key`
+5. `Anew_R5` as `R_key` / `no_efficiency_penalties`
+
+The batch launcher follows the current A_new default training configuration at
+execution time. It does not hardcode final training parameter values. A_new
+parameters are still candidate / tuning; the formal configuration is not yet
+frozen. Once the A_new candidate is finalized, update `TrainConfig` or the
+relevant runner defaults, then launch this batch.
+
+The default batch does not run `A_new`, because A_new is tuned separately. It
+also does not run `Anew_B_classical_frontier_greedy`; B can be run independently
+or included with `-IncludeB`, and the batch launches B as a CPU non-learning
+benchmark. `R_key` means `Anew_R5`; `-IncludeAllRewardAblations` expands the R
+command to `Anew_R1` through `Anew_R5` for full reward analysis.
+
+Dry-run the formal plan:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Smoke and pilot stages are local checks only, not paper Results. Formal
+train-side-only outputs can support contract-aligned comparisons only after
+artifact audit, and they do not automatically replace unrun final-probe
+evidence. Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, or
+checkpoint files.

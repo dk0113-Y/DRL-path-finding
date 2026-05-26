@@ -47,6 +47,18 @@ must not be written as a separate formal row, run name, or artifact row. Smoke
 and pilot outputs are not Results evidence and should not be written here as
 formal records.
 
+`A_new_minimum_closure_batch` is orchestration only. Its default train-side run
+set is `Anew_C_local_state_ddqn`, `Anew_D_no_value_tree`,
+`Anew_E_no_dual_state_split`, `Anew_F3_no_behavior_memory`, and `Anew_R5` as
+`R_key`. It does not run `A_new` by default because A_new is tuned separately,
+and it does not run `Anew_B_classical_frontier_greedy` unless B is explicitly
+included as an optional CPU benchmark. The batch follows the current A_new
+default training configuration at execution time and does not hardcode final
+training parameter values; A_new parameters remain candidate / tuning until the
+formal configuration is reviewed and frozen. Formal train-side-only artifacts
+from the batch can be recorded only after artifact audit, and they do not
+automatically replace unrun final-probe evidence.
+
 Legacy A/F1/F6/F7/ABCDEFR records, older full-method reference records, baseline
 records, and final-probe matrices were archived before cleanup at:
 

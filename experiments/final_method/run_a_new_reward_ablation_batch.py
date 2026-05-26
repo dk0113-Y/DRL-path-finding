@@ -140,6 +140,7 @@ def _build_command(
     run_stage: str,
     device: str,
     output_root: str,
+    passthrough: list[str] | None = None,
 ) -> list[str]:
     return [
         sys.executable,
@@ -161,6 +162,7 @@ def _build_command(
         "--advantage-canvas-schema",
         ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER,
         "--",
+        *(passthrough or []),
         *_reward_override_args(spec.reward_override),
     ]
 
@@ -224,6 +226,7 @@ def _print_dry_run(
             run_stage=args.run_stage,
             device=args.device,
             output_root=args.output_root,
+            passthrough=getattr(args, "passthrough", []),
         )
         print(f"[A_new_R:dry-run] {spec.method_id}/{spec.name}")
         print(f"  command: {_command_text(command)}")
@@ -372,7 +375,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint-store-root", type=Path, default=DEFAULT_CHECKPOINT_STORE_ROOT)
     parser.add_argument("--copy-checkpoints", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--stop-on-failure", action=argparse.BooleanOptionalAction, default=True)
-    args = parser.parse_args(argv)
+    args, passthrough = parser.parse_known_args(argv)
+    args.passthrough = passthrough[1:] if passthrough and passthrough[0] == "--" else passthrough
 
     specs = _normalize_specs(args.reward_ablation_ids)
 
@@ -388,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
             run_stage=args.run_stage,
             device=args.device,
             output_root=args.output_root,
+            passthrough=args.passthrough,
         )
         print(f"[A_new_R] command: {_command_text(command)}")
         try:
