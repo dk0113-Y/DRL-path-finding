@@ -20,19 +20,21 @@ frontier-block value tree。
 - `value_branch_representation = structured_frontier_block_value_tree`
 - `model_class = ExplorationQNetwork`
 
-## Candidate Formal Defaults
+## Frozen V1 Formal Defaults
 
-A_new formal defaults are aligned to the matched legacy A/F1 training
-configuration for a controlled A_new rerun. This is a candidate formal
-configuration pending validation, not an optimal, best, or frozen formal
-setting.
+A_new formal defaults are frozen to the AN_tuned_v1 last.pt-oriented training
+contract used by the current final experiment records and unified final probe.
 
 - `reward_info_scale = 3.1`
 - `reward_obstacle_weight = 0.2`
 - `learner_updates_per_iter = 1`
 - `min_replay_size = 8000`
-- `epsilon_end = 0.04`
-- `epsilon_decay_steps = 240000`
+- `total_env_steps = 650000`
+- `epsilon_end = 0.03`
+- `epsilon_decay_steps = 300000`
+- `reward_revisit_penalty = 0.12`
+- `reward_turn_penalty_scale = 0.06`
+- `reward_timeout_penalty = 10.0`
 - `train_side_only_tuning = true`
 
 The method contract remains A_new: final 4-channel no-frontier-raster advantage
@@ -43,9 +45,8 @@ Advantage canvas 不再包含 frontier raster。frontier、unknown block 和 fro
 cluster 语义仍保留在 shared semantic layer 与 value tree 中，用于 value branch。
 
 旧 A/F1/F6/F7/ABCDEFR 实验入口、旧 frontier-raster diagnostics 和旧结果记录已从
-active main 移除，并在清理前归档到：
+active `main` 移除。远端仓库只维护 `main` 分支；历史清理状态保留为 tag：
 
-- branch: `legacy/pre-a-new-cleanup`
 - tag: `legacy-pre-a-new-cleanup-20260525`
 
 ## 代码结构
@@ -110,19 +111,21 @@ frontier greedy baseline. It is a traditional non-learning baseline: it does
 not train a model, does not load a checkpoint, and does not use
 `ExplorationQNetwork`.
 
-The policy uses only belief-derived frontier/shared-semantic state, the current
-pose, and valid action indices. It selects the lowest-BFS-cost reachable
-frontier target over known-free belief cells, then takes a valid action toward
-that target. If no reachable frontier exists, it falls back to deterministic
-immediate information-gain over currently unknown belief cells, then to the
-first valid action in `ACTIONS_8` order.
+The policy restores the legacy `classical_frontier_greedy_v1` decision logic
+from `DRL_PF` while running inside the current A_new environment and metric
+contract. It uses only belief-derived frontier/shared-semantic state, current
+pose, valid actions, visit counts, recent trajectory, and frontier cache. BFS is
+used only to choose the reachable frontier target; the next action follows the
+legacy squared-Euclidean-distance, recent-revisit, visit-count, fixed-action
+tie-break. If no reachable frontier exists, it falls back to belief-only radar
+line-of-sight immediate information gain.
 
 The runner keeps the current A_new environment, reward, seed, and metric
-contract, including the default reward parameters. It does not restore legacy B
-artifacts, does not inherit the old baseline framework, and does not restore
-`baselines/` or `experiments/ablations/`. Simulator internals may use the map for
-stepping, sensing, termination, and metrics, but the policy decision path does
-not receive the full map.
+contract, including the default reward parameters. It restores legacy B policy
+logic only; it does not restore legacy B artifacts, old checkpoint flows,
+`baselines/`, or `experiments/ablations/`. Simulator internals may use the map
+for stepping, sensing, termination, and metrics, but the policy decision path
+does not receive the full map.
 
 Smoke and pilot runs are local checks only, not paper Results. A B formal
 benchmark can support a classical baseline comparison after artifact review, but
@@ -213,8 +216,9 @@ This row does not restore the legacy 5-channel advantage canvas, does not
 restore `frontier_block_area_map`, and does not inherit any legacy D artifacts.
 It uses the current A_new matched default training parameters. Smoke and pilot
 runs are local checks only, not paper Results. Formal train-side-only outputs can
-be compared to the current A_new train-side contract, but they do not replace
-unrun final-probe evidence.
+be compared to the current A_new train-side contract. Paper-facing held-out
+comparison is recorded by the unified final probe under
+`experiment_records/final_method/unified_final_probe/`.
 
 Anew_D dry-run:
 
@@ -264,8 +268,9 @@ training parameters and does not change reward defaults.
 
 Smoke and pilot runs are local checks only, not paper Results. Formal
 train-side-only outputs can be used for contract-aligned comparison against the
-current A_new train-side-only runs, but they do not automatically substitute for
-unrun final-probe evidence.
+current A_new train-side-only runs. Paper-facing held-out comparison is recorded
+by the unified final probe under
+`experiment_records/final_method/unified_final_probe/`.
 
 Anew_F3 dry-run:
 
@@ -288,8 +293,8 @@ powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ab
 ## A_new Minimum-Closure Batch
 
 `scripts/run_a_new_minimum_closure_batch.ps1` is a batch orchestration launcher
-for starting the staged minimum-closure train-side experiments after the final
-A_new candidate training configuration has been reviewed and frozen.
+for the staged minimum-closure train-side experiments under the frozen V1 formal
+defaults.
 
 Default formal run set:
 
@@ -300,10 +305,8 @@ Default formal run set:
 - `Anew_R5` as `R_key` / `no_efficiency_penalties`
 
 The batch follows the current A_new default training configuration at execution
-time and does not hardcode final training parameter values. A_new parameters are
-still candidate / tuning; the formal configuration is not yet frozen. After the
-A_new final candidate is determined, update the default `TrainConfig` or the
-relevant A_new runner defaults, then run the batch.
+time and does not hardcode final training parameter values. The current records
+use the frozen V1 formal defaults above.
 
 The default run set does not include `A_new`, because A_new is tuned separately.
 It also does not include `Anew_B_classical_frontier_greedy`; B is an optional CPU
@@ -317,9 +320,9 @@ Minimum-closure dry-run:
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch.ps1 -RunStage formal -Device cuda -DryRun
 ```
 
-Smoke and pilot runs are local checks only, not paper Results. Formal
-train-side-only outputs require artifact audit before being written into
-paper_work, and they do not automatically replace unrun final-probe evidence.
+Smoke and pilot runs are local checks only, not paper Results. Paper-facing
+held-out comparison is provided by the unified final probe records under
+`experiment_records/final_method/unified_final_probe/`.
 
 ## Repository Hygiene
 

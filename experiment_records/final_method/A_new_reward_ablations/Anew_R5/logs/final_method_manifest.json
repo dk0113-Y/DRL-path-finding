@@ -1,0 +1,31 @@
+{
+  "schema_version": "final_method_manifest/v1",
+  "method_id": "Anew_R5",
+  "method_name": "no_efficiency_penalties",
+  "experiment_id": "Anew_R5",
+  "run_name": "Anew_R5_no_efficiency_penalties_formal",
+  "run_stage": "formal",
+  "advantage_canvas_schema": "final_4ch_no_frontier_raster",
+  "advantage_canvas_channels": [
+    "free",
+    "obstacle",
+    "visit_count_log_norm",
+    "recent_trajectory_decay"
+  ],
+  "advantage_canvas_channel_count": 4,
+  "frontier_raster_used": false,
+  "value_tree_enabled": true,
+  "value_tree_unchanged": true,
+  "value_branch_source": "SharedSemanticSnapshot",
+  "value_branch_representation": "structured_frontier_block_value_tree",
+  "model_class": "ExplorationQNetwork",
+  "advantage_encoder.canvas_in_channels": 4,
+  "reward_override": {},
+  "source_entrypoint": "train_q_agent.py",
+  "runner_entrypoint": "experiments/final_method/run_a_new_final_method.py",
+  "notes": [
+    "A_new uses a four-channel advantage canvas with no frontier raster.",
+    "The structured frontier-block value tree remains enabled and unchanged.",
+    "Legacy frontier-raster diagnostics are archived outside active main."
+  ]
+}

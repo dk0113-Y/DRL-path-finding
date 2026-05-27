@@ -27,9 +27,10 @@ semantics remain in the structured value-tree branch built from
 ## Frozen V1 Formal Defaults
 
 The current A_new formal defaults are frozen to the AN_tuned_v1 last.pt-oriented
-training contract. The formal experiment matrix should inherit these defaults
-without per-run hyperparameter overrides; final-probe evaluation is deferred to a
-later unified last.pt evaluation pass.
+training contract. The formal experiment matrix inherits these defaults without
+per-run hyperparameter overrides. Paper-facing held-out comparison is recorded
+by the unified final probe under
+`experiment_records/final_method/unified_final_probe/`.
 
 - `reward_info_scale = 3.1`
 - `reward_obstacle_weight = 0.2`
@@ -47,9 +48,9 @@ A_new still uses the final 4-channel no-frontier-raster schema; no legacy
 5-channel frontier raster or F1 compatibility experiment is restored.
 
 Legacy A/F1/F6/F7/ABCDEFR experiment entries and records were removed from active
-main and archived before cleanup at:
+`main`. The remote repository is intended to maintain `main` as the only branch;
+the historical cleanup state is preserved by tag only:
 
-- branch: `legacy/pre-a-new-cleanup`
 - tag: `legacy-pre-a-new-cleanup-20260525`
 
 ## Reward Ablations
@@ -88,23 +89,26 @@ powershell -ExecutionPolicy Bypass -File scripts\run_a_new_reward_ablations.ps1 
 
 `Anew_B_classical_frontier_greedy` is the A_new-aligned classical frontier greedy
 baseline for the B group. It is a traditional non-learning policy and does not
-train a neural model, load a checkpoint, use `ExplorationQNetwork`, restore
-legacy B artifacts, or inherit the old baseline framework.
+train a neural model, load a checkpoint, or use `ExplorationQNetwork`.
 
-The policy decision path uses only belief-derived frontier geometry,
-`SharedSemanticSnapshot` candidates, the current pose, and valid action indices.
-It selects the reachable frontier target with minimum BFS cost over known-free
-belief cells and takes one valid action toward that target. If no reachable
-frontier exists, it chooses the valid next action with the largest immediate
-unknown-belief footprint; remaining ties use the repository `ACTIONS_8` order:
-N, NE, E, SE, S, SW, W, NW.
+The policy restores the legacy `classical_frontier_greedy_v1` decision logic
+from `DRL_PF` while running inside the current A_new environment and metric
+contract. The decision path uses only belief-derived frontier geometry,
+`SharedSemanticSnapshot` candidates, current pose, valid action indices,
+frontier cache, visit counts, and recent trajectory. BFS is used only to select
+the reachable frontier target; the next action follows the legacy
+squared-Euclidean-distance, recent-revisit, visit-count, fixed-action tie-break.
+If no reachable frontier exists, it chooses the valid next action with the
+largest belief-only radar line-of-sight immediate information gain.
 
 The runner uses the current A_new environment, reward, seed, and metric
-contract. Simulator-side map access is limited to environment stepping, sensor
-updates, termination, and metric computation; the policy is not given the full
-map. Smoke and pilot runs are not Results. Formal B benchmark artifacts can
-support a classical baseline comparison after artifact review, but B cannot
-replace D/F/R internal ablations or neural representation evidence.
+contract. It restores legacy B policy logic only; it does not restore legacy B
+artifacts, old checkpoint flows, `baselines/`, or `experiments/ablations/`.
+Simulator-side map access is limited to environment stepping, sensor updates,
+termination, and metric computation; the policy is not given the full map. Smoke
+and pilot runs are not Results. Formal B benchmark artifacts support the
+classical baseline comparison, but B cannot replace D/F/R internal ablations or
+neural representation evidence.
 
 Dry-run B:
 
@@ -185,8 +189,8 @@ It does not restore legacy 5-channel inputs, does not restore
 `frontier_block_area_map`, and does not inherit legacy D artifacts. It also keeps
 the current matched A_new default training parameters and uses `reward_override =
 {}`. Smoke and pilot runs are not Results. Formal train-side-only outputs can be
-used for contract-aligned comparison against A_new train-side-only runs, but they
-do not automatically substitute for unrun final probe evidence.
+used for contract-aligned comparison against A_new train-side-only runs.
+Paper-facing held-out comparison is recorded by the unified final probe.
 
 Dry-run D:
 
@@ -223,7 +227,8 @@ artifacts.
 
 Smoke and pilot runs are local checks only, not Results. Formal train-side-only
 outputs can be compared to current A_new train-side-only runs under the same
-contract, but they do not automatically replace unrun final-probe evidence.
+contract. Paper-facing held-out comparison is recorded by the unified final
+probe.
 
 Dry-run F_key:
 
@@ -247,8 +252,8 @@ powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ab
 
 `run_a_new_minimum_closure_batch.py` and
 `scripts/run_a_new_minimum_closure_batch.ps1` provide a one-command batch for
-the staged minimum-closure train-side runs after the A_new final candidate is
-reviewed and frozen.
+the staged minimum-closure train-side runs under the frozen A_new formal
+defaults.
 
 Default run order:
 
@@ -261,8 +266,7 @@ Default run order:
 The batch launcher follows the current A_new default training configuration at
 execution time. It does not hardcode final training parameter values. A_new
 parameters are frozen to the AN_tuned_v1 last.pt-oriented formal training
-contract. If the A_new candidate changes later, update `TrainConfig` or the
-relevant runner defaults, then launch this batch.
+contract.
 
 The default batch does not run `A_new`, because A_new is tuned separately. It
 also does not run `Anew_B_classical_frontier_greedy`; B can be run independently
@@ -276,7 +280,8 @@ copy `checkpoints/last.pt` to
 `checkpoint_store/final_method/A_new_minimum_closure/<method_id>.pt`. R_key
 keeps the existing reward-ablation archive roots under
 `experiment_records/final_method/A_new_reward_ablations/` and
-`checkpoint_store/final_method/A_new_reward_ablations/`.
+`checkpoint_store/final_method/A_new_reward_ablations/`, including the audited
+formal training CSVs and benchmark manifest files.
 
 Dry-run the formal plan:
 
@@ -304,7 +309,7 @@ Outputs are written under
 `unified_final_probe_summary.csv` / `.json`.
 
 Smoke and pilot stages are local checks only, not paper Results. Formal
-train-side-only outputs can support contract-aligned comparisons only after
-artifact audit, and they do not automatically replace unrun final-probe
-evidence. Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, or
-checkpoint files.
+train-side-only outputs can support contract-aligned comparisons after artifact
+audit. Paper-facing held-out comparison is recorded by the unified final probe.
+Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, or checkpoint
+files.
