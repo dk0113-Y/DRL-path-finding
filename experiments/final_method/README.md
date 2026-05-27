@@ -284,6 +284,25 @@ Dry-run the formal plan:
 powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch.ps1 -RunStage formal -Device cuda -DryRun
 ```
 
+## Unified Final Probe
+
+After the `last.pt` checkpoints are available, run the unified held-out final
+probe with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_unified_final_probe.ps1 -Device cuda
+```
+
+The runner evaluates B first with `ClassicalFrontierGreedyPolicy`, then evaluates
+`A`, `C`, `D`, `E`, `F_key`, and `R_key` from checkpoint-store `last.pt` files.
+All methods use the same fixed final-probe seed block. The default is 100
+episodes with `seed_base = 20261323`.
+
+Outputs are written under
+`experiment_records/final_method/unified_final_probe/<run_id>/`, including one
+`final_probe.csv` per method and a global
+`unified_final_probe_summary.csv` / `.json`.
+
 Smoke and pilot stages are local checks only, not paper Results. Formal
 train-side-only outputs can support contract-aligned comparisons only after
 artifact audit, and they do not automatically replace unrun final-probe

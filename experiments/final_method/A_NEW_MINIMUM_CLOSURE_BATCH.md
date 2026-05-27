@@ -76,6 +76,20 @@ R_key keeps its existing reward-ablation archive paths:
 `experiment_records/final_method/A_new_reward_ablations/<method_id>/logs/` and
 `checkpoint_store/final_method/A_new_reward_ablations/<method_id>.pt`.
 
+## Unified Final Probe
+
+Run the unified held-out final probe after all required `last.pt` files are in
+`checkpoint_store`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_unified_final_probe.ps1 -Device cuda
+```
+
+The probe order is `B -> A -> C -> D -> E -> F_key -> R_key`. B uses the
+non-learning classical frontier policy directly; the other methods load their
+checkpoint-store `last.pt` files. The default probe uses 100 episodes and the
+fixed final-probe seed block starting at `20261323` for every method.
+
 ## Evidence Boundary
 
 Smoke and pilot runs are local checks only, not paper Results. Formal
