@@ -1,0 +1,138 @@
+{
+  "schema_version": "formal_train_artifacts/v4",
+  "artifact_type": "artifact_index",
+  "experiment_mode": "formal_train",
+  "run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\outputs\\Anew_D_no_value_tree_formal_20260526_175231",
+  "generated_at": "2026-05-26T20:56:52+08:00",
+  "csv": [
+    {
+      "path": "logs/train_steps.csv",
+      "exists": true,
+      "required": true,
+      "category": "csv"
+    },
+    {
+      "path": "logs/train_episodes.csv",
+      "exists": true,
+      "required": true,
+      "category": "csv"
+    },
+    {
+      "path": "logs/model_select_eval.csv",
+      "exists": false,
+      "required": false,
+      "category": "legacy_model_selection_csv"
+    },
+    {
+      "path": "logs/best_recheck_eval.csv",
+      "exists": false,
+      "required": false,
+      "category": "legacy_model_selection_csv"
+    },
+    {
+      "path": "logs/posthoc_candidate_scores.csv",
+      "exists": false,
+      "required": false,
+      "category": "posthoc_selection_csv"
+    },
+    {
+      "path": "logs/final_probe.csv",
+      "exists": false,
+      "required": false,
+      "category": "csv"
+    },
+    {
+      "path": "logs/eval_metrics.csv",
+      "exists": false,
+      "required": false,
+      "category": "legacy_diagnostic_csv"
+    }
+  ],
+  "checkpoints": [
+    {
+      "path": "checkpoints/best.pt",
+      "exists": false,
+      "required": false,
+      "category": "formal_primary_checkpoint"
+    },
+    {
+      "path": "checkpoints/last.pt",
+      "exists": true,
+      "required": true,
+      "category": "diagnostic_endpoint_checkpoint"
+    }
+  ],
+  "structured_summaries": [
+    {
+      "path": "logs/metric_snapshot.json",
+      "exists": true,
+      "required": true,
+      "category": "structured_summary"
+    },
+    {
+      "path": "logs/benchmark_summary.json",
+      "exists": true,
+      "required": true,
+      "category": "structured_summary"
+    },
+    {
+      "path": "logs/config_snapshot.json",
+      "exists": true,
+      "required": true,
+      "category": "structured_summary"
+    },
+    {
+      "path": "logs/reproducibility_contract.json",
+      "exists": true,
+      "required": true,
+      "category": "structured_summary"
+    },
+    {
+      "path": "logs/artifact_index.json",
+      "exists": true,
+      "required": true,
+      "category": "structured_summary"
+    },
+    {
+      "path": "logs/posthoc_selection_summary.json",
+      "exists": false,
+      "required": false,
+      "category": "posthoc_selection_summary"
+    },
+    {
+      "path": "logs/final_probe_summary.json",
+      "exists": false,
+      "required": false,
+      "category": "posthoc_final_summary"
+    },
+    {
+      "path": "logs/best_vs_last_gap_summary.json",
+      "exists": false,
+      "required": false,
+      "category": "posthoc_final_summary"
+    },
+    {
+      "path": "logs/formal_selection_manifest.json",
+      "exists": false,
+      "required": false,
+      "category": "posthoc_manifest"
+    }
+  ],
+  "stdout_summaries": [
+    {
+      "path": "logs/training_summary.txt",
+      "exists": true,
+      "required": false,
+      "category": "stdout_summary"
+    }
+  ],
+  "plots": [],
+  "trajectories": [],
+  "final_method_artifacts": [
+    {
+      "path": "logs/final_method_manifest.json",
+      "required": true,
+      "category": "a_new_no_value_tree_ablation_manifest"
+    }
+  ]
+}

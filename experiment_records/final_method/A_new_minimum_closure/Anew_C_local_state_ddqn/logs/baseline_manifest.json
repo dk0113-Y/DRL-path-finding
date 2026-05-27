@@ -1,0 +1,111 @@
+{
+  "schema_version": "a_new_local_state_ddqn_baseline_manifest/v1",
+  "experiment_id": "Anew_C",
+  "method_id": "Anew_C_local_state_ddqn",
+  "method_name": "local_state_ddqn",
+  "baseline_id": "Anew_C_local_state_ddqn",
+  "baseline_group": "learning",
+  "baseline_name": "local_state_ddqn",
+  "baseline_type": "learning_ddqn",
+  "is_learning_baseline": true,
+  "is_ablation": false,
+  "model_class": "LocalStateQNetwork",
+  "model_parameter_count": 243800,
+  "local_state_channels": [
+    "known_free",
+    "known_obstacle",
+    "unknown"
+  ],
+  "local_state_patch_size": 21,
+  "local_state_source": "cumulative_belief_patch",
+  "local_state_carrier_key": "advantage_canvas",
+  "local_state_canvas_role": "baseline_local_state_input",
+  "no_ground_truth_map_for_decision": true,
+  "uses_structured_value_tree": false,
+  "value_tree_enabled": false,
+  "value_tree_unchanged": false,
+  "value_branch_source": "not_applicable_to_baseline",
+  "value_branch_representation": "not_applicable_to_baseline",
+  "value_tensors_used_by_model": false,
+  "dummy_value_tensors_for_interface": true,
+  "dummy_value_block_shape": [
+    16,
+    2
+  ],
+  "dummy_value_entry_shape": [
+    16,
+    8,
+    4
+  ],
+  "dummy_value_mask_rule": "all_false",
+  "value_replacement_strategy": "not_applicable_to_baseline",
+  "advantage_canvas_schema": "local_state_3ch_belief_patch",
+  "frontier_raster_used": false,
+  "behavior_memory_channels_used": false,
+  "reward_override": {},
+  "checkpoint_source": "trained_from_scratch",
+  "run_stage": "formal",
+  "train_side_only_tuning": true,
+  "seed_policy": {
+    "use_fixed_train_episode_seeds": true,
+    "fixed_train_episode_seed_base": 20259323,
+    "use_fixed_eval_seeds": true,
+    "fixed_final_probe_seed_base": 20261323,
+    "use_fixed_model_select_seeds": true,
+    "fixed_model_select_seed_base": 20262323
+  },
+  "environment_config": {
+    "rows": 40,
+    "cols": 60,
+    "obs_size": 6,
+    "scan_radius": 10,
+    "obstacle_ratio": 0.2,
+    "max_episode_steps": 600,
+    "coverage_stop_threshold": 0.95,
+    "trajectory_history_steps": 10
+  },
+  "reward_config": {
+    "reward_info_scale": 3.1,
+    "reward_obstacle_weight": 0.2,
+    "reward_step_penalty": 0.02,
+    "reward_terminal_bonus": 20.0,
+    "reward_revisit_penalty": 0.12,
+    "reward_turn_penalty_scale": 0.06,
+    "reward_turn_weight_45": 0.0,
+    "reward_turn_weight_90": 0.3333333333333333,
+    "reward_turn_weight_135": 0.6666666666666666,
+    "reward_turn_weight_180": 1.0,
+    "reward_timeout_penalty": 10.0
+  },
+  "training_contract": {
+    "learner_updates_per_iter": 1,
+    "min_replay_size": 8000,
+    "epsilon_end": 0.03,
+    "epsilon_decay_steps": 300000,
+    "train_side_only_tuning": true
+  },
+  "artifact_schema": [
+    "logs/config_snapshot.json",
+    "logs/baseline_manifest.json",
+    "logs/training_summary.txt",
+    "logs/train_episodes.csv",
+    "logs/train_steps.csv",
+    "logs/metric_snapshot.json",
+    "logs/reproducibility_contract.json",
+    "logs/artifact_index.json",
+    "checkpoints/last.pt"
+  ],
+  "source_entrypoint": "train_q_agent.py",
+  "runner_entrypoint": "experiments/final_method/run_a_new_local_state_ddqn_baseline.py",
+  "execution_mode": "in_process_train_q_agent_with_local_state_factories",
+  "legacy_inheritance": "none",
+  "restores_legacy_baselines": false,
+  "restores_experiments_ablations": false,
+  "notes": [
+    "Anew_C_local_state_ddqn is a learning baseline, not an A_new ablation.",
+    "The policy/model input is a three-channel cumulative-belief patch.",
+    "Structured value-tree tensors are replaced by all-zero interface tensors and ignored by LocalStateQNetwork.",
+    "Behavior-memory channels, frontier rasters, and older baseline artifacts are not used.",
+    "Smoke and pilot runs are local checks only, not paper Results evidence."
+  ]
+}

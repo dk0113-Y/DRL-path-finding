@@ -1,0 +1,778 @@
+{
+  "schema_version": "formal_train_artifacts/v4",
+  "artifact_type": "metric_snapshot",
+  "experiment_mode": "formal_train",
+  "formal_protocol_revision": "formal_posthoc_trainselect_v1",
+  "train_side_only_tuning": true,
+  "source_of_truth_repo": "C:\\Users\\Dk\\Desktop\\SCI\\New_A",
+  "run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\outputs\\Anew_C_local_state_ddqn_formal_20260526_163826",
+  "generated_at": "2026-05-26T17:52:28+08:00",
+  "recent_train": {
+    "source": "logs/train_steps.csv",
+    "env_steps": 650000,
+    "learner_steps": 40125,
+    "optimizer_monitoring": {
+      "loss": 2.9888291358947754,
+      "q_mean": 6.598884105682373,
+      "target_q_mean": 6.266962051391602,
+      "td_abs_mean": 3.3411121368408203,
+      "grad_norm": 25.363597869873047,
+      "replay_size": 100000,
+      "epsilon": 0.03
+    },
+    "metrics": {
+      "reward": 0.47706279158592224,
+      "coverage": 0.6536650061607361,
+      "success_rate": 0.03999999910593033,
+      "episode_length": 584.0700073242188,
+      "repeat_visit_ratio": 0.7902145981788635
+    },
+    "reward_breakdown": {
+      "info_reward_sum": 99.71968078613281,
+      "step_penalty_sum": -11.681400299072266,
+      "recent_revisit_penalty_sum": -54.47999572753906,
+      "turn_penalty_sum": -24.281200408935547,
+      "timeout_penalty_sum": -9.600000381469727,
+      "terminal_bonus_sum": 0.800000011920929
+    },
+    "reward_events": {
+      "delta_empty_sum": 971.3200073242188,
+      "delta_obstacle_sum": 196.27999877929688,
+      "empty_info_gain_sum": 30.918075561523438,
+      "obstacle_info_gain_sum": 6.2477874755859375,
+      "weighted_obstacle_info_gain_sum": 1.2495572566986084,
+      "weighted_info_gain_sum": 32.16762924194336,
+      "empty_info_reward_sum": 95.84603881835938,
+      "obstacle_info_reward_sum": 3.8736279010772705,
+      "obstacle_info_contribution_ratio": 0.03869090974330902,
+      "recent_revisit_trigger_count": 454.0,
+      "stall_trigger_count": 461.3599853515625,
+      "zero_info_step_count": 497.1099853515625,
+      "turn_ge_90_count": 488.260009765625,
+      "turn_135_count": 103.13999938964844,
+      "turn_180_count": 311.3299865722656,
+      "turn_penalty_weight_sum": 404.6866455078125,
+      "timeout_flag": 0.9599999785423279
+    },
+    "semantic_monitoring": {
+      "accessible_block_count": null,
+      "total_accessible_unknown_area": null,
+      "total_frontier_cluster_count": null,
+      "mean_block_area": null,
+      "local_frontier_coverage": null,
+      "local_frontier_block_area_mean": null,
+      "value_total_block_count_before_cap": null,
+      "value_packed_block_count": 0.0,
+      "value_truncated_block_count": null,
+      "value_block_cap_hit_flag": null,
+      "value_total_entry_count_before_cap": null,
+      "value_packed_entry_count": 0.0,
+      "value_truncated_entry_count": null,
+      "value_entry_cap_hit_block_count": null,
+      "value_entry_cap_hit_flag": null,
+      "value_max_frontier_clusters_per_block": null,
+      "value_mean_frontier_clusters_per_block": null,
+      "coverage_gain_per_step": 0.001243070000782609,
+      "weighted_info_gain_per_step": 0.06149329990148544,
+      "zero_info_rate": 0.834682822227478,
+      "recent_revisit_rate": 0.7609901428222656,
+      "stall_rate": 0.7732288837432861,
+      "turn_burden_rate": 0.6814668774604797,
+      "timeout_rate": 0.9599999785423279
+    },
+    "raw_row": {
+      "budget_mode": "env_steps",
+      "env_steps": 650000,
+      "episode_idx": 1098,
+      "train_episode_idx": 1098,
+      "completed_train_episodes": 1092,
+      "replay_size": 100000,
+      "epsilon": 0.03,
+      "loss": 2.9888291358947754,
+      "q_mean": 6.598884105682373,
+      "target_q_mean": 6.266962051391602,
+      "td_abs_mean": 3.3411121368408203,
+      "grad_norm": 25.363597869873047,
+      "learner_steps": 40125,
+      "recent_mean_reward": 0.47706279158592224,
+      "recent_mean_coverage": 0.6536650061607361,
+      "recent_success_rate": 0.03999999910593033,
+      "recent_mean_episode_length": 584.0700073242188,
+      "recent_mean_repeat_visit_ratio": 0.7902145981788635,
+      "recent_accessible_block_count": null,
+      "recent_total_accessible_unknown_area": null,
+      "recent_total_frontier_cluster_count": null,
+      "recent_mean_block_area": null,
+      "recent_local_frontier_coverage": null,
+      "recent_local_frontier_block_area_mean": null,
+      "recent_value_total_block_count_before_cap": null,
+      "recent_value_packed_block_count": 0.0,
+      "recent_value_truncated_block_count": null,
+      "recent_value_block_cap_hit_flag": null,
+      "recent_value_total_entry_count_before_cap": null,
+      "recent_value_packed_entry_count": 0.0,
+      "recent_value_truncated_entry_count": null,
+      "recent_value_entry_cap_hit_block_count": null,
+      "recent_value_entry_cap_hit_flag": null,
+      "recent_value_max_frontier_clusters_per_block": null,
+      "recent_value_mean_frontier_clusters_per_block": null,
+      "recent_info_reward_sum": 99.71968078613281,
+      "recent_step_penalty_sum": -11.681400299072266,
+      "recent_recent_revisit_penalty_sum": -54.47999572753906,
+      "recent_turn_penalty_sum": -24.281200408935547,
+      "recent_timeout_penalty_sum": -9.600000381469727,
+      "recent_terminal_bonus_sum": 0.800000011920929,
+      "recent_delta_empty_sum": 971.3200073242188,
+      "recent_delta_obstacle_sum": 196.27999877929688,
+      "recent_empty_info_gain_sum": 30.918075561523438,
+      "recent_obstacle_info_gain_sum": 6.2477874755859375,
+      "recent_weighted_obstacle_info_gain_sum": 1.2495572566986084,
+      "recent_weighted_info_gain_sum": 32.16762924194336,
+      "recent_empty_info_reward_sum": 95.84603881835938,
+      "recent_obstacle_info_reward_sum": 3.8736279010772705,
+      "recent_obstacle_info_contribution_ratio": 0.03869090974330902,
+      "recent_recent_revisit_trigger_count": 454.0,
+      "recent_stall_trigger_count": 461.3599853515625,
+      "recent_zero_info_step_count": 497.1099853515625,
+      "recent_turn_ge_90_count": 488.260009765625,
+      "recent_turn_135_count": 103.13999938964844,
+      "recent_turn_180_count": 311.3299865722656,
+      "recent_turn_penalty_weight_sum": 404.6866455078125,
+      "recent_timeout_flag": 0.9599999785423279,
+      "recent_coverage_gain_per_step": 0.001243070000782609,
+      "recent_weighted_info_gain_per_step": 0.06149329990148544,
+      "recent_zero_info_rate": 0.834682822227478,
+      "recent_recent_revisit_rate": 0.7609901428222656,
+      "recent_stall_rate": 0.7732288837432861,
+      "recent_turn_burden_rate": 0.6814668774604797,
+      "recent_timeout_rate": 0.9599999785423279
+    }
+  },
+  "checkpoint_validation_summary": {
+    "role": "skipped_train_side_only_tuning",
+    "artifact_source": null,
+    "row_count": 0,
+    "training_during_validation_episodes": 0
+  },
+  "best_checkpoint_selection_summary": {
+    "role": "skipped_train_side_only_tuning",
+    "artifact_source": null,
+    "row_count": 0,
+    "selection_rule": "not_run",
+    "selected_best": {},
+    "best_checkpoint_env_steps": null,
+    "best_checkpoint_train_episode_idx": null,
+    "best_checkpoint_path": null
+  },
+  "posthoc_candidate_selection_summary": {},
+  "posthoc_final_probe_summary": {},
+  "formal_selection_manifest": {},
+  "final_probe": {},
+  "skipped_test_side_evaluation": {
+    "reason": "train_side_only_tuning",
+    "skipped_operations": [
+      "posthoc_checkpoint_selection",
+      "posthoc_candidate_scoring",
+      "posthoc_final_artifacts",
+      "best_vs_last_test_side_comparison",
+      "final_probe_evaluation",
+      "final_probe_csv_summary_writing",
+      "automatic_winner_checkpoint_selection"
+    ]
+  },
+  "diagnostic_last_checkpoint_summary": {
+    "role": "diagnostic_only_training_endpoint",
+    "checkpoint_path": "checkpoints/last.pt",
+    "env_steps": 650000,
+    "train_episode_idx": 1092,
+    "evaluation_reuse_rule": "test-side evaluation skipped intentionally by train_side_only_tuning",
+    "diagnostic_eval": {}
+  },
+  "best_vs_last_gap_summary": {
+    "role": "skipped_train_side_only_tuning",
+    "reason": "train_side_only_tuning",
+    "comparison_mode": "not_run"
+  },
+  "training_dynamics_summary": {
+    "final_window_stats": {
+      "recent_mean_reward": 0.47706279158592224,
+      "recent_mean_coverage": 0.6536650061607361,
+      "recent_success_rate": 0.03999999910593033,
+      "recent_mean_episode_length": 584.0700073242188,
+      "recent_mean_repeat_visit_ratio": 0.7902145981788635
+    },
+    "growth_rates": {
+      "growth_rate_reward": -0.0008203083096667116,
+      "growth_rate_coverage": 3.2124644382317416e-05,
+      "growth_rate_success_rate": 0.00014829647552826305,
+      "growth_rate_repeat_visit_ratio": -2.201269612892512e-05
+    },
+    "threshold_reach_steps": {
+      "threshold_reach_steps_success_050": null,
+      "threshold_reach_steps_coverage_090": null,
+      "threshold_reach_steps_reward_custom": null
+    },
+    "late_stage_variance": {
+      "late_stage_variance_reward": 20.623676678344385,
+      "late_stage_variance_coverage": 0.00027400485608022803,
+      "late_stage_variance_success_rate": 0.00015681162477575162,
+      "late_stage_variance_repeat_visit_ratio": 7.01516677913553e-05
+    },
+    "train_final_consistency": {
+      "verdict": "insufficient_evidence",
+      "details": {
+        "reward": {
+          "recent_train": 0.47706279158592224,
+          "final_probe": null,
+          "delta": null,
+          "verdict": "insufficient_evidence"
+        },
+        "coverage": {
+          "recent_train": 0.6536650061607361,
+          "final_probe": null,
+          "delta": null,
+          "verdict": "insufficient_evidence"
+        },
+        "success_rate": {
+          "recent_train": 0.03999999910593033,
+          "final_probe": null,
+          "delta": null,
+          "verdict": "insufficient_evidence"
+        },
+        "episode_length": {
+          "recent_train": 584.0700073242188,
+          "final_probe": null,
+          "delta": null,
+          "verdict": "insufficient_evidence"
+        },
+        "repeat_visit_ratio": {
+          "recent_train": 0.7902145981788635,
+          "final_probe": null,
+          "delta": null,
+          "verdict": "insufficient_evidence"
+        }
+      },
+      "counts": {
+        "aligned": 0,
+        "final_probe_stronger": 0,
+        "final_probe_weaker": 0,
+        "insufficient_evidence": 5
+      },
+      "notes": [
+        "recent_train versus final_probe consistency is unavailable because one or more metrics are missing."
+      ]
+    },
+    "phase_slope_summary": {
+      "full": {
+        "row_count": 1292,
+        "start_env_steps": 4512.0,
+        "end_env_steps": 650000.0,
+        "slope_per_1000_env_steps": {
+          "reward": -0.06743573162766993,
+          "coverage": 7.92379370931879e-05,
+          "success_rate": 1.3636250247253681e-05,
+          "episode_length": -0.016068348030968328,
+          "repeat_visit_ratio": 0.00048153088596594187,
+          "accessible_block_count": null,
+          "total_frontier_cluster_count": null,
+          "stall_trigger_count": 0.3546454388553603,
+          "zero_info_step_count": 0.07650704909214157,
+          "turn_180_count": 0.41050386619929063,
+          "recent_revisit_penalty_sum": -0.06362550618522747,
+          "terminal_bonus_sum": 0.0002727250391461184
+        }
+      },
+      "early": {
+        "row_count": 431,
+        "start_env_steps": 4512.0,
+        "end_env_steps": 219504.0,
+        "slope_per_1000_env_steps": {
+          "reward": 0.31622710090070233,
+          "coverage": 0.0018827947968053835,
+          "success_rate": 0.0005254983894849697,
+          "episode_length": -0.07282152221791788,
+          "repeat_visit_ratio": -9.788676123916649e-05,
+          "accessible_block_count": null,
+          "total_frontier_cluster_count": null,
+          "stall_trigger_count": -0.040696068839852925,
+          "zero_info_step_count": -0.2902925749873595,
+          "turn_180_count": 0.2715941858741577,
+          "recent_revisit_penalty_sum": -0.029700712223111554,
+          "terminal_bonus_sum": 0.010509967878633994
+        }
+      },
+      "mid": {
+        "row_count": 430,
+        "start_env_steps": 220000.0,
+        "end_env_steps": 434512.0,
+        "slope_per_1000_env_steps": {
+          "reward": -0.2104282534531281,
+          "coverage": -0.0002584986788420104,
+          "success_rate": -0.00023736134317960822,
+          "episode_length": 0.019903388377518493,
+          "repeat_visit_ratio": 0.000837046115784979,
+          "accessible_block_count": null,
+          "total_frontier_cluster_count": null,
+          "stall_trigger_count": 0.6207455371893483,
+          "zero_info_step_count": 0.22044105131129274,
+          "turn_180_count": 0.9531895012398666,
+          "recent_revisit_penalty_sum": -0.11257830910408421,
+          "terminal_bonus_sum": -0.004747226844688776
+        }
+      },
+      "late": {
+        "row_count": 431,
+        "start_env_steps": 435008.0,
+        "end_env_steps": 650000.0,
+        "slope_per_1000_env_steps": {
+          "reward": 0.04091791761623663,
+          "coverage": 0.0001805294319854936,
+          "success_rate": 0.00014593792147014355,
+          "episode_length": -0.06016292782878154,
+          "repeat_visit_ratio": -8.522457789055446e-05,
+          "accessible_block_count": null,
+          "total_frontier_cluster_count": null,
+          "stall_trigger_count": -0.09752271533862086,
+          "zero_info_step_count": -0.08716877464745296,
+          "turn_180_count": 0.2259068765860343,
+          "recent_revisit_penalty_sum": 0.0023986942187416314,
+          "terminal_bonus_sum": 0.0029187584497581314
+        }
+      },
+      "last_window": {
+        "row_count": 259,
+        "start_env_steps": 521008.0,
+        "end_env_steps": 650000.0,
+        "slope_per_1000_env_steps": {
+          "reward": -0.06794853707585864,
+          "coverage": -0.00020967343969081887,
+          "success_rate": 4.736816449851263e-05,
+          "episode_length": -0.06324954375573465,
+          "repeat_visit_ratio": 8.80702095172733e-05,
+          "accessible_block_count": null,
+          "total_frontier_cluster_count": null,
+          "stall_trigger_count": -0.04865303194701393,
+          "zero_info_step_count": -0.04013280084968153,
+          "turn_180_count": 0.6086075114934506,
+          "recent_revisit_penalty_sum": -0.014008162221802454,
+          "terminal_bonus_sum": 0.0009473631438294177
+        }
+      }
+    },
+    "late_stage_window": {
+      "definition": "last_25_percent_of_train_step_logging_rows_min_4_rows",
+      "row_count": 323,
+      "fraction_of_logging_points": 0.25,
+      "start_env_steps": 489008,
+      "end_env_steps": 650000
+    },
+    "definitions": {
+      "growth_rate_unit": "least_squares_slope_per_1000_env_steps_over_late_stage_window",
+      "phase_slope_summary_unit": "least_squares_slope_per_1000_env_steps; includes full/early/mid/late/last_window for future training-first comparisons",
+      "reward_threshold_note": "threshold_reach_steps_reward_custom is intentionally left null in v2 because a stable formal reward threshold has not been fixed.",
+      "late_stage_variance_window": "last_25_percent_of_train_step_logging_rows_min_4_rows",
+      "formal_acceptance_note": "future comparisons should prioritize training dynamics first; final formal acceptance still comes from best.pt held-out final test."
+    },
+    "notes": [
+      "recent_train versus final_probe consistency is unavailable because one or more metrics are missing."
+    ]
+  },
+  "train_final_consistency_summary": {
+    "verdict": "insufficient_evidence",
+    "details": {
+      "reward": {
+        "recent_train": 0.47706279158592224,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "coverage": {
+        "recent_train": 0.6536650061607361,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "success_rate": {
+        "recent_train": 0.03999999910593033,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "episode_length": {
+        "recent_train": 584.0700073242188,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "repeat_visit_ratio": {
+        "recent_train": 0.7902145981788635,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      }
+    },
+    "counts": {
+      "aligned": 0,
+      "final_probe_stronger": 0,
+      "final_probe_weaker": 0,
+      "insufficient_evidence": 5
+    },
+    "notes": [
+      "recent_train versus final_probe consistency is unavailable because one or more metrics are missing."
+    ]
+  },
+  "recent_train_support_summary": {
+    "verdict": "insufficient_evidence",
+    "details": {
+      "reward": {
+        "recent_train": 0.47706279158592224,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "coverage": {
+        "recent_train": 0.6536650061607361,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "success_rate": {
+        "recent_train": 0.03999999910593033,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "episode_length": {
+        "recent_train": 584.0700073242188,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      },
+      "repeat_visit_ratio": {
+        "recent_train": 0.7902145981788635,
+        "final_probe": null,
+        "delta": null,
+        "verdict": "insufficient_evidence"
+      }
+    },
+    "counts": {
+      "aligned": 0,
+      "final_probe_stronger": 0,
+      "final_probe_weaker": 0,
+      "insufficient_evidence": 5
+    },
+    "notes": [
+      "recent_train versus final_probe consistency is unavailable because one or more metrics are missing."
+    ]
+  },
+  "last_checkpoint_env_steps": 650000,
+  "last_checkpoint_train_episode_idx": 1092,
+  "best_checkpoint_env_steps": null,
+  "best_checkpoint_train_episode_idx": null,
+  "final_probe_source": "skipped_train_side_only_tuning",
+  "formal_final_object": {
+    "checkpoint_path": "checkpoints/last.pt",
+    "network_source": "skipped_train_side_only_tuning",
+    "env_steps": 650000,
+    "train_episode_idx": 1092,
+    "evaluation_artifact": null,
+    "role": "train_side_tuning_endpoint"
+  },
+  "automatic_tuning_ranking_basis": {
+    "final_network_outcome": [],
+    "training_dynamics_quality": [
+      "phase_slope_summary",
+      "recent_mean_reward",
+      "recent_mean_coverage",
+      "recent_success_rate",
+      "recent_mean_episode_length",
+      "recent_mean_repeat_visit_ratio",
+      "growth_rate",
+      "threshold_reach_steps",
+      "late_stage_variance",
+      "train_final_consistency"
+    ]
+  },
+  "unified_metrics": {
+    "primary_metrics": {
+      "reward": {
+        "direction": "higher_is_better",
+        "recent_train": 0.47706279158592224,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "coverage": {
+        "direction": "higher_is_better",
+        "recent_train": 0.6536650061607361,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "success_rate": {
+        "direction": "higher_is_better",
+        "recent_train": 0.03999999910593033,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      }
+    },
+    "secondary_metrics": {
+      "episode_length": {
+        "direction": "lower_is_better",
+        "recent_train": 584.0700073242188,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "repeat_visit_ratio": {
+        "direction": "lower_is_better",
+        "recent_train": 0.7902145981788635,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      }
+    },
+    "stability_metrics": {
+      "timeout_flag": {
+        "direction": "lower_is_better",
+        "recent_train": 0.9599999785423279,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "stall_trigger_count": {
+        "direction": "lower_is_better",
+        "recent_train": 461.3599853515625,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "zero_info_step_count": {
+        "direction": "lower_is_better",
+        "recent_train": 497.1099853515625,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "recent_revisit_trigger_count": {
+        "direction": "lower_is_better",
+        "recent_train": 454.0,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      }
+    },
+    "semantic_monitoring": {
+      "accessible_block_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "coverage_gain_per_step": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.001243070000782609,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "local_frontier_block_area_mean": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "local_frontier_coverage": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "mean_block_area": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "recent_revisit_rate": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.7609901428222656,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "stall_rate": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.7732288837432861,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "timeout_rate": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.9599999785423279,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "total_accessible_unknown_area": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "total_frontier_cluster_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "turn_burden_rate": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.6814668774604797,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_block_cap_hit_flag": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_entry_cap_hit_block_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_entry_cap_hit_flag": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_max_frontier_clusters_per_block": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_mean_frontier_clusters_per_block": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_packed_block_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.0,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_packed_entry_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.0,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_total_block_count_before_cap": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_total_entry_count_before_cap": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_truncated_block_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "value_truncated_entry_count": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": null,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "weighted_info_gain_per_step": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.06149329990148544,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      },
+      "zero_info_rate": {
+        "direction": "context_dependent_monitoring",
+        "recent_train": 0.834682822227478,
+        "final_probe": null,
+        "model_select_best": null,
+        "best_recheck_best": null,
+        "diagnostic_last_checkpoint": null
+      }
+    }
+  },
+  "insufficient_evidence_flags": [],
+  "timing_summary": {
+    "collector": null,
+    "cummap": null,
+    "learner": null,
+    "replay": null,
+    "adapter": null
+  }
+}

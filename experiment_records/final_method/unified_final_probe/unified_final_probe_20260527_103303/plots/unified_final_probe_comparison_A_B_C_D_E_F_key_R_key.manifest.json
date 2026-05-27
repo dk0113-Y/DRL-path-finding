@@ -1,0 +1,602 @@
+{
+  "created_at": "2026-05-27T12:29:18",
+  "run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\experiment_records\\final_method\\unified_final_probe\\unified_final_probe_20260527_103303",
+  "figure_path": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\experiment_records\\final_method\\unified_final_probe\\unified_final_probe_20260527_103303\\plots\\unified_final_probe_comparison_A_B_C_D_E_F_key_R_key.png",
+  "methods": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F_key",
+    "R_key"
+  ],
+  "metrics": [
+    "success_rate",
+    "coverage",
+    "reward",
+    "episode_length",
+    "repeat_visit_ratio",
+    "timeout_rate",
+    "zero_info_step_count",
+    "stall_trigger_count"
+  ],
+  "stats": {
+    "success_rate": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 0.92,
+        "std": 0.2726599243442907,
+        "ci95": 0.05344134517148098,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 0.21,
+        "std": 0.40936018074033237,
+        "ci95": 0.08023459542510514,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 0.0,
+        "std": 0.0,
+        "ci95": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 0.82,
+        "std": 0.3861229196653691,
+        "ci95": 0.07568009225441234,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 0.81,
+        "std": 0.3942772444036626,
+        "ci95": 0.07727833990311786,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 0.0,
+        "std": 0.0,
+        "ci95": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 0.86,
+        "std": 0.348735088019777,
+        "ci95": 0.06835207725187628,
+        "min": 0.0,
+        "max": 1.0
+      }
+    ],
+    "coverage": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 0.93735,
+        "std": 0.06527964630895469,
+        "ci95": 0.012794810676555118,
+        "min": 0.5744,
+        "max": 0.959
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 0.642881,
+        "std": 0.2577055965318534,
+        "ci95": 0.05051029692024326,
+        "min": 0.148,
+        "max": 0.9559
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 0.496706,
+        "std": 0.20410878651178427,
+        "ci95": 0.04000532215630971,
+        "min": 0.1627,
+        "max": 0.9325
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 0.931999,
+        "std": 0.06897512872643502,
+        "ci95": 0.013519125230381263,
+        "min": 0.4242,
+        "max": 0.9579
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 0.925461,
+        "std": 0.08953504465410245,
+        "ci95": 0.01754886875220408,
+        "min": 0.4188,
+        "max": 0.9592
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 0.587208,
+        "std": 0.21363810837370506,
+        "ci95": 0.04187306924124619,
+        "min": 0.175,
+        "max": 0.9498
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 0.92704,
+        "std": 0.08879553178311657,
+        "ci95": 0.017403924229490848,
+        "min": 0.3964,
+        "max": 0.9571
+      }
+    ],
+    "reward": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 155.5642052203638,
+        "std": 29.541059628314944,
+        "ci95": 5.790047687149729,
+        "min": -6.494385794535427,
+        "max": 181.33367042806526
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 13.32420603217638,
+        "std": 91.0058062046472,
+        "ci95": 17.83713801611085,
+        "min": -115.8453680940771,
+        "max": 178.39432381848047
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": -46.80871007997086,
+        "std": 43.26812143215017,
+        "ci95": 8.480551800701432,
+        "min": -120.86803311909587,
+        "max": 47.63891470583988
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 145.17877555701483,
+        "std": 42.5289337812477,
+        "ci95": 8.33567102112455,
+        "min": -65.05411353721148,
+        "max": 173.89111206489545
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 140.36955981919692,
+        "std": 46.31218939915904,
+        "ci95": 9.077189122235172,
+        "min": -69.0734773012489,
+        "max": 179.94652117753685
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": -27.572058819939844,
+        "std": 45.61629305632703,
+        "ci95": 8.940793439040098,
+        "min": -116.57463564105828,
+        "max": 54.227387891651304
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 163.8582879462514,
+        "std": 21.82150651285409,
+        "ci95": 4.277015276519402,
+        "min": 44.463434761468974,
+        "max": 185.63764223391433
+      }
+    ],
+    "episode_length": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 291.98,
+        "std": 130.02633610468337,
+        "ci95": 25.48516187651794,
+        "min": 121.0,
+        "max": 600.0
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 515.59,
+        "std": 164.76203194825308,
+        "ci95": 32.293358261857605,
+        "min": 167.0,
+        "max": 600.0
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 600.0,
+        "std": 0.0,
+        "ci95": 0.0,
+        "min": 600.0,
+        "max": 600.0
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 323.52,
+        "std": 168.6780137517404,
+        "ci95": 33.060890695341115,
+        "min": 125.0,
+        "max": 600.0
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 362.62,
+        "std": 143.11991016930065,
+        "ci95": 28.051502393182925,
+        "min": 153.0,
+        "max": 600.0
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 600.0,
+        "std": 0.0,
+        "ci95": 0.0,
+        "min": 600.0,
+        "max": 600.0
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 333.37,
+        "std": 146.0270941374313,
+        "ci95": 28.621310450936534,
+        "min": 148.0,
+        "max": 600.0
+      }
+    ],
+    "repeat_visit_ratio": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 0.11948838042857876,
+        "std": 0.14325937450110832,
+        "ci95": 0.028078837402217227,
+        "min": 0.0,
+        "max": 0.8352745424292846
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 0.6665166178036415,
+        "std": 0.3400241026453055,
+        "ci95": 0.06664472411847988,
+        "min": 0.004975124378109453,
+        "max": 0.9833610648918469
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 0.9074875207986689,
+        "std": 0.05452952984394418,
+        "ci95": 0.01068778784941306,
+        "min": 0.762063227953411,
+        "max": 0.9883527454242929
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 0.1777224712216461,
+        "std": 0.2142705799718635,
+        "ci95": 0.04199703367448525,
+        "min": 0.0,
+        "max": 0.9217970049916805
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 0.20843687773441555,
+        "std": 0.17770449796307242,
+        "ci95": 0.03483008160076219,
+        "min": 0.01948051948051948,
+        "max": 0.9101497504159733
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 0.8763560732113145,
+        "std": 0.06170752223188479,
+        "ci95": 0.012094674357449419,
+        "min": 0.7337770382695508,
+        "max": 0.9800332778702163
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 0.1861207127632159,
+        "std": 0.20643508269072813,
+        "ci95": 0.04046127620738271,
+        "min": 0.0,
+        "max": 0.913477537437604
+      }
+    ],
+    "timeout_rate": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 0.08,
+        "std": 0.27265992434429076,
+        "ci95": 0.05344134517148099,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 0.79,
+        "std": 0.40936018074033237,
+        "ci95": 0.08023459542510514,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 1.0,
+        "std": 0.0,
+        "ci95": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 0.18,
+        "std": 0.38612291966536916,
+        "ci95": 0.07568009225441236,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 0.19,
+        "std": 0.3942772444036626,
+        "ci95": 0.07727833990311786,
+        "min": 0.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 1.0,
+        "std": 0.0,
+        "ci95": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 0.14,
+        "std": 0.348735088019777,
+        "ci95": 0.06835207725187628,
+        "min": 0.0,
+        "max": 1.0
+      }
+    ],
+    "zero_info_step_count": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 137.9,
+        "std": 133.3523850025135,
+        "ci95": 26.13706746049265,
+        "min": 0.0,
+        "max": 536.0
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 414.71,
+        "std": 202.5791923962557,
+        "ci95": 39.705521709666115,
+        "min": 11.0,
+        "max": 594.0
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 549.44,
+        "std": 30.27661030090937,
+        "ci95": 5.934215618978236,
+        "min": 474.0,
+        "max": 594.0
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 181.13,
+        "std": 171.21182196273125,
+        "ci95": 33.55751710469532,
+        "min": 2.0,
+        "max": 558.0
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 201.64,
+        "std": 150.16694548119276,
+        "ci95": 29.432721314313778,
+        "min": 12.0,
+        "max": 550.0
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 530.52,
+        "std": 36.49864533254777,
+        "ci95": 7.153734485179362,
+        "min": 444.0,
+        "max": 591.0
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 176.36,
+        "std": 153.1852723885938,
+        "ci95": 30.024313388164387,
+        "min": 3.0,
+        "max": 558.0
+      }
+    ],
+    "stall_trigger_count": [
+      {
+        "method_label": "A",
+        "method_id": "AN",
+        "n": 100,
+        "mean": 100.37,
+        "std": 123.94790816868972,
+        "ci95": 24.293790001063186,
+        "min": 0.0,
+        "max": 527.0
+      },
+      {
+        "method_label": "B",
+        "method_id": "Anew_B_classical_frontier_greedy",
+        "n": 100,
+        "mean": 394.05,
+        "std": 207.15759750011634,
+        "ci95": 40.6028891100228,
+        "min": 0.0,
+        "max": 585.0
+      },
+      {
+        "method_label": "C",
+        "method_id": "Anew_C_local_state_ddqn",
+        "n": 100,
+        "mean": 539.99,
+        "std": 32.07613890212921,
+        "ci95": 6.286923224817325,
+        "min": 459.0,
+        "max": 587.0
+      },
+      {
+        "method_label": "D",
+        "method_id": "Anew_D_no_value_tree",
+        "n": 100,
+        "mean": 144.14,
+        "std": 161.10195153342738,
+        "ci95": 31.575982500551767,
+        "min": 0.0,
+        "max": 543.0
+      },
+      {
+        "method_label": "E",
+        "method_id": "Anew_E_no_dual_state_split",
+        "n": 100,
+        "mean": 138.75,
+        "std": 140.15383863757881,
+        "ci95": 27.470152372965448,
+        "min": 0.0,
+        "max": 532.0
+      },
+      {
+        "method_label": "F_key",
+        "method_id": "Anew_F3_no_behavior_memory",
+        "n": 100,
+        "mean": 521.56,
+        "std": 37.023967121503084,
+        "ci95": 7.256697555814604,
+        "min": 437.0,
+        "max": 582.0
+      },
+      {
+        "method_label": "R_key",
+        "method_id": "Anew_R5",
+        "n": 100,
+        "mean": 136.85,
+        "std": 147.43965552117254,
+        "ci95": 28.898172482149818,
+        "min": 0.0,
+        "max": 550.0
+      }
+    ]
+  }
+}

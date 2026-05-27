@@ -1,0 +1,88 @@
+{
+  "schema_version": "a_new_unified_final_probe_plan/v1",
+  "run_stage": "formal",
+  "episodes": 100,
+  "seed_base": 20261323,
+  "seed_start": 20261323,
+  "seed_end": 20261422,
+  "neural_device": "cuda",
+  "b_device": "cpu",
+  "output_root": "experiment_records\\final_method\\unified_final_probe",
+  "checkpoint_store_root": "checkpoint_store",
+  "run_order": [
+    "B",
+    "A",
+    "C",
+    "D",
+    "E",
+    "F_key",
+    "R_key"
+  ],
+  "methods": [
+    {
+      "label": "B",
+      "method_id": "Anew_B_classical_frontier_greedy",
+      "checkpoint_used": false,
+      "policy": "ClassicalFrontierGreedyPolicy"
+    },
+    {
+      "label": "A",
+      "checkpoint_used": true,
+      "checkpoint_path": "checkpoint_store\\full_method_main\\A_full_method_last.pt",
+      "model_kind": "default",
+      "checkpoint_exists": true
+    },
+    {
+      "label": "C",
+      "checkpoint_used": true,
+      "checkpoint_path": "checkpoint_store\\final_method\\A_new_minimum_closure\\Anew_C_local_state_ddqn.pt",
+      "model_kind": "local_state",
+      "checkpoint_exists": true
+    },
+    {
+      "label": "D",
+      "checkpoint_used": true,
+      "checkpoint_path": "checkpoint_store\\final_method\\A_new_minimum_closure\\Anew_D_no_value_tree.pt",
+      "model_kind": "default",
+      "checkpoint_exists": true
+    },
+    {
+      "label": "E",
+      "checkpoint_used": true,
+      "checkpoint_path": "checkpoint_store\\final_method\\A_new_minimum_closure\\Anew_E_no_dual_state_split.pt",
+      "model_kind": "no_dual_state_split",
+      "checkpoint_exists": true
+    },
+    {
+      "label": "F_key",
+      "checkpoint_used": true,
+      "checkpoint_path": "checkpoint_store\\final_method\\A_new_minimum_closure\\Anew_F3_no_behavior_memory.pt",
+      "model_kind": "default",
+      "checkpoint_exists": true
+    },
+    {
+      "label": "R_key",
+      "checkpoint_used": true,
+      "checkpoint_path": "checkpoint_store\\final_method\\A_new_reward_ablations\\Anew_R5.pt",
+      "model_kind": "default",
+      "checkpoint_exists": true
+    }
+  ],
+  "run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\experiment_records\\final_method\\unified_final_probe\\unified_final_probe_20260527_103303",
+  "runner_entrypoint": "experiments/final_method/run_a_new_unified_final_probe.py",
+  "raw_argv": [
+    "--device",
+    "cuda",
+    "--episodes",
+    "100",
+    "--checkpoint-store-root",
+    "checkpoint_store",
+    "--output-root",
+    "experiment_records\\final_method\\unified_final_probe"
+  ],
+  "launch_command": "F:\\Anaconda3\\python.exe experiments/final_method/run_a_new_unified_final_probe.py --device cuda --episodes 100 --checkpoint-store-root checkpoint_store --output-root experiment_records\\final_method\\unified_final_probe",
+  "source_commit": "909f912996f95058a3cfc226b109540eda4e1a6f",
+  "source_branch": "codex/a-new-minimum-closure-archive",
+  "source_remote": "https://github.com/dk0113-Y/DRL-path-finding.git",
+  "created_at": "2026-05-27T10:33:03+08:00"
+}

@@ -1,0 +1,122 @@
+{
+  "schema_version": "formal_train_reproducibility_contract/v1",
+  "artifact_type": "reproducibility_contract",
+  "experiment_mode": "formal_train",
+  "generated_at": "2026-05-26T23:33:08+08:00",
+  "run_name": "Anew_E_no_dual_state_split_formal",
+  "run_mode": "a_new_no_dual_state_split_ablation_formal",
+  "budget_mode": "env_steps",
+  "output_root": "outputs",
+  "run_dir_reference": "source_repo:outputs/Anew_E_no_dual_state_split_formal_20260526_205655",
+  "seed": 0,
+  "strict_reproducibility": false,
+  "deterministic_algorithms_enabled": false,
+  "deterministic_algorithms_warn_only": true,
+  "requested_device": "cuda",
+  "actual_device": "cuda:0",
+  "torch_version": "2.5.1",
+  "cuda_availability": true,
+  "cuda_version": 12.1,
+  "cudnn_version": 90100,
+  "raw_argv": [
+    "experiments/final_method/run_a_new_no_dual_state_split_ablation.py",
+    "--run-stage",
+    "formal",
+    "--device",
+    "cuda",
+    "--output-root",
+    "outputs"
+  ],
+  "raw_argv_sanitized": [
+    "experiments/final_method/run_a_new_no_dual_state_split_ablation.py",
+    "--run-stage",
+    "formal",
+    "--device",
+    "cuda",
+    "--output-root",
+    "outputs"
+  ],
+  "reconstructed_launch_command": "experiments/final_method/run_a_new_no_dual_state_split_ablation.py --run-stage formal --device cuda --output-root outputs",
+  "cwd_sanitized": "source_repo:.",
+  "source_git_branch": "codex/a-new-minimum-closure-archive",
+  "source_git_commit_sha": "909f912996f95058a3cfc226b109540eda4e1a6f",
+  "python_executable_basename": "python.exe",
+  "determinism_environment_variables": {
+    "PYTHONHASHSEED": {
+      "value": null,
+      "present": false
+    },
+    "CUBLAS_WORKSPACE_CONFIG": {
+      "value": null,
+      "present": false
+    },
+    "CUDA_VISIBLE_DEVICES": {
+      "value": null,
+      "present": false
+    },
+    "OMP_NUM_THREADS": {
+      "value": null,
+      "present": false
+    },
+    "MKL_NUM_THREADS": {
+      "value": null,
+      "present": false
+    }
+  },
+  "backend_requested_flags": {
+    "enable_tf32": true,
+    "enable_cudnn_benchmark": true,
+    "enable_amp": false,
+    "enable_inference_amp": false,
+    "enable_torch_compile": false,
+    "enable_channels_last": false
+  },
+  "backend_runtime_readback": {
+    "requested_device": "cuda",
+    "strict_reproducibility": false,
+    "deterministic_algorithms_warn_only": true,
+    "cublas_workspace_config_action": {
+      "name": "CUBLAS_WORKSPACE_CONFIG",
+      "value": null,
+      "preexisting": false,
+      "set_by_script": false,
+      "status": "not_required_when_strict_reproducibility_false"
+    },
+    "torch.backends.cudnn.deterministic": false,
+    "torch.backends.cudnn.benchmark": true,
+    "torch.backends.cuda.matmul.allow_tf32": true,
+    "torch.backends.cudnn.allow_tf32": true,
+    "torch.are_deterministic_algorithms_enabled()": false
+  },
+  "seed_policy": {
+    "python_random_seed_policy": "set_seed(cfg.seed) calls random.seed(seed) before model/system initialization.",
+    "numpy_seed_policy": "set_seed(cfg.seed) calls numpy.random.seed(seed) before model/system initialization.",
+    "torch_seed_policy": "set_seed(cfg.seed) calls torch.manual_seed(seed) before model/system initialization.",
+    "torch_cuda_seed_policy": "set_seed(cfg.seed) calls torch.cuda.manual_seed_all(seed) when CUDA is available.",
+    "model_initialization_seed_policy": "ExplorationQNetwork construction occurs after set_seed(cfg.seed), so initial weights are controlled by the global torch seed.",
+    "replay_sampling_rng_policy": "ReplayBuffer.sample uses CPU torch.randint from the global torch RNG; no dedicated replay torch.Generator is configured.",
+    "epsilon_action_rng_policy": "TransitionCollector epsilon branch and random-only actions use the global Python random module; no dedicated action RNG is configured.",
+    "train_episode_seed_policy": "When use_fixed_train_episode_seeds is true, train episode maps use fixed_train_episode_seed_base + episode_index - 1.",
+    "final_probe_seed_policy": "When use_fixed_eval_seeds is true, final_probe uses fixed_final_probe_seed_base + episode_index.",
+    "posthoc_candidate_final_probe_seed_policy": "Post-hoc candidate final probes use the final_probe seed policy and the configured fixed_final_probe_seed_base when fixed eval seeds are enabled."
+  },
+  "fixed_seed_fields": {
+    "use_fixed_train_episode_seeds": true,
+    "fixed_train_episode_seed_base": 20259323,
+    "use_fixed_eval_seeds": true,
+    "fixed_final_probe_seed_base": 20261323,
+    "use_fixed_model_select_seeds": true,
+    "fixed_model_select_seed_base": 20262323
+  },
+  "reproducibility_limitations": [
+    "PYTHONHASHSEED can only be fully effective when set before interpreter startup.",
+    "CUBLAS_WORKSPACE_CONFIG should be set before CUDA/CUBLAS use.",
+    "warn_only deterministic mode may warn rather than fail.",
+    "Replay sampling currently uses global torch RNG unless a dedicated generator is implemented.",
+    "Epsilon action selection currently uses global Python random unless a dedicated RNG is implemented."
+  ],
+  "contract_verdict": "incomplete_contract",
+  "contract_notes": [
+    "strict_reproducibility is disabled for this run."
+  ]
+}

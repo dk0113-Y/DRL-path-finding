@@ -1,0 +1,24 @@
+{
+  "schema_version": "a_new_minimum_closure_archive_record/v1",
+  "method_id": "Anew_E_no_dual_state_split",
+  "method_name": "no_dual_state_split_flat_value_injected_q",
+  "run_stage": "formal",
+  "source_run_dir": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\outputs\\Anew_E_no_dual_state_split_formal_20260526_205655",
+  "records_logs_dir": "experiment_records\\final_method\\A_new_minimum_closure\\Anew_E_no_dual_state_split\\logs",
+  "copied_logs": [
+    "artifact_index.json",
+    "benchmark_summary.json",
+    "config_snapshot.json",
+    "final_method_manifest.json",
+    "metric_snapshot.json",
+    "reproducibility_contract.json",
+    "train_episodes.csv",
+    "train_steps.csv",
+    "training_summary.txt"
+  ],
+  "skipped_logs": [],
+  "checkpoint_source": "C:\\Users\\Dk\\Desktop\\SCI\\New_A\\outputs\\Anew_E_no_dual_state_split_formal_20260526_205655\\checkpoints\\last.pt",
+  "checkpoint_store_path": "checkpoint_store\\final_method\\A_new_minimum_closure\\Anew_E_no_dual_state_split.pt",
+  "checkpoint_copied": true,
+  "checkpoint_copy_reason": null
+}

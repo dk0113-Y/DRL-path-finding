@@ -1,0 +1,50 @@
+{
+  "schema_version": "a_new_no_value_tree_ablation_manifest/v1",
+  "method_family": "A_new_structural_ablation",
+  "baseline_method": "A_new_final_4ch_no_frontier_raster",
+  "experiment_id": "Anew_D",
+  "method_id": "Anew_D_no_value_tree",
+  "method_name": "no_value_tree",
+  "ablation_group": "structural",
+  "ablation_id": "D",
+  "ablation_name": "no_value_tree",
+  "run_name": "Anew_D_no_value_tree_formal",
+  "run_stage": "formal",
+  "advantage_canvas_schema": "final_4ch_no_frontier_raster",
+  "advantage_canvas_channels": [
+    "free",
+    "obstacle",
+    "visit_count_log_norm",
+    "recent_trajectory_decay"
+  ],
+  "advantage_canvas_channel_count": 4,
+  "frontier_raster_used": false,
+  "value_tree_enabled": false,
+  "value_tree_unchanged": false,
+  "value_replacement_strategy": "zero_value_state",
+  "value_branch_source": "zero_value_state",
+  "value_branch_representation": "zero_value_state",
+  "dummy_value_tensors_for_interface": true,
+  "dummy_value_block_shape": [
+    16,
+    2
+  ],
+  "dummy_value_entry_shape": [
+    16,
+    8,
+    4
+  ],
+  "dummy_value_mask_rule": "all_false",
+  "model_class": "ExplorationQNetwork",
+  "advantage_encoder.canvas_in_channels": 4,
+  "reward_override": {},
+  "source_entrypoint": "train_q_agent.py",
+  "runner_entrypoint": "experiments/final_method/run_a_new_no_value_tree_ablation.py",
+  "notes": [
+    "Anew_D_no_value_tree is aligned to the current A_new four-channel advantage canvas.",
+    "The advantage branch keeps free, obstacle, visit_count_log_norm, and recent_trajectory_decay.",
+    "The value-tree branch receives zero-value-state tensors with all masks false.",
+    "No legacy 5-channel frontier raster or legacy D artifact is restored.",
+    "Smoke and pilot runs are local checks only, not paper Results evidence."
+  ]
+}

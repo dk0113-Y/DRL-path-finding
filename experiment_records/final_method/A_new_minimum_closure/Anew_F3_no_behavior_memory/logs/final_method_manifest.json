@@ -1,0 +1,52 @@
+{
+  "schema_version": "a_new_no_behavior_memory_ablation_manifest/v1",
+  "method_family": "A_new_input_state_ablation",
+  "baseline_method": "A_new_final_4ch_no_frontier_raster",
+  "experiment_id": "Anew_F",
+  "method_id": "Anew_F3_no_behavior_memory",
+  "method_name": "no_behavior_memory",
+  "ablation_group": "input_state",
+  "ablation_id": "F_key",
+  "ablation_name": "no_behavior_memory",
+  "channel_ablation": "no_behavior_memory",
+  "zeroed_advantage_channels": [
+    "visit_count_log_norm",
+    "recent_trajectory_decay"
+  ],
+  "occupancy_only_alias": true,
+  "separate_occupancy_only_formal_row": false,
+  "run_name": "Anew_F3_no_behavior_memory_formal",
+  "run_stage": "formal",
+  "advantage_canvas_schema": "final_4ch_no_frontier_raster",
+  "advantage_canvas_channels": [
+    "free",
+    "obstacle",
+    "visit_count_log_norm",
+    "recent_trajectory_decay"
+  ],
+  "advantage_canvas_channel_count": 4,
+  "frontier_raster_used": false,
+  "value_tree_enabled": true,
+  "value_tree_unchanged": true,
+  "value_replacement_strategy": "none",
+  "value_branch_source": "SharedSemanticSnapshot",
+  "value_branch_representation": "structured_frontier_block_value_tree",
+  "dummy_value_tensors_for_interface": false,
+  "dummy_value_mask_rule": "none",
+  "model_class": "ExplorationQNetwork",
+  "model_parameter_count": 1167022,
+  "advantage_encoder.canvas_in_channels": 4,
+  "reward_override": {},
+  "source_entrypoint": "train_q_agent.py",
+  "runner_entrypoint": "experiments/final_method/run_a_new_no_behavior_memory_ablation.py",
+  "notes": [
+    "Anew_F3_no_behavior_memory is aligned to the current A_new four-channel advantage canvas.",
+    "The advantage branch keeps free and obstacle unchanged.",
+    "The behavior-memory channels visit_count_log_norm and recent_trajectory_decay are zeroed after canvas construction.",
+    "The structured frontier-block value tree remains enabled and unchanged.",
+    "Under the current schema this tensor operation is equivalent to an occupancy-only advantage canvas.",
+    "Anew_F4_occupancy_only is not kept as a separate formal row, run name, or artifact row.",
+    "No legacy 5-channel frontier raster, frontier_block_area_map, or legacy F artifact is restored.",
+    "Smoke and pilot runs are local checks only, not paper Results evidence."
+  ]
+}
