@@ -270,8 +270,13 @@ def _base_manifest(cfg: ClassicalBaselineConfig, policy_summary: Mapping[str, An
             "logs/final_probe.csv is a non-learning baseline benchmark episode table, "
             "not a neural model final probe."
         ),
-        "legacy_inheritance": "none",
-        "restores_legacy_baselines": False,
+        "legacy_inheritance": "policy_logic_only",
+        "restores_legacy_baselines": True,
+        "legacy_policy_source": "DRL_PF baseline classical_frontier_greedy_v1",
+        "legacy_policy_note": (
+            "BFS is used only to select a reachable frontier target. The next action follows "
+            "the legacy Euclidean-distance/recent-trajectory/visit-count greedy rule, not a BFS path gradient."
+        ),
     }
 
 
@@ -345,6 +350,10 @@ class ClassicalFrontierBenchmark:
             [(int(agent[0]), int(agent[1]))],
             maxlen=self._recent_revisit_horizon,
         )
+        recent_trajectory_world: deque[tuple[int, int]] = deque(
+            [(int(agent[0]), int(agent[1]))],
+            maxlen=max(1, int(self.cfg.trajectory_history_steps)) + 1,
+        )
         stall_streak = 0
         prev_action_idx: int | None = None
         decision_counts: Counter[str] = Counter()
@@ -361,11 +370,15 @@ class ClassicalFrontierBenchmark:
                 break
 
             agent_array_rc = cum_map.world_to_array(agent)
+            recent_trajectory_array = tuple(cum_map.world_to_array(pos) for pos in recent_trajectory_world)
             decision = self.policy.decide(
                 belief_map=cum_map.map,
                 agent_array_rc=agent_array_rc,
                 valid_action_indices=valid_before,
                 semantic_snapshot=shared_snapshot,
+                visit_count=cum_map.visit_count,
+                frontier_u8=cum_map.get_frontier_u8(refresh=False),
+                recent_trajectory_positions=recent_trajectory_array,
                 scan_radius=int(self.cfg.scan_radius),
             )
             decision_counts[str(decision.decision_mode)] += 1
@@ -390,6 +403,7 @@ class ClassicalFrontierBenchmark:
             )
             dr, dc = ACTIONS_8[int(action_idx)]
             agent = (int(agent[0] + dr), int(agent[1] + dc))
+            recent_trajectory_world.append((int(agent[0]), int(agent[1])))
 
             local_snap = obs_model.observe_fast(agent)
             updated, delta_empty, delta_obstacle = cum_map.update(agent, local_snap)
@@ -476,8 +490,12 @@ class ClassicalFrontierBenchmark:
             "done_reason": str(done_reason),
             "invalid_action_count": int(invalid_action_count),
             "collision_count": int(collision_count),
-            "policy_frontier_decision_count": int(decision_counts.get("frontier_greedy", 0)),
-            "policy_fallback_info_gain_count": int(decision_counts.get("immediate_info_gain", 0)),
+            "policy_frontier_decision_count": int(
+                decision_counts.get("frontier_target", 0) + decision_counts.get("frontier_greedy", 0)
+            ),
+            "policy_fallback_info_gain_count": int(
+                decision_counts.get("fallback_information_gain", 0) + decision_counts.get("immediate_info_gain", 0)
+            ),
             "policy_safe_fallback_count": int(decision_counts.get("safe_fallback", 0)),
             "policy_no_valid_action_count": int(decision_counts.get("no_valid_action", 0)),
             **summarize_semantic_records(episode_semantic_records),

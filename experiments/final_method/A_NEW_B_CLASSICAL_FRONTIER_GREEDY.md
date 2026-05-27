@@ -21,26 +21,26 @@ for comparing A_new against a deterministic frontier-based exploration rule.
 - `value_tree_enabled = not_applicable`
 
 The baseline uses the current A_new environment, reward, seed, and metric
-contract. It does not train a model, load a checkpoint, use
-`ExplorationQNetwork`, restore legacy B artifacts, or inherit the old baseline
-framework.
+contract while restoring the legacy `classical_frontier_greedy_v1` policy
+logic from `DRL_PF`. It does not train a model, load a checkpoint, or use
+`ExplorationQNetwork`.
 
 ## Policy Rule
 
 The policy chooses among valid actions using only belief-derived state:
 
-1. Build frontier candidates from the shared semantic snapshot or current
-   belief frontier geometry.
+1. Build frontier candidates from shared semantic frontier-cluster anchors, or
+   fall back to the cumulative frontier cache.
 2. Compute BFS cost from the current pose to reachable frontier anchors over
    known-free belief cells.
-3. Select the lowest-cost reachable frontier target with deterministic
+3. Select the lowest-cost reachable frontier target with legacy deterministic
    tie-breaks.
-4. Move one valid action that reduces BFS cost toward that target, with action
-   ties resolved by `ACTIONS_8` order: N, NE, E, SE, S, SW, W, NW.
+4. Move one valid action chosen by squared Euclidean distance to that target,
+   then recent-trajectory revisit flag, visit count, and fixed `ACTIONS_8`
+   order: N, NE, E, SE, S, SW, W, NW.
 5. If no reachable frontier exists, choose the valid next action with the
-   largest count of currently unknown belief cells in the scan footprint.
-6. If scores still tie at zero, choose the first valid action in the same fixed
-   action order.
+   largest belief-only expected immediate information gain using radar
+   line-of-sight over the current belief.
 
 Policy decision inputs do not include the full map, map generator internals,
 future sensor information, or shortest paths through unknown space. The runner
