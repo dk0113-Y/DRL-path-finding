@@ -23,6 +23,7 @@ experiment_records/**/replay*/
 experiment_records/**/debug*/
 experiment_records/**/profile*/
 experiment_records/final_method/environment_shift_final_probe/
+experiment_records/final_method/a_checkpoint_s2_s3_probe/
 
 
 tmp/

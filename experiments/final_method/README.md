@@ -366,6 +366,42 @@ one scenario-specific run directory per scenario. Each run writes
 `unified_final_probe_summary.csv`, `unified_final_probe_summary.json`, and one
 `final_probe.csv` per requested paper-facing group.
 
+## A Checkpoint S2/S3 Probe
+
+`scripts\run_a_new_a_checkpoint_s2_s3_probe.ps1` is a checkpoint-level
+generalization drift diagnostic for the A/full method. It reruns final probe
+diagnostics for S2 and S3 using the selected A checkpoints only; it is not a
+new main formal result and is intended only to check checkpoint selection
+stability around `last.pt`.
+
+By default, the launcher runs `S2_high_density` and
+`S3_larger_same_density` for `best`, `560000`, and `580000`, with 100 episodes
+per checkpoint/scenario pair. Outputs go under
+`experiment_records\final_method\a_checkpoint_s2_s3_probe\`; smoke outputs go
+under `experiment_records\final_method\a_checkpoint_s2_s3_probe\smoke\`.
+
+DryRun:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_a_checkpoint_s2_s3_probe.ps1 -Device cuda -DryRun
+```
+
+Smoke:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_a_checkpoint_s2_s3_probe.ps1 -Device cpu -Smoke -ContinueOnFailure
+```
+
+Formal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_a_checkpoint_s2_s3_probe.ps1 -Device cuda
+```
+
+Do not commit raw probe outputs from
+`experiment_records\final_method\a_checkpoint_s2_s3_probe\`, `outputs/`,
+`checkpoint_store/`, `checkpoints/`, or checkpoint files.
+
 Do not commit `checkpoint_store/`, `checkpoints/`, `outputs/`, formal or smoke
 raw probe outputs, heavy logs, or `.pt` / `.pth` / `.ckpt` files. After the
 formal environment-shift run finishes, audit and summarize the artifacts first;

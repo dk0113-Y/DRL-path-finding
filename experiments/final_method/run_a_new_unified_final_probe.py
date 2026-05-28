@@ -100,6 +100,7 @@ PREFERRED_EPISODE_FIELDS = (
     "run_stage",
     "checkpoint_used",
     "checkpoint_path",
+    "checkpoint_variant",
     "checkpoint_env_steps",
     "checkpoint_train_episode_idx",
     "episode_index",
@@ -136,6 +137,7 @@ PREFERRED_SUMMARY_FIELDS = (
     "run_stage",
     "checkpoint_used",
     "checkpoint_path",
+    "checkpoint_variant",
     "checkpoint_env_steps",
     "checkpoint_train_episode_idx",
     "episodes",
@@ -380,6 +382,7 @@ def _summary_row(
     run_stage: str,
     checkpoint_used: bool,
     checkpoint_path: str | None,
+    checkpoint_variant: str | None,
     checkpoint_env_steps: int | None,
     checkpoint_train_episode_idx: int | None,
     rows: list[Mapping[str, Any]],
@@ -399,6 +402,7 @@ def _summary_row(
         "run_stage": run_stage,
         "checkpoint_used": bool(checkpoint_used),
         "checkpoint_path": checkpoint_path,
+        "checkpoint_variant": checkpoint_variant,
         "checkpoint_env_steps": checkpoint_env_steps,
         "checkpoint_train_episode_idx": checkpoint_train_episode_idx,
         "episodes": int(episodes),
@@ -428,6 +432,7 @@ def _augment_episode_rows(
     run_stage: str,
     checkpoint_used: bool,
     checkpoint_path: str | None,
+    checkpoint_variant: str | None,
     checkpoint_env_steps: int | None,
     checkpoint_train_episode_idx: int | None,
     seed_base: int,
@@ -443,6 +448,7 @@ def _augment_episode_rows(
             "run_stage": run_stage,
             "checkpoint_used": bool(checkpoint_used),
             "checkpoint_path": checkpoint_path,
+            "checkpoint_variant": checkpoint_variant,
             "checkpoint_env_steps": checkpoint_env_steps,
             "checkpoint_train_episode_idx": checkpoint_train_episode_idx,
             "episode_index": int(source.get("episode_index", index)),
@@ -526,6 +532,7 @@ def _run_b_probe(
             run_stage=run_stage,
             checkpoint_used=False,
             checkpoint_path=None,
+            checkpoint_variant=None,
             checkpoint_env_steps=None,
             checkpoint_train_episode_idx=None,
             seed_base=seed_base,
@@ -543,6 +550,7 @@ def _run_b_probe(
             run_stage=run_stage,
             checkpoint_used=False,
             checkpoint_path=None,
+            checkpoint_variant=None,
             checkpoint_env_steps=None,
             checkpoint_train_episode_idx=None,
             rows=rows,
@@ -589,6 +597,8 @@ def _run_neural_probe(
     spec: NeuralProbeSpec,
     run_dir: Path,
     checkpoint_store_root: Path,
+    a_checkpoint_path: Path | None,
+    checkpoint_variant: str | None,
     scenario: ScenarioConfig,
     groups: tuple[str, ...],
     episodes: int,
@@ -601,6 +611,10 @@ def _run_neural_probe(
     method_dir = run_dir / spec.paper_label
     method_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = (Path(checkpoint_store_root) / spec.checkpoint_relpath).resolve()
+    effective_checkpoint_variant = None
+    if spec.paper_label == "A" and a_checkpoint_path is not None:
+        checkpoint_path = Path(a_checkpoint_path).resolve()
+        effective_checkpoint_variant = checkpoint_variant
     start = time.perf_counter()
     try:
         if not checkpoint_path.exists():
@@ -630,6 +644,7 @@ def _run_neural_probe(
             run_stage=run_stage,
             checkpoint_used=True,
             checkpoint_path=str(checkpoint_path),
+            checkpoint_variant=effective_checkpoint_variant,
             checkpoint_env_steps=checkpoint_env_steps,
             checkpoint_train_episode_idx=checkpoint_train_episode_idx,
             seed_base=seed_base,
@@ -647,6 +662,7 @@ def _run_neural_probe(
             run_stage=run_stage,
             checkpoint_used=True,
             checkpoint_path=str(checkpoint_path),
+            checkpoint_variant=effective_checkpoint_variant,
             checkpoint_env_steps=checkpoint_env_steps,
             checkpoint_train_episode_idx=checkpoint_train_episode_idx,
             rows=rows,
@@ -684,6 +700,7 @@ def _run_neural_probe(
             "internal_label": spec.internal_label,
             "scenario_id": scenario.scenario_id,
             "checkpoint_path": str(checkpoint_path),
+            "checkpoint_variant": effective_checkpoint_variant,
             "error": f"{type(exc).__name__}: {exc}",
         }
         _write_json(method_dir / "failure.json", failure)
@@ -694,6 +711,8 @@ def _run_neural_probe(
 def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
     seed_base = int(args.seed_base) if args.seed_base is not None else _default_seed_base()
     checkpoint_store_root = Path(args.checkpoint_store_root)
+    a_checkpoint_path = Path(args.a_checkpoint_path).resolve() if args.a_checkpoint_path is not None else None
+    source_checkpoint_override = a_checkpoint_path is not None
     scenario = _scenario_from_args(args)
     groups = _parse_groups(args.groups)
     methods: list[dict[str, Any]] = []
@@ -711,15 +730,21 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
             )
             continue
         spec = NEURAL_SPECS_BY_PAPER_LABEL[group]
+        checkpoint_path = (checkpoint_store_root / spec.checkpoint_relpath).resolve()
+        checkpoint_variant = None
+        if spec.paper_label == "A" and a_checkpoint_path is not None:
+            checkpoint_path = a_checkpoint_path
+            checkpoint_variant = args.checkpoint_variant
         methods.append(
             {
                 "label": spec.paper_label,
                 "paper_facing_label": spec.paper_label,
                 "internal_label": spec.internal_label,
                 "checkpoint_used": True,
-                "checkpoint_path": str(checkpoint_store_root / spec.checkpoint_relpath),
+                "checkpoint_path": str(checkpoint_path),
+                "checkpoint_variant": checkpoint_variant,
                 "model_kind": spec.model_kind,
-                "checkpoint_exists": bool((checkpoint_store_root / spec.checkpoint_relpath).exists()),
+                "checkpoint_exists": bool(checkpoint_path.exists()),
             }
         )
     return {
@@ -737,6 +762,9 @@ def _build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "output_root": str(args.output_root),
         "run_id": args.run_id,
         "checkpoint_store_root": str(checkpoint_store_root),
+        "source_checkpoint_override": bool(source_checkpoint_override),
+        "a_checkpoint_path": str(a_checkpoint_path) if a_checkpoint_path is not None else None,
+        "checkpoint_variant": args.checkpoint_variant,
         "groups": list(groups),
         "run_order": list(groups),
         "methods": methods,
@@ -750,6 +778,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed-base", type=int, default=None)
     parser.add_argument("--run-stage", choices=("smoke", "formal"), default=DEFAULT_RUN_STAGE)
     parser.add_argument("--checkpoint-store-root", type=Path, default=DEFAULT_CHECKPOINT_STORE_ROOT)
+    parser.add_argument("--a-checkpoint-path", type=Path, default=None)
+    parser.add_argument("--checkpoint-variant", type=str, default=None)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--run-id", type=str, default=None)
     parser.add_argument("--scenario-id", type=str, default="S0_default_training_matched")
@@ -780,6 +810,8 @@ def main(argv: list[str] | None = None) -> int:
     seed_base = int(plan["seed_base"])
     scenario = _scenario_from_args(args)
     groups = _parse_groups(args.groups)
+    a_checkpoint_path = Path(args.a_checkpoint_path).resolve() if args.a_checkpoint_path is not None else None
+    source_checkpoint_override = a_checkpoint_path is not None
     source_commit = _git_output(["rev-parse", "HEAD"])
     run_dir = _create_run_dir(Path(args.output_root), args.run_id)
     print(f"[unified_final_probe] run_dir: {run_dir}")
@@ -813,6 +845,9 @@ def main(argv: list[str] | None = None) -> int:
             "seed_base": seed_base,
             "seed_start": seed_base,
             "seed_end": seed_base + int(args.episodes) - 1,
+            "source_checkpoint_override": bool(source_checkpoint_override),
+            "a_checkpoint_path": str(a_checkpoint_path) if a_checkpoint_path is not None else None,
+            "checkpoint_variant": args.checkpoint_variant,
             "source_commit": source_commit,
             "runner_entrypoint": RUNNER_ENTRYPOINT,
         },
@@ -836,6 +871,8 @@ def main(argv: list[str] | None = None) -> int:
                 spec=NEURAL_SPECS_BY_PAPER_LABEL[group],
                 run_dir=run_dir,
                 checkpoint_store_root=Path(args.checkpoint_store_root),
+                a_checkpoint_path=a_checkpoint_path,
+                checkpoint_variant=args.checkpoint_variant,
                 scenario=scenario,
                 groups=groups,
                 episodes=int(args.episodes),
@@ -863,6 +900,9 @@ def main(argv: list[str] | None = None) -> int:
             "seed_base": seed_base,
             "seed_start": seed_base,
             "seed_end": seed_base + int(args.episodes) - 1,
+            "source_checkpoint_override": bool(source_checkpoint_override),
+            "a_checkpoint_path": str(a_checkpoint_path) if a_checkpoint_path is not None else None,
+            "checkpoint_variant": args.checkpoint_variant,
             "summary_csv": str(summary_csv),
             "method_summaries": summaries,
         },
