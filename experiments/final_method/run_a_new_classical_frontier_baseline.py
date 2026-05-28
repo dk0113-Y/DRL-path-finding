@@ -75,6 +75,7 @@ PLANNED_ARTIFACTS = (
 
 @dataclass(frozen=True)
 class ClassicalBaselineConfig:
+    scenario_id: str
     run_stage: str
     device: str
     output_root: str
@@ -194,6 +195,12 @@ def build_config(
     run_name: str,
     episodes: int | None,
     seed_base: int | None,
+    scenario_id: str = "S0_default_training_matched",
+    rows: int | None = None,
+    cols: int | None = None,
+    obstacle_ratio: float | None = None,
+    max_episode_steps: int | None = None,
+    coverage_stop_threshold: float | None = None,
 ) -> ClassicalBaselineConfig:
     reference = train_q_agent.TrainConfig()
     resolved_stage = str(run_stage)
@@ -208,19 +215,24 @@ def build_config(
         else int(reference.fixed_final_probe_seed_base)
     )
     return ClassicalBaselineConfig(
+        scenario_id=str(scenario_id),
         run_stage=resolved_stage,
         device=str(device),
         output_root=str(output_root),
         run_name=str(run_name or DEFAULT_RUN_NAME),
         episodes=resolved_episodes,
         seed_base=resolved_seed_base,
-        rows=int(reference.rows),
-        cols=int(reference.cols),
+        rows=int(rows) if rows is not None else int(reference.rows),
+        cols=int(cols) if cols is not None else int(reference.cols),
         obs_size=int(reference.obs_size),
         scan_radius=int(reference.scan_radius),
-        obstacle_ratio=float(reference.obstacle_ratio),
-        max_episode_steps=int(reference.max_episode_steps),
-        coverage_stop_threshold=float(reference.coverage_stop_threshold),
+        obstacle_ratio=float(obstacle_ratio) if obstacle_ratio is not None else float(reference.obstacle_ratio),
+        max_episode_steps=int(max_episode_steps) if max_episode_steps is not None else int(reference.max_episode_steps),
+        coverage_stop_threshold=(
+            float(coverage_stop_threshold)
+            if coverage_stop_threshold is not None
+            else float(reference.coverage_stop_threshold)
+        ),
         trajectory_history_steps=int(reference.trajectory_history_steps),
         reward_info_scale=float(reference.reward_info_scale),
         reward_obstacle_weight=float(reference.reward_obstacle_weight),
@@ -260,6 +272,7 @@ def _base_manifest(cfg: ClassicalBaselineConfig, policy_summary: Mapping[str, An
         "model_class": "not_applicable",
         "uses_exploration_q_network": False,
         "run_stage": cfg.run_stage,
+        "scenario_id": cfg.scenario_id,
         "episodes": int(cfg.episodes),
         "seed_base": int(cfg.seed_base),
         "environment_config": _environment_config(cfg),
@@ -762,6 +775,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--seed-base", type=int, default=None)
     parser.add_argument("--run-name", default=DEFAULT_RUN_NAME)
+    parser.add_argument("--scenario-id", default="S0_default_training_matched")
+    parser.add_argument("--rows", type=int, default=None)
+    parser.add_argument("--cols", type=int, default=None)
+    parser.add_argument("--obstacle-ratio", type=float, default=None)
+    parser.add_argument("--max-episode-steps", type=int, default=None)
+    parser.add_argument("--coverage-stop-threshold", type=float, default=None)
     return parser.parse_args(argv)
 
 
@@ -782,6 +801,18 @@ def build_command(args: argparse.Namespace) -> list[str]:
         command.extend(["--episodes", str(args.episodes)])
     if args.seed_base is not None:
         command.extend(["--seed-base", str(args.seed_base)])
+    if args.scenario_id:
+        command.extend(["--scenario-id", str(args.scenario_id)])
+    if args.rows is not None:
+        command.extend(["--rows", str(args.rows)])
+    if args.cols is not None:
+        command.extend(["--cols", str(args.cols)])
+    if args.obstacle_ratio is not None:
+        command.extend(["--obstacle-ratio", str(args.obstacle_ratio)])
+    if args.max_episode_steps is not None:
+        command.extend(["--max-episode-steps", str(args.max_episode_steps)])
+    if args.coverage_stop_threshold is not None:
+        command.extend(["--coverage-stop-threshold", str(args.coverage_stop_threshold)])
     if bool(args.dry_run):
         command.append("--dry-run")
     return command
@@ -790,12 +821,18 @@ def build_command(args: argparse.Namespace) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     cfg = build_config(
+        scenario_id=args.scenario_id,
         run_stage=args.run_stage,
         device=args.device,
         output_root=args.output_root,
         run_name=args.run_name,
         episodes=args.episodes,
         seed_base=args.seed_base,
+        rows=args.rows,
+        cols=args.cols,
+        obstacle_ratio=args.obstacle_ratio,
+        max_episode_steps=args.max_episode_steps,
+        coverage_stop_threshold=args.coverage_stop_threshold,
     )
     command = build_command(args)
     print(f"[A_new_B] command: {_command_text(command)}", flush=True)

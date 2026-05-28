@@ -22,6 +22,7 @@ experiment_records/**/*.ckpt
 experiment_records/**/replay*/
 experiment_records/**/debug*/
 experiment_records/**/profile*/
+experiment_records/final_method/environment_shift_final_probe/
 
 
 tmp/

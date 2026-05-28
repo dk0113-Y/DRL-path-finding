@@ -313,3 +313,61 @@ train-side-only outputs can support contract-aligned comparisons after artifact
 audit. Paper-facing held-out comparison is recorded by the unified final probe.
 Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, or checkpoint
 files.
+
+## Environment-Shift Final Probe
+
+The environment-shift final probe is a controlled sensitivity check for the
+same trained checkpoints. It does not retrain, change reward logic, change model
+architecture, or change the training loop. The runner only overrides evaluation
+environment fields after loading each checkpoint's `train_config`; checkpoint
+files and training configs are not modified.
+
+Scenario definitions live in
+`experiments/final_method/environment_shift_scenarios.json`:
+
+| Scenario | rows | cols | obstacle_ratio | max_episode_steps | coverage_stop_threshold | seed_base |
+|---|---:|---:|---:|---:|---:|---:|
+| `S1_low_density` | 40 | 60 | 0.10 | 600 | 0.95 | 20271323 |
+| `S2_high_density` | 40 | 60 | 0.30 | 600 | 0.95 | 20271423 |
+| `S3_larger_same_density` | 50 | 70 | 0.20 | 600 | 0.95 | 20271523 |
+
+The default matrix is `S1/S2/S3 x A/B/D/E/R x 100 episodes`. Labels are
+paper-facing labels. Internally, `R` maps to the `R_key` / `Anew_R5`
+checkpoint provenance, and `F` maps to `F_key` if requested, but `F` is not part
+of the default environment-shift matrix.
+
+Dry-run the full matrix:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_environment_shift_final_probe.ps1 -Device cuda -DryRun
+```
+
+Run smoke validation only:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_environment_shift_final_probe.ps1 -Device cpu -Smoke
+```
+
+Smoke runs use 2 episodes per scenario/group and write under
+`experiment_records\final_method\environment_shift_final_probe\smoke\`. Smoke
+and pilot outputs are local execution checks only and must not enter paper
+Results.
+
+Run the formal environment-shift matrix:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_environment_shift_final_probe.ps1 -Device cuda
+```
+
+Formal outputs are written under
+`experiment_records\final_method\environment_shift_final_probe\<run_id>\`, with
+one scenario-specific run directory per scenario. Each run writes
+`run_manifest.json`, `scenario_manifest.json`,
+`unified_final_probe_summary.csv`, `unified_final_probe_summary.json`, and one
+`final_probe.csv` per requested paper-facing group.
+
+Do not commit `checkpoint_store/`, `checkpoints/`, `outputs/`, formal or smoke
+raw probe outputs, heavy logs, or `.pt` / `.pth` / `.ckpt` files. After the
+formal environment-shift run finishes, audit and summarize the artifacts first;
+only then copy curated lightweight table or figure candidates into the paper
+workspace.
