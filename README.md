@@ -11,6 +11,24 @@ reinforcement learning, mobile robot autonomous exploration, path planning, and
 simulation-based evaluation. It is not a product demo, a ROS deployment, or a
 physical-robot validation package.
 
+## Contents
+
+- [Project Overview](#project-overview)
+- [Research Relation](#research-relation)
+- [Problem Formulation](#problem-formulation)
+- [Method Highlights](#method-highlights)
+- [Tech Stack](#tech-stack)
+- [Repository Structure](#repository-structure)
+- [Core Modules](#core-modules)
+- [Training and Evaluation Workflow](#training-and-evaluation-workflow)
+- [Quick Start](#quick-start)
+- [Common Commands](#common-commands)
+- [Experiments and Metrics](#experiments-and-metrics)
+- [Current Status and Limitations](#current-status-and-limitations)
+- [Internship Skill Mapping](#internship-skill-mapping)
+- [Advanced Notes](#advanced-notes)
+- [Repository Hygiene](#repository-hygiene)
+
 ## Project Overview
 
 The project studies the following robot exploration problem:
@@ -203,17 +221,17 @@ Notes:
 
 | Area | Files | Role |
 |---|---|---|
-| Training entrypoint | `train_q_agent.py` | Parses configuration, builds model/collector/replay/learner/evaluator, runs smoke/pilot/formal training, checkpoint selection, and formal artifact writing. |
-| Main agent | `agents/q_value_agent.py` | Defines `ExplorationQNetwork`, `StateTensorAdapter`, greedy action masking, and semantic state tensor construction. |
+| Training entrypoint | `train_q_agent.py` | Parses configuration, builds components, runs training, checkpoint selection, and artifact writing. |
+| Main agent | `agents/q_value_agent.py` | Defines `ExplorationQNetwork`, `StateTensorAdapter`, action masking, and semantic state tensors. |
 | Baseline agent | `agents/local_state_q_network.py` | Defines the local 3-channel DDQN baseline model used by `Anew_C`. |
 | Structural ablation model | `agents/no_dual_state_split_q_network.py` | Defines the no-dual-state-split ablation used by `Anew_E`. |
 | Advantage encoding | `encoders/advantage_encoder.py` | Encodes the 4-channel local canvas into action-conditioned advantage states. |
 | Value encoding | `encoders/value_encoder.py` | Encodes frontier-block value-tree tensors into a state-value representation. |
 | Decision head | `heads/semantic_dueling_head.py` | Combines value and advantage streams into Q values. |
-| Map simulation | `env/block_random_g.py`, `env/agent_version.py`, `env/core_radar.py` | Generates random obstacle maps and computes local radar observations. |
-| Belief and frontier state | `env/core_cummap.py`, `env/shared_semantic_layer.py` | Maintains cumulative belief, coverage, frontier cache, unknown blocks, and frontier clusters. |
-| RL loop | `training/collector.py`, `training/learner.py`, `training/replay_buffer.py`, `training/evaluator.py` | Handles epsilon-greedy rollouts, replay, Double-DQN updates, and greedy evaluation. |
-| Experiment launchers | `experiments/final_method/`, `scripts/` | Provide A_new, B/C baselines, D/E/F ablations, reward ablations, batch launchers, and final probes. |
+| Map simulation | `env/block_random_g.py`, `env/agent_version.py`, `env/core_radar.py` | Generates obstacle maps and local radar observations. |
+| Belief and frontier state | `env/core_cummap.py`, `env/shared_semantic_layer.py` | Maintains belief, coverage, frontier cache, unknown blocks, and frontier clusters. |
+| RL loop | `training/collector.py`, `training/learner.py`, `training/replay_buffer.py`, `training/evaluator.py` | Handles rollouts, replay, Double-DQN updates, and greedy evaluation. |
+| Experiment launchers | `experiments/final_method/`, `scripts/` | Provide A_new, baselines, ablations, batch launchers, and final probes. |
 | Records | `experiment_records/` | Stores curated lightweight experiment records and summary CSV/JSON files. |
 | Demos/tools | `demos/`, `tools/` | Interactive semantic visualization, checks, plotting, export, and artifact utility scripts. |
 
@@ -353,18 +371,18 @@ Limitations:
 
 | Internship skill area | Repository evidence |
 |---|---|
-| Deep Reinforcement Learning | Double-DQN learner in `training/learner.py`, replay and n-step transition code in `training/replay_buffer.py`, epsilon schedule and training loop in `train_q_agent.py`. |
-| Value-based RL / DQN / Double-DQN | `DDQNLearner` computes online argmax actions and target-network Q values; `ExplorationQNetwork` produces masked Q values for 8 actions. |
-| Autonomous exploration | `env/core_cummap.py` maintains cumulative belief and coverage; `env/shared_semantic_layer.py` extracts frontier/unknown semantics; final probes measure coverage and success. |
-| Path planning and frontier baseline | `Anew_B_classical_frontier_greedy` uses reachable frontier targets, BFS cost over known-free cells, and deterministic tie-breaks. |
-| Grid-world simulation | `env/block_random_g.py`, `env/agent_version.py`, and `env/core_radar.py` implement random maps, local observation, and radar-style sensing. |
-| Reward design | `training/rewarding.py` and `TrainConfig` expose information gain, step, revisit, turn, timeout, and terminal reward terms; `Anew_R1`-`Anew_R5` isolate reward terms. |
-| Observation/state representation | A_new uses a 4-channel local canvas plus structured frontier-block value-tree tensors; C baseline uses a 3-channel local belief patch. |
-| Ablation experiment design | D removes value-tree information, E removes dual-state split, F_key removes behavior-memory channels, and R_key removes efficiency penalties. |
+| Deep Reinforcement Learning | Double-DQN learner, replay buffer, n-step transitions, epsilon schedule, and training loop. |
+| Value-based RL / DQN / Double-DQN | `DDQNLearner` computes online argmax actions and target-network Q values. |
+| Autonomous exploration | Belief-map maintenance, frontier/unknown semantics, coverage metrics, and success metrics. |
+| Path planning and frontier baseline | `Anew_B_classical_frontier_greedy` uses reachable frontiers and BFS over known-free cells. |
+| Grid-world simulation | Random obstacle maps, local observation, and radar-style sensing are implemented in `env/`. |
+| Reward design | Information gain, step, revisit, turn, timeout, and terminal reward terms are configurable. |
+| Observation/state representation | A_new uses a 4-channel local canvas plus structured frontier-block value-tree tensors. |
+| Ablation experiment design | D, E, F_key, and R_key isolate value-tree, state-split, behavior-memory, and reward effects. |
 | Baseline comparison | B is a classical non-learning frontier baseline; C is a simpler learning baseline with local state only. |
-| Training/evaluation pipeline | PowerShell and Python launchers support smoke, pilot, formal training, minimum-closure batch, unified final probe, and environment-shift probe. |
-| PyTorch engineering | Encoders, semantic dueling head, target networks, AMP-aware learner paths, and tensor adapters are implemented in PyTorch. |
-| Reproducibility and records | `experiment_records/` stores config snapshots, metric snapshots, train CSVs, benchmark summaries, and fixed-seed probe summaries. |
+| Training/evaluation pipeline | Launchers support smoke, pilot, formal training, batch runs, and final probes. |
+| PyTorch engineering | Encoders, semantic dueling head, target networks, AMP-aware learner paths, and tensor adapters. |
+| Reproducibility and records | Config snapshots, metric snapshots, train CSVs, summaries, and fixed-seed probe records. |
 
 ## Advanced Notes
 
