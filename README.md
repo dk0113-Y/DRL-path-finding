@@ -1,29 +1,378 @@
 # DRL-path-finding
 
-这是一个基于 PyTorch 的二维栅格地图自主探索强化学习工程。当前 `main`
-已经清理为 A_new final 4-channel 主线：advantage 分支只接收局部 4 通道
-canvas，value 分支继续接收由 `SharedSemanticSnapshot` 构造的 structured
-frontier-block value tree。
+Portfolio-oriented research code for deep reinforcement learning based
+autonomous exploration in a 2D grid-world robot simulation. The active branch is
+organized around the A_new final method: a Double-DQN exploration agent that
+uses a local 4-channel action-advantage canvas together with a structured
+frontier-block value tree.
 
-## 当前主线
+This repository is intended to support internship applications in deep
+reinforcement learning, mobile robot autonomous exploration, path planning, and
+simulation-based evaluation. It is not a product demo, a ROS deployment, or a
+physical-robot validation package.
 
-`A_new` 是新的 full_method_main：
+## Project Overview
+
+The project studies the following robot exploration problem:
+
+- A mobile robot starts in an unknown 2D occupancy-grid map.
+- At each step it receives a local radar-style observation and updates a
+  cumulative belief map.
+- The policy selects one of 8 grid actions: N, NE, E, SE, S, SW, W, NW.
+- The episode succeeds when effective map coverage reaches the configured
+  threshold, currently `coverage_stop_threshold = 0.95` for the active formal
+  contract.
+- Training and evaluation track reward, coverage, success rate, episode length,
+  repeat visits, timeout rate, information gain, frontier/value-tree diagnostics,
+  and reproducibility metadata.
+
+The current maintained mainline is `A_new` /
+`final_4ch_no_frontier_raster`. It keeps frontier and unknown-region semantics
+in a structured value branch, while the local action branch uses only occupancy
+and behavior-memory channels.
+
+## Research Relation
+
+This repository is the code and experiment workspace behind the author's
+research direction on frontier-guided DRL end-to-end autonomous exploration. The
+author-provided paper relation is:
+
+- Paper: `基于前沿引导的 DRL 端到端自主探索算法`
+- Role: first author
+- Indexing/status: EI paper, published / electronically available according to
+  the author-provided project background
+
+Important evidence boundaries:
+
+- The paper and repository are related, but this README does not restate the
+  full paper or claim additional unpublished results.
+- `A_new` is the current code mainline in this repository.
+- `experiment_records/final_method/unified_final_probe/` contains the current
+  paper-facing held-out comparison records that are committed as lightweight
+  CSV/JSON artifacts.
+- Smoke and pilot runs are local execution checks only; they should not be
+  treated as paper Results.
+- Historical/internal matrices such as `Anew_B`, `Anew_C`, `Anew_D`, `Anew_E`,
+  `Anew_F3`, and `Anew_R*` are useful for explaining baselines and ablations,
+  but each row has its own evidence boundary.
+
+## Problem Formulation
+
+The environment is a random rectangular-obstacle occupancy grid implemented in
+`env/`. The default formal A_new configuration in `train_q_agent.py` uses:
+
+- Grid size: `rows = 40`, `cols = 60`
+- Obstacle ratio: `0.20`
+- Local sensor radius: `scan_radius = 10`
+- Max episode length: `600`
+- Coverage stop threshold: `0.95`
+- Training budget: `total_env_steps = 650000`
+
+The agent state is built from cumulative belief, not from an oracle full-map
+decision input. The simulator still uses the true grid for environment stepping,
+sensing, termination, and metric calculation.
+
+Reward terms include:
+
+- information gain from newly observed free and obstacle cells
+- step penalty
+- recent-revisit penalty
+- turn penalty
+- timeout penalty
+- terminal success bonus
+
+The active frozen V1 formal defaults include `reward_info_scale = 3.1`,
+`reward_obstacle_weight = 0.2`, `reward_revisit_penalty = 0.12`,
+`reward_turn_penalty_scale = 0.06`, `reward_timeout_penalty = 10.0`,
+`epsilon_end = 0.03`, and `epsilon_decay_steps = 300000`.
+
+## Method Highlights
+
+### A_new Final Method
+
+`A_new` is the active full-method mainline:
 
 - `method_id = A_new`
 - `method_name = final_4ch_no_frontier_raster`
+- `model_class = ExplorationQNetwork`
 - `advantage_canvas_schema = final_4ch_no_frontier_raster`
-- `advantage_canvas_channels = ["free", "obstacle", "visit_count_log_norm", "recent_trajectory_decay"]`
-- `advantage_canvas_channel_count = 4`
-- `frontier_raster_used = false`
 - `value_tree_enabled = true`
 - `value_branch_source = SharedSemanticSnapshot`
 - `value_branch_representation = structured_frontier_block_value_tree`
-- `model_class = ExplorationQNetwork`
 
-## Frozen V1 Formal Defaults
+### Local Advantage Canvas
 
-A_new formal defaults are frozen to the AN_tuned_v1 last.pt-oriented training
-contract used by the current final experiment records and unified final probe.
+`env/advantage_state_builder.py` builds the final 4-channel local canvas:
+
+1. `free`
+2. `obstacle`
+3. `visit_count_log_norm`
+4. `recent_trajectory_decay`
+
+The current advantage branch intentionally does not use a frontier raster
+channel.
+
+### Frontier-Guided Value Tree
+
+`env/shared_semantic_layer.py` extracts frontier/unknown-region semantics:
+
+- `UnknownBlock`
+- `FrontierCluster`
+- `SupportGeometry`
+
+`env/value_state_builder.py` packs these semantics into structured value-tree
+tensors. Block features include `block_area_ratio` and
+`frontier_cluster_count`; entry features include relative direction, entry
+width, and support-obstacle-density cues.
+
+### Dueling Q Network
+
+`agents/q_value_agent.py` defines `ExplorationQNetwork`:
+
+- `AdvantageCanvasEncoder` encodes local action-conditioned features.
+- `ValueTreeEncoder` encodes structured frontier-block context.
+- `SemanticDuelingHead` combines `V(s)` and `A(s,a)` into Q values.
+
+`training/learner.py` implements a Double-DQN learner with hard target-network
+sync, replay sampling, n-step targets through the replay pipeline, smooth L1 TD
+loss, target masking, and optional CUDA AMP paths.
+
+## Tech Stack
+
+- Python
+- PyTorch
+- NumPy
+- Matplotlib / PIL for plotting and artifact export tools
+- PowerShell launchers for Windows experiment orchestration
+- CSV/JSON experiment records for lightweight reproducibility artifacts
+
+There is no package installer or dependency lock file in the current repository.
+Install the runtime dependencies explicitly in your own Python environment.
+
+## Repository Structure
+
+```text
+.
+|-- README.md
+|-- train_q_agent.py
+|-- agents/
+|   |-- q_value_agent.py
+|   |-- local_state_q_network.py
+|   `-- no_dual_state_split_q_network.py
+|-- encoders/
+|   |-- advantage_encoder.py
+|   |-- value_encoder.py
+|   |-- local_encoder.py
+|   `-- global_encoder.py
+|-- env/
+|   |-- block_random_g.py
+|   |-- agent_version.py
+|   |-- core_cummap.py
+|   |-- core_radar.py
+|   |-- advantage_state_builder.py
+|   |-- shared_semantic_layer.py
+|   `-- value_state_builder.py
+|-- heads/
+|   `-- semantic_dueling_head.py
+|-- training/
+|   |-- collector.py
+|   |-- learner.py
+|   |-- replay_buffer.py
+|   |-- evaluator.py
+|   |-- checkpointing.py
+|   |-- formal_artifacts.py
+|   `-- plotting.py
+|-- experiments/
+|   `-- final_method/
+|-- experiment_records/
+|-- scripts/
+|-- docs/
+|-- demos/
+`-- tools/
+```
+
+Notes:
+
+- Active baselines and ablations live under `experiments/final_method/`.
+- The local worktree may contain ignored `outputs/`, `__pycache__/`, and legacy
+  cache folders. They are not part of the tracked code surface.
+- Checkpoints and raw run directories are intentionally excluded from version
+  control.
+
+## Core Modules
+
+| Area | Files | Role |
+|---|---|---|
+| Training entrypoint | `train_q_agent.py` | Parses configuration, builds model/collector/replay/learner/evaluator, runs smoke/pilot/formal training, checkpoint selection, and formal artifact writing. |
+| Main agent | `agents/q_value_agent.py` | Defines `ExplorationQNetwork`, `StateTensorAdapter`, greedy action masking, and semantic state tensor construction. |
+| Baseline agent | `agents/local_state_q_network.py` | Defines the local 3-channel DDQN baseline model used by `Anew_C`. |
+| Structural ablation model | `agents/no_dual_state_split_q_network.py` | Defines the no-dual-state-split ablation used by `Anew_E`. |
+| Advantage encoding | `encoders/advantage_encoder.py` | Encodes the 4-channel local canvas into action-conditioned advantage states. |
+| Value encoding | `encoders/value_encoder.py` | Encodes frontier-block value-tree tensors into a state-value representation. |
+| Decision head | `heads/semantic_dueling_head.py` | Combines value and advantage streams into Q values. |
+| Map simulation | `env/block_random_g.py`, `env/agent_version.py`, `env/core_radar.py` | Generates random obstacle maps and computes local radar observations. |
+| Belief and frontier state | `env/core_cummap.py`, `env/shared_semantic_layer.py` | Maintains cumulative belief, coverage, frontier cache, unknown blocks, and frontier clusters. |
+| RL loop | `training/collector.py`, `training/learner.py`, `training/replay_buffer.py`, `training/evaluator.py` | Handles epsilon-greedy rollouts, replay, Double-DQN updates, and greedy evaluation. |
+| Experiment launchers | `experiments/final_method/`, `scripts/` | Provide A_new, B/C baselines, D/E/F ablations, reward ablations, batch launchers, and final probes. |
+| Records | `experiment_records/` | Stores curated lightweight experiment records and summary CSV/JSON files. |
+| Demos/tools | `demos/`, `tools/` | Interactive semantic visualization, checks, plotting, export, and artifact utility scripts. |
+
+## Training and Evaluation Workflow
+
+Typical workflow:
+
+1. Run a dry-run command to print the resolved experiment contract.
+2. Run a CPU smoke check for fast local validation.
+3. Run formal training on CUDA when a GPU training environment is available.
+4. Archive only lightweight logs/CSV/JSON records.
+5. Keep checkpoints in local `checkpoint_store/` or `outputs/`; do not commit
+   `.pt`, `.pth`, or `.ckpt` files.
+6. Run unified final probe only after the required checkpoints are present.
+
+The active training loop supports:
+
+- Double-DQN target computation
+- target-network hard sync
+- replay buffer and prioritized priority updates
+- n-step transition builder
+- epsilon decay
+- fixed-seed final probes
+- post-hoc formal checkpoint selection records
+
+## Quick Start
+
+From the repository root:
+
+```powershell
+python --version
+python agents\q_value_agent.py
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu -DryRun
+```
+
+The first command checks your Python environment. The second runs the semantic
+network smoke test embedded in `agents/q_value_agent.py`. The third prints the
+A_new smoke contract without starting training.
+
+If imports fail, install the runtime libraries used by the codebase, especially
+PyTorch, NumPy, Matplotlib, and Pillow. This repository currently does not
+provide a `requirements.txt`.
+
+## Common Commands
+
+A_new dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu -DryRun
+```
+
+A_new smoke:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu
+```
+
+A_new formal training:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage formal -Device cuda
+```
+
+Minimum-closure batch dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch.ps1 -RunStage formal -Device cuda -DryRun
+```
+
+Unified final probe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_unified_final_probe.ps1 -Device cuda
+```
+
+Environment-shift probe dry-run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_a_new_environment_shift_final_probe.ps1 -Device cuda -DryRun
+```
+
+## Experiments and Metrics
+
+The current held-out comparison record is:
+
+```text
+experiment_records/final_method/unified_final_probe/unified_final_probe_20260527_103303/
+```
+
+It uses `episodes = 100` and the fixed seed block
+`20261323` through `20261422`. The committed summary reports:
+
+| Label | Method | Coverage | Success rate | Episode length | Timeout rate |
+|---|---|---:|---:|---:|---:|
+| B | `Anew_B_classical_frontier_greedy` | 0.642881 | 0.21 | 515.59 | 0.79 |
+| A | `AN` / `final_4ch_no_frontier_raster` | 0.937350 | 0.92 | 291.98 | 0.08 |
+| C | `Anew_C_local_state_ddqn` | 0.496706 | 0.00 | 600.00 | 1.00 |
+| D | `Anew_D_no_value_tree` | 0.931999 | 0.82 | 323.52 | 0.18 |
+| E | `Anew_E_no_dual_state_split` | 0.925461 | 0.81 | 362.62 | 0.19 |
+| F_key | `Anew_F3_no_behavior_memory` | 0.587208 | 0.00 | 600.00 | 1.00 |
+| R_key | `Anew_R5` / `no_efficiency_penalties` | 0.927040 | 0.86 | 333.37 | 0.14 |
+
+Interpretation boundary:
+
+- These are repository experiment records, not newly rerun results.
+- Some summary rows reference checkpoint paths from the original training
+  machine; the checkpoint binaries are intentionally not committed.
+- The table supports a portfolio narrative about controlled baselines and
+  ablations, but it should not be overstated as physical-robot validation or
+  broad DRL superiority.
+
+## Current Status and Limitations
+
+Current status:
+
+- Active mainline is A_new final 4-channel no-frontier-raster.
+- B classical frontier greedy, C local-state DDQN, D no-value-tree, E
+  no-dual-state-split, F_key no-behavior-memory, and R_key reward-ablation rows
+  have maintained launchers or records under `experiments/final_method/` and
+  `experiment_records/`.
+- Lightweight experiment records are committed.
+- Raw outputs and checkpoint files are ignored by `.gitignore`.
+
+Limitations:
+
+- This is a 2D grid-world simulation repository, not a ROS stack.
+- No physical robot validation is provided here.
+- No trained checkpoint binaries are committed, so checkpoint-dependent final
+  probes require the user's local `checkpoint_store/`.
+- `outputs/` may exist locally with smoke artifacts; these are ignored local
+  files and should not be pushed.
+- Some historical records contain absolute paths from the original training
+  machine. They are useful for provenance but should be sanitized if a fully
+  public release requires path privacy.
+
+## Internship Skill Mapping
+
+| Internship skill area | Repository evidence |
+|---|---|
+| Deep Reinforcement Learning | Double-DQN learner in `training/learner.py`, replay and n-step transition code in `training/replay_buffer.py`, epsilon schedule and training loop in `train_q_agent.py`. |
+| Value-based RL / DQN / Double-DQN | `DDQNLearner` computes online argmax actions and target-network Q values; `ExplorationQNetwork` produces masked Q values for 8 actions. |
+| Autonomous exploration | `env/core_cummap.py` maintains cumulative belief and coverage; `env/shared_semantic_layer.py` extracts frontier/unknown semantics; final probes measure coverage and success. |
+| Path planning and frontier baseline | `Anew_B_classical_frontier_greedy` uses reachable frontier targets, BFS cost over known-free cells, and deterministic tie-breaks. |
+| Grid-world simulation | `env/block_random_g.py`, `env/agent_version.py`, and `env/core_radar.py` implement random maps, local observation, and radar-style sensing. |
+| Reward design | `training/rewarding.py` and `TrainConfig` expose information gain, step, revisit, turn, timeout, and terminal reward terms; `Anew_R1`-`Anew_R5` isolate reward terms. |
+| Observation/state representation | A_new uses a 4-channel local canvas plus structured frontier-block value-tree tensors; C baseline uses a 3-channel local belief patch. |
+| Ablation experiment design | D removes value-tree information, E removes dual-state split, F_key removes behavior-memory channels, and R_key removes efficiency penalties. |
+| Baseline comparison | B is a classical non-learning frontier baseline; C is a simpler learning baseline with local state only. |
+| Training/evaluation pipeline | PowerShell and Python launchers support smoke, pilot, formal training, minimum-closure batch, unified final probe, and environment-shift probe. |
+| PyTorch engineering | Encoders, semantic dueling head, target networks, AMP-aware learner paths, and tensor adapters are implemented in PyTorch. |
+| Reproducibility and records | `experiment_records/` stores config snapshots, metric snapshots, train CSVs, benchmark summaries, and fixed-seed probe summaries. |
+
+## Advanced Notes
+
+### Active A_new Contract
+
+Frozen V1 formal defaults are pinned to the AN_tuned_v1 last.pt-oriented
+training contract used by the current final experiment records and unified final
+probe:
 
 - `reward_info_scale = 3.1`
 - `reward_obstacle_weight = 0.2`
@@ -35,296 +384,44 @@ contract used by the current final experiment records and unified final probe.
 - `reward_revisit_penalty = 0.12`
 - `reward_turn_penalty_scale = 0.06`
 - `reward_timeout_penalty = 10.0`
-- `train_side_only_tuning = true`
+- `train_side_only_tuning = true` for the minimum-closure comparison rows
 
-The method contract remains A_new: final 4-channel no-frontier-raster advantage
-canvas, structured value tree from `SharedSemanticSnapshot`, and
-`ExplorationQNetwork`. Legacy 5-channel frontier raster inputs are not restored.
+### Internal Experiment Matrix
 
-Advantage canvas 不再包含 frontier raster。frontier、unknown block 和 frontier
-cluster 语义仍保留在 shared semantic layer 与 value tree 中，用于 value branch。
+Supported or recorded A_new-aligned rows:
 
-旧 A/F1/F6/F7/ABCDEFR 实验入口、旧 frontier-raster diagnostics 和旧结果记录已从
-active `main` 移除。远端仓库只维护 `main` 分支；历史清理状态保留为 tag：
+- `A_new`: final 4-channel no-frontier-raster method with structured value tree.
+- `Anew_B`: classical frontier greedy, non-learning baseline, CPU benchmark.
+- `Anew_C`: local-state DDQN learning baseline.
+- `Anew_D`: no structured value tree.
+- `Anew_E`: no dual-state split / flattened value-injected Q ablation.
+- `Anew_F3`: no behavior-memory channels in the advantage canvas.
+- `Anew_R1`: no step penalty.
+- `Anew_R2`: no revisit penalty.
+- `Anew_R3`: no turn penalty.
+- `Anew_R4`: no timeout penalty.
+- `Anew_R5`: no efficiency penalties, used as `R_key`.
 
-- tag: `legacy-pre-a-new-cleanup-20260525`
+Legacy A/F1/F6/F7/ABCDEFR launchers and frontier-raster diagnostics are not
+active workflow entries on `main`. Historical cleanup state is preserved by the
+tag:
 
-## 代码结构
-
-- `train_q_agent.py`: 主训练入口，负责配置、系统组装、训练循环、checkpoint
-  selection、final probe 和 formal artifacts。
-- `agents/q_value_agent.py`: `ExplorationQNetwork` 与 `StateTensorAdapter`。
-- `env/advantage_state_builder.py`: A_new final 4-channel advantage canvas。
-- `env/shared_semantic_layer.py`: shared semantic snapshot，包括 frontier / unknown
-  block / cluster 构造逻辑。
-- `env/value_state_builder.py`: structured frontier-block value tree。
-- `experiments/final_method/`: A_new final method, Anew_R1-Anew_R5 reward
-  ablations, Anew_B classical frontier greedy baseline, Anew_C local-state DDQN
-  learning baseline, Anew_D no-value-tree, and Anew_F3 no-behavior-memory
-  launchers.
-
-## 运行方式
-
-A_new smoke dry-run：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu -DryRun
+```text
+legacy-pre-a-new-cleanup-20260525
 ```
-
-A_new smoke：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage smoke -Device cpu
-```
-
-A_new formal：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_final_4ch.ps1 -RunStage formal -Device cuda
-```
-
-Anew_R1-Anew_R5 reward ablation dry-run：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_reward_ablations.ps1 -RunStage smoke -Device cpu -DryRun
-```
-
-Anew_R1-Anew_R5 formal：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_reward_ablations.ps1 -RunStage formal -Device cuda -NoCopyCheckpoints
-```
-
-`Anew_R1` through `Anew_R5` all bind to the A_new final 4-channel schema. Their
-reward overrides are:
-
-- `Anew_R1`: `reward_step_penalty = 0.0`
-- `Anew_R2`: `reward_revisit_penalty = 0.0`
-- `Anew_R3`: `reward_turn_penalty_scale = 0.0`
-- `Anew_R4`: `reward_timeout_penalty = 0.0`
-- `Anew_R5`: all four efficiency penalties above set to `0.0`
-
-## Anew_B Classical Frontier Greedy Baseline
-
-`Anew_B_classical_frontier_greedy` is the A_new-aligned B group classical
-frontier greedy baseline. It is a traditional non-learning baseline: it does
-not train a model, does not load a checkpoint, and does not use
-`ExplorationQNetwork`.
-
-The policy restores the legacy `classical_frontier_greedy_v1` decision logic
-from `DRL_PF` while running inside the current A_new environment and metric
-contract. It uses only belief-derived frontier/shared-semantic state, current
-pose, valid actions, visit counts, recent trajectory, and frontier cache. BFS is
-used only to choose the reachable frontier target; the next action follows the
-legacy squared-Euclidean-distance, recent-revisit, visit-count, fixed-action
-tie-break. If no reachable frontier exists, it falls back to belief-only radar
-line-of-sight immediate information gain.
-
-The runner keeps the current A_new environment, reward, seed, and metric
-contract, including the default reward parameters. It restores legacy B policy
-logic only; it does not restore legacy B artifacts, old checkpoint flows,
-`baselines/`, or `experiments/ablations/`. Simulator internals may use the map
-for stepping, sensing, termination, and metrics, but the policy decision path
-does not receive the full map.
-
-Smoke and pilot runs are local checks only, not paper Results. A B formal
-benchmark can support a classical baseline comparison after artifact review, but
-it cannot replace D/F/R internal ablations or explain neural representation
-contributions.
-
-Anew_B dry-run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu -DryRun
-```
-
-Anew_B smoke:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage smoke -Device cpu
-```
-
-Anew_B formal benchmark:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_classical_frontier_baseline.ps1 -RunStage formal -Device cpu
-```
-
-## Anew_C Local-State DDQN Learning Baseline
-
-`Anew_C_local_state_ddqn` is the A_new-aligned C group learning baseline. It is a
-simpler local-state DDQN comparison row, not an A_new ablation and not a
-replacement for B/D/F/R.
-
-- `experiment_id = Anew_C`
-- `method_id = Anew_C_local_state_ddqn`
-- `method_name = local_state_ddqn`
-- `baseline_group = learning`
-- `baseline_type = learning_ddqn`
-- `model_class = LocalStateQNetwork`
-- local input: `known_free`, `known_obstacle`, `unknown`
-- local patch size: `2 * scan_radius + 1`, currently `21`
-- input source: cumulative belief patch around the current agent pose
-- no structured value tree, no SharedSemanticSnapshot value branch, no behavior-memory channels, no frontier raster
-- no full map or ground-truth map is used for model decisions
-- no legacy C artifact, legacy `baselines/`, or `experiments/ablations/` framework is restored
-
-C uses the current A_new environment, reward, seed, and train-side-only metric
-contract, including the matched default reward/training parameters and
-`train_side_only_tuning = true`. Smoke and pilot runs are local checks only, not
-paper Results. A formal train-side-only C run can support a simpler learning
-baseline comparison only after its artifact package is audited.
-
-Anew_C dry-run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_local_state_ddqn_baseline.ps1 -RunStage formal -Device cuda -DryRun
-```
-
-Anew_C smoke:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_local_state_ddqn_baseline.ps1 -RunStage smoke -Device cpu
-```
-
-Anew_C formal train-side-only:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_local_state_ddqn_baseline.ps1 -RunStage formal -Device cuda
-```
-
-## Anew_D No-Value-Tree Structural Ablation
-
-`Anew_D_no_value_tree` is the A_new-aligned D group implementation from the
-planned matrix. It tests the overall contribution of the structured
-frontier-block value tree while preserving the current A_new local advantage
-canvas:
-
-- `method_id = Anew_D_no_value_tree`
-- `method_name = no_value_tree`
-- `ablation_group = structural`
-- `ablation_name = no_value_tree`
-- `advantage_canvas_schema = final_4ch_no_frontier_raster`
-- `advantage_canvas_channel_count = 4`
-- `frontier_raster_used = false`
-- `value_tree_enabled = false`
-- `value_replacement_strategy = zero_value_state`
-- `reward_override = {}`
-- `train_side_only_tuning = true` by default
-
-This row does not restore the legacy 5-channel advantage canvas, does not
-restore `frontier_block_area_map`, and does not inherit any legacy D artifacts.
-It uses the current A_new matched default training parameters. Smoke and pilot
-runs are local checks only, not paper Results. Formal train-side-only outputs can
-be compared to the current A_new train-side contract. Paper-facing held-out
-comparison is recorded by the unified final probe under
-`experiment_records/final_method/unified_final_probe/`.
-
-Anew_D dry-run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage formal -Device cuda -DryRun
-```
-
-Anew_D smoke:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage smoke -Device cpu
-```
-
-Anew_D formal train-side-only:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_value_tree_ablation.ps1 -RunStage formal -Device cuda
-```
-
-## Anew_F3 No-Behavior-Memory F_key Ablation
-
-`Anew_F3_no_behavior_memory` is the A_new-aligned F_key input-state ablation. It
-keeps the current A_new 4-channel no-frontier-raster advantage canvas schema,
-retains `free` and `obstacle`, and zeros the behavior-memory channels
-`visit_count_log_norm` and `recent_trajectory_decay`.
-
-- `experiment_id = Anew_F`
-- `method_id = Anew_F3_no_behavior_memory`
-- `method_name = no_behavior_memory`
-- `ablation_group = input_state`
-- `channel_ablation = no_behavior_memory`
-- `zeroed_advantage_channels = ["visit_count_log_norm", "recent_trajectory_decay"]`
-- `advantage_canvas_schema = final_4ch_no_frontier_raster`
-- `advantage_canvas_channel_count = 4`
-- `frontier_raster_used = false`
-- `value_tree_enabled = true`
-- `value_tree_unchanged = true`
-- `reward_override = {}`
-- `train_side_only_tuning = true` by current default
-
-Under the current schema, this is equivalent to an occupancy-only advantage
-canvas, so `Anew_F4_occupancy_only` is only an alias-level explanation and is not
-kept as a separate formal row, run name, or artifact row. This row does not
-restore legacy 5-channel inputs, does not restore `frontier_block_area_map`, and
-does not inherit legacy F artifacts. It keeps the current A_new matched default
-training parameters and does not change reward defaults.
-
-Smoke and pilot runs are local checks only, not paper Results. Formal
-train-side-only outputs can be used for contract-aligned comparison against the
-current A_new train-side-only runs. Paper-facing held-out comparison is recorded
-by the unified final probe under
-`experiment_records/final_method/unified_final_probe/`.
-
-Anew_F3 dry-run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda -DryRun
-```
-
-Anew_F3 smoke:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage smoke -Device cpu
-```
-
-Anew_F3 formal train-side-only:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_no_behavior_memory_ablation.ps1 -RunStage formal -Device cuda
-```
-
-## A_new Minimum-Closure Batch
-
-`scripts/run_a_new_minimum_closure_batch.ps1` is a batch orchestration launcher
-for the staged minimum-closure train-side experiments under the frozen V1 formal
-defaults.
-
-Default formal run set:
-
-- `Anew_C_local_state_ddqn`
-- `Anew_D_no_value_tree`
-- `Anew_E_no_dual_state_split`
-- `Anew_F3_no_behavior_memory` as `F_key`
-- `Anew_R5` as `R_key` / `no_efficiency_penalties`
-
-The batch follows the current A_new default training configuration at execution
-time and does not hardcode final training parameter values. The current records
-use the frozen V1 formal defaults above.
-
-The default run set does not include `A_new`, because A_new is tuned separately.
-It also does not include `Anew_B_classical_frontier_greedy`; B is an optional CPU
-non-learning benchmark available with `-IncludeB` or as a separate run. Use
-`-IncludeAllRewardAblations` only when running the full R1-R5 reward-analysis
-enhancement.
-
-Minimum-closure dry-run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_a_new_minimum_closure_batch.ps1 -RunStage formal -Device cuda -DryRun
-```
-
-Smoke and pilot runs are local checks only, not paper Results. Paper-facing
-held-out comparison is provided by the unified final probe records under
-`experiment_records/final_method/unified_final_probe/`.
 
 ## Repository Hygiene
 
-Do not commit `outputs/`, `checkpoint_store/`, `checkpoints/`, or checkpoint files
-such as `.pt`, `.pth`, and `.ckpt`. Smoke outputs are local artifacts only.
+Do not commit:
+
+- `outputs/`
+- `checkpoint_store/`
+- `checkpoints/`
+- `.pt`, `.pth`, `.ckpt`
+- replay buffers
+- profiling/debug dumps
+- generated cache files such as `__pycache__/`
+
+Before publishing a public portfolio version, review committed experiment
+records for absolute local paths and decide whether to sanitize them while
+preserving reproducibility context.
