@@ -197,6 +197,19 @@ experiment_records/final_method/unified_final_probe/
 
 ## 输入与输出
 
+### 在线探索流程论文素材
+
+可从同一次确定性 rollout 导出局部观测、合法动作选择、累计 belief 更新和环境执行四张独立素材：
+
+```powershell
+python tools\export_architecture_pictures.py --mode online-workflow-assets `
+  --output-dir tmp_plot_smoke\online_workflow_assets `
+  --seed 0 --rows 40 --cols 60 --obstacle-ratio 0.20 `
+  --obs-size 6 --scan-radius 10 --method-step 8 --dpi 240
+```
+
+默认输出高分辨率 PNG 和一致性 manifest；添加 `--include-svg` 可同时导出 SVG。素材只显示局部观测与累计 belief，不会把真值地图画成策略输入。
+
 ### 输入
 
 - 随机矩形障碍地图及 episode seed

@@ -140,6 +140,7 @@ class MethodFigureAssets:
     step: int
     action_index: int
     action_key: str
+    valid_action_indices: tuple[int, ...]
     trajectory_display_world: np.ndarray | None
     local_observation: Snapshot
     belief_before_update: Snapshot
@@ -314,6 +315,7 @@ def _run_deterministic_rollout_with_method_assets(
     method_after_update: Snapshot | None = None
     method_action_index: int | None = None
     method_action_key: str | None = None
+    method_valid_action_indices: tuple[int, ...] | None = None
 
     for step_idx in range(1, rollout_horizon + 1):
         planned_key = FIXED_ACTION_PREFERENCES[(step_idx - 1) % len(FIXED_ACTION_PREFERENCES)]
@@ -353,6 +355,7 @@ def _run_deterministic_rollout_with_method_assets(
             )
             method_action_index = int(chosen_action)
             method_action_key = ACTION_TO_KEY[chosen_action]
+            method_valid_action_indices = tuple(int(action_idx) for action_idx in valid_actions)
 
         dr, dc = ACTIONS_8[chosen_action]
         agent_state = (int(agent_state[0] + dr), int(agent_state[1] + dc))
@@ -396,6 +399,7 @@ def _run_deterministic_rollout_with_method_assets(
             or method_after_update is None
             or method_action_index is None
             or method_action_key is None
+            or method_valid_action_indices is None
         ):
             raise RuntimeError(f"missing before/after snapshots for method asset step {method_asset_step}")
         if trajectory_visual_step is not None and trajectory_display_world is None:
@@ -404,6 +408,7 @@ def _run_deterministic_rollout_with_method_assets(
             step=int(method_asset_step),
             action_index=int(method_action_index),
             action_key=str(method_action_key),
+            valid_action_indices=tuple(method_valid_action_indices),
             trajectory_display_world=trajectory_display_world,
             local_observation=method_after_update,
             belief_before_update=method_before_update,
@@ -1234,9 +1239,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Export architecture or method-figure static assets.")
     parser.add_argument(
         "--mode",
-        choices=("legacy", "method-assets"),
+        choices=("legacy", "method-assets", "online-workflow-assets"),
         default="legacy",
-        help="legacy keeps the old multi-picture export; method-assets exports paper-ready before/after belief assets.",
+        help=(
+            "legacy keeps the old multi-picture export; method-assets exports paper-ready before/after belief "
+            "assets; online-workflow-assets exports the four online decision and environment interaction assets."
+        ),
     )
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "run_picture")
     parser.add_argument("--seed", type=int, default=0)
@@ -1251,21 +1259,26 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--method-step",
         type=int,
         default=None,
-        help="Target step used by --mode method-assets. Defaults to --step-late.",
+        help="Target step used by method-assets and online-workflow-assets. Defaults to --step-late.",
     )
     parser.add_argument(
         "--forced-method-action",
         type=_parse_action_key_arg,
         default=None,
-        help="Force the specified key action only at --method-step for --mode method-assets.",
+        help="Force the specified key action only at --method-step for method-related export modes.",
     )
     parser.add_argument(
         "--trajectory-visual-step",
         type=int,
         default=None,
-        help="Truncate only the rendered trajectory to this rollout step for --mode method-assets.",
+        help="Truncate only the rendered trajectory to this rollout step for method-related export modes.",
     )
     parser.add_argument("--dpi", type=int, default=240)
+    parser.add_argument(
+        "--include-svg",
+        action="store_true",
+        help="Also export SVG copies in online-workflow-assets mode.",
+    )
     parser.add_argument(
         "--hide-local-scan-circle",
         dest="show_local_scan_circle",
@@ -1325,6 +1338,30 @@ def cli_main() -> None:
         return
 
     method_step = int(config.step_late if args.method_step is None else args.method_step)
+    if args.mode == "online-workflow-assets":
+        from tools.export_online_workflow_assets import export_online_workflow_assets
+
+        result = export_online_workflow_assets(
+            args.output_dir,
+            config=config,
+            step=method_step,
+            forced_method_action=args.forced_method_action,
+            trajectory_visual_step=args.trajectory_visual_step,
+            include_svg=bool(args.include_svg),
+        )
+        print(f"mode={args.mode}")
+        print(f"seed={config.seed}")
+        print(f"method_asset_step={method_step}")
+        print(f"forced_method_action={args.forced_method_action or ''}")
+        print(
+            "trajectory_visual_step="
+            f"{args.trajectory_visual_step if args.trajectory_visual_step is not None else ''}"
+        )
+        for name, output in result["files"].items():
+            print(f"{name}={_format_output_path(output)}")
+        print(f"manifest={_format_output_path(result['manifest_path'])}")
+        return
+
     outputs = export_method_figure_assets(
         args.output_dir,
         config=config,
