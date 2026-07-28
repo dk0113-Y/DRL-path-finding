@@ -1,6 +1,24 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Release-VisioComObject {
+    [CmdletBinding()]
+    param(
+        $ComObject
+    )
+
+    if ($null -eq $ComObject) {
+        return
+    }
+    try {
+        if ([Runtime.InteropServices.Marshal]::IsComObject($ComObject)) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($ComObject)
+        }
+    }
+    catch {
+    }
+}
+
 function ConvertTo-VisioRgbFormula {
     [CmdletBinding()]
     param(
@@ -143,11 +161,17 @@ function Start-VisioSession {
 
     $application = $null
     try {
-        $application = New-Object -ComObject Visio.Application
-        $application.Visible = [bool]$Visible
+        # InvisibleApp creates an isolated background Visio process instead of
+        # attaching automation to a document the user may already have open.
+        $progId = if ($Visible) { "Visio.Application" } else { "Visio.InvisibleApp" }
+        $application = New-Object -ComObject $progId
+        if ($Visible) {
+            $application.Visible = $true
+        }
         $application.AlertResponse = 7
         return [pscustomobject]@{
             Application = $application
+            ProgId = $progId
         }
     }
     catch {
@@ -157,7 +181,7 @@ function Start-VisioSession {
             }
             catch {
             }
-            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($application)
+            Release-VisioComObject -ComObject $application
         }
         throw "Unable to start Microsoft Visio through COM automation: $($_.Exception.Message)"
     }
@@ -173,23 +197,29 @@ function Stop-VisioSession {
         return
     }
     $application = $Session.Application
+    $documents = $null
     try {
         if ($null -ne $application) {
-            while ([int]$application.Documents.Count -gt 0) {
+            $documents = $application.Documents
+            while ([int]$documents.Count -gt 0) {
+                $document = $null
                 try {
-                    $application.Documents.Item(1).Close()
+                    $document = $documents.Item(1)
+                    $document.Close()
                 }
                 catch {
                     break
+                }
+                finally {
+                    Release-VisioComObject -ComObject $document
                 }
             }
             $application.Quit()
         }
     }
     finally {
-        if ($null -ne $application) {
-            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($application)
-        }
+        Release-VisioComObject -ComObject $documents
+        Release-VisioComObject -ComObject $application
         $Session.Application = $null
         [GC]::Collect()
         [GC]::WaitForPendingFinalizers()
@@ -218,6 +248,371 @@ function New-VisioDocumentPage {
     return [pscustomobject]@{
         Document = $document
         Page = $page
+    }
+}
+
+function Test-VisioFileLocked {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open(
+            $Path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None
+        )
+        return $false
+    }
+    catch {
+        return $true
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function Resolve-VisioOutputPair {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VsdxPath,
+        [Parameter(Mandatory = $true)]
+        [string]$PngPath
+    )
+
+    $lockedPaths = @(
+        @($VsdxPath, $PngPath) |
+            Where-Object { Test-VisioFileLocked -Path $_ }
+    )
+    if ($lockedPaths.Count -gt 0) {
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $vsdxDirectory = Split-Path -Parent $VsdxPath
+        $pngDirectory = Split-Path -Parent $PngPath
+        $vsdxName = [IO.Path]::GetFileNameWithoutExtension($VsdxPath)
+        $pngName = [IO.Path]::GetFileNameWithoutExtension($PngPath)
+        return [pscustomobject]@{
+            VsdxPath = Join-Path $vsdxDirectory "${vsdxName}_$timestamp.vsdx"
+            PngPath = Join-Path $pngDirectory "${pngName}_$timestamp.png"
+            UsedTimestampFallback = $true
+            LockedPaths = @($lockedPaths)
+        }
+    }
+
+    foreach ($path in @($VsdxPath, $PngPath)) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+    return [pscustomobject]@{
+        VsdxPath = $VsdxPath
+        PngPath = $PngPath
+        UsedTimestampFallback = $false
+        LockedPaths = @()
+    }
+}
+
+function New-VisioLayer {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $layer = $null
+    try {
+        $layer = $Page.Layers.ItemU($Name)
+    }
+    catch {
+        $layer = $Page.Layers.Add($Name)
+    }
+
+    # Visio layer cell indices: Visible=4, Print=5, Active=6, Lock=7,
+    # Snap=8, Glue=9.
+    $layer.CellsC(4).FormulaU = "1"
+    $layer.CellsC(5).FormulaU = "1"
+    $layer.CellsC(6).FormulaU = "0"
+    $layer.CellsC(7).FormulaU = "0"
+    $layer.CellsC(8).FormulaU = "1"
+    $layer.CellsC(9).FormulaU = "1"
+    return ,$layer
+}
+
+function Add-ShapeToVisioLayer {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Layer,
+        [Parameter(Mandatory = $true)]
+        $Shape
+    )
+
+    $Layer.Add($Shape, 0)
+}
+
+function Set-VisioLineStyle {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Shape,
+        [Parameter(Mandatory = $true)]
+        [string]$LineColor,
+        [double]$LineWeightPt = 1.0,
+        [double]$TransparencyPercent = 0.0,
+        [int]$BeginArrow = 0,
+        [int]$EndArrow = 0,
+        [int]$EndArrowSize = 2
+    )
+
+    Set-VisioCellFormula -Shape $Shape -CellName "LinePattern" -Formula "1"
+    Set-VisioCellFormula -Shape $Shape -CellName "LineColor" -Formula (ConvertTo-VisioRgbFormula $LineColor)
+    Set-VisioCellFormula -Shape $Shape -CellName "LineWeight" -Formula "$LineWeightPt pt"
+    Set-VisioCellFormula -Shape $Shape -CellName "LineColorTrans" -Formula "$TransparencyPercent%" -Optional
+    Set-VisioCellFormula -Shape $Shape -CellName "BeginArrow" -Formula ([string]$BeginArrow)
+    Set-VisioCellFormula -Shape $Shape -CellName "EndArrow" -Formula ([string]$EndArrow)
+    Set-VisioCellFormula -Shape $Shape -CellName "EndArrowSize" -Formula ([string]$EndArrowSize)
+}
+
+function New-GridCell {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        $Layer,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [double]$Left,
+        [Parameter(Mandatory = $true)]
+        [double]$Bottom,
+        [Parameter(Mandatory = $true)]
+        [double]$Right,
+        [Parameter(Mandatory = $true)]
+        [double]$Top,
+        [Parameter(Mandatory = $true)]
+        [string]$FillColor
+    )
+
+    $shape = $Page.DrawRectangle($Left, $Bottom, $Right, $Top)
+    Set-VisioShapeName -Shape $shape -Name $Name
+    Set-VisioCellFormula -Shape $shape -CellName "FillPattern" -Formula "1"
+    Set-VisioCellFormula -Shape $shape -CellName "FillForegnd" -Formula (ConvertTo-VisioRgbFormula $FillColor)
+    Set-VisioCellFormula -Shape $shape -CellName "FillForegndTrans" -Formula "0%"
+    Set-VisioCellFormula -Shape $shape -CellName "LinePattern" -Formula "0"
+    Set-VisioCellFormula -Shape $shape -CellName "ShdwPattern" -Formula "0" -Optional
+    Add-ShapeToVisioLayer -Layer $Layer -Shape $shape
+    return ,$shape
+}
+
+function New-GridLine {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        $Layer,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [double]$BeginX,
+        [Parameter(Mandatory = $true)]
+        [double]$BeginY,
+        [Parameter(Mandatory = $true)]
+        [double]$EndX,
+        [Parameter(Mandatory = $true)]
+        [double]$EndY,
+        [string]$LineColor = "#C8D2DA",
+        [double]$LineWeightPt = 0.55
+    )
+
+    $shape = $Page.DrawLine($BeginX, $BeginY, $EndX, $EndY)
+    Set-VisioShapeName -Shape $shape -Name $Name
+    Set-VisioLineStyle -Shape $shape -LineColor $LineColor -LineWeightPt $LineWeightPt
+    Add-ShapeToVisioLayer -Layer $Layer -Shape $shape
+    return ,$shape
+}
+
+function New-LineShape {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        $Layer,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [double]$BeginX,
+        [Parameter(Mandatory = $true)]
+        [double]$BeginY,
+        [Parameter(Mandatory = $true)]
+        [double]$EndX,
+        [Parameter(Mandatory = $true)]
+        [double]$EndY,
+        [Parameter(Mandatory = $true)]
+        [string]$LineColor,
+        [double]$LineWeightPt = 0.75,
+        [double]$TransparencyPercent = 0.0
+    )
+
+    $shape = $Page.DrawLine($BeginX, $BeginY, $EndX, $EndY)
+    Set-VisioShapeName -Shape $shape -Name $Name
+    Set-VisioLineStyle `
+        -Shape $shape `
+        -LineColor $LineColor `
+        -LineWeightPt $LineWeightPt `
+        -TransparencyPercent $TransparencyPercent
+    Add-ShapeToVisioLayer -Layer $Layer -Shape $shape
+    return ,$shape
+}
+
+function New-ArrowShape {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        $Layer,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [double]$BeginX,
+        [Parameter(Mandatory = $true)]
+        [double]$BeginY,
+        [Parameter(Mandatory = $true)]
+        [double]$EndX,
+        [Parameter(Mandatory = $true)]
+        [double]$EndY,
+        [Parameter(Mandatory = $true)]
+        [string]$LineColor,
+        [double]$LineWeightPt = 2.2,
+        [int]$EndArrow = 13,
+        [int]$EndArrowSize = 3
+    )
+
+    $shape = $Page.DrawLine($BeginX, $BeginY, $EndX, $EndY)
+    Set-VisioShapeName -Shape $shape -Name $Name
+    Set-VisioLineStyle `
+        -Shape $shape `
+        -LineColor $LineColor `
+        -LineWeightPt $LineWeightPt `
+        -EndArrow $EndArrow `
+        -EndArrowSize $EndArrowSize
+    Add-ShapeToVisioLayer -Layer $Layer -Shape $shape
+    return ,$shape
+}
+
+function New-VisioShapeGroup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Shapes,
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        $Layer
+    )
+
+    if ($Shapes.Count -lt 1) {
+        throw "Cannot create Visio group '$Name' without member shapes."
+    }
+
+    $selection = $null
+    try {
+        # visSelTypeEmpty=0, visSelModeSkipSuper=256, visSelect=2.
+        $selection = $Page.CreateSelection(0, 256, $null)
+        foreach ($shape in $Shapes) {
+            $selection.Select($shape, 2)
+        }
+        $group = $selection.Group()
+        Set-VisioShapeName -Shape $group -Name $Name
+        if ($null -ne $Layer) {
+            Add-ShapeToVisioLayer -Layer $Layer -Shape $group
+        }
+        return ,$group
+    }
+    finally {
+        Release-VisioComObject -ComObject $selection
+    }
+}
+
+function Set-PageDrawingSize {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        [double]$WidthIn,
+        [Parameter(Mandatory = $true)]
+        [double]$HeightIn
+    )
+
+    $Page.PageSheet.CellsU("PageWidth").FormulaU = "$WidthIn in"
+    $Page.PageSheet.CellsU("PageHeight").FormulaU = "$HeightIn in"
+}
+
+function Export-VisioPng {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [int]$Dpi = 300
+    )
+
+    $settings = $null
+    try {
+        $pageWidth = [double]$Page.PageSheet.CellsU("PageWidth").ResultIU
+        $pageHeight = [double]$Page.PageSheet.CellsU("PageHeight").ResultIU
+        $pixelWidth = [Math]::Max(1, [int][Math]::Round($pageWidth * $Dpi))
+        $pixelHeight = [Math]::Max(1, [int][Math]::Round($pageHeight * $Dpi))
+
+        $settings = $Page.Application.Settings
+        # visRasterUseCustomResolution=3, visRasterPixelsPerInch=0.
+        $settings.SetRasterExportResolution(3, [double]$Dpi, [double]$Dpi, 0)
+        # visRasterFitToCustomSize=3, visRasterPixel=0.
+        $settings.SetRasterExportSize(3, [double]$pixelWidth, [double]$pixelHeight, 0)
+        # 24-bit color, opaque white background.
+        $settings.RasterExportColorFormat = 3
+        $settings.RasterExportBackgroundColor = 16777215
+        $settings.RasterExportUseTransparencyColor = $false
+        $settings.RasterExportRotation = 0
+        $settings.RasterExportFlip = 0
+        $settings.RasterExportQuality = 100
+        $Page.Export($Path)
+    }
+    finally {
+        Release-VisioComObject -ComObject $settings
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Visio PNG export was not created at '$Path'."
+    }
+    $file = Get-Item -LiteralPath $Path
+    if ([long]$file.Length -le 0) {
+        throw "Visio PNG export is empty: '$Path'."
+    }
+    return [pscustomobject]@{
+        Path = $file.FullName
+        FileSizeBytes = [long]$file.Length
+        PixelWidth = $pixelWidth
+        PixelHeight = $pixelHeight
+        Dpi = $Dpi
     }
 }
 

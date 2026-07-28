@@ -15,12 +15,20 @@ function Write-VisioStage {
 }
 
 $outputDirectory = "C:\Users\Dk\Desktop\SCI\paper_picture\visio_outputs"
-$outputPath = Join-Path $outputDirectory "fig1_online_decision_interaction.vsdx"
+$requestedOutputPath = Join-Path $outputDirectory "fig1_online_decision_interaction.vsdx"
+$requestedPngPath = Join-Path $outputDirectory "fig1_online_decision_interaction.png"
+$outputPath = $requestedOutputPath
+$pngPath = $requestedPngPath
 
 $session = $null
 $workspace = $null
 $document = $null
 $page = $null
+$modules = @()
+$decision = $null
+$terminator = $null
+$pngResult = $null
+$outputPair = $null
 
 $nodeNames = @(
     "module_1_local_observation",
@@ -71,6 +79,7 @@ if ($ValidateOnly) {
             -DecisionName $nodeNames[7] `
             -TerminatorName $nodeNames[8]
         $validationDocument.Close()
+        Release-VisioComObject -ComObject $validationDocument
         $validationDocument = $null
         $validationResult | ConvertTo-Json -Depth 4
     }
@@ -81,6 +90,7 @@ if ($ValidateOnly) {
             }
             catch {
             }
+            Release-VisioComObject -ComObject $validationDocument
             $validationDocument = $null
         }
         Stop-VisioSession -Session $validationSession
@@ -90,8 +100,14 @@ if ($ValidateOnly) {
 
 try {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-    if (Test-Path -LiteralPath $outputPath) {
-        Remove-Item -LiteralPath $outputPath -Force
+    $outputPair = Resolve-VisioOutputPair `
+        -VsdxPath $requestedOutputPath `
+        -PngPath $requestedPngPath
+    $outputPath = [string]$outputPair.VsdxPath
+    $pngPath = [string]$outputPair.PngPath
+    if ($outputPair.UsedTimestampFallback) {
+        Write-Host "visio_output_locked=$([string]::Join(';', $outputPair.LockedPaths))"
+        Write-Host "visio_timestamp_fallback=$outputPath"
     }
 
     $session = Start-VisioSession -Visible $false
@@ -182,7 +198,25 @@ try {
 
     $null = $document.SaveAs($outputPath)
     Write-VisioStage -Stage "document_saved"
+    $pngResult = Export-VisioPng -Page $page -Path $pngPath -Dpi 300
+    Write-VisioStage -Stage "png_exported"
     $document.Close()
+    foreach ($shape in $modules) {
+        Release-VisioComObject -ComObject $shape
+    }
+    $modules = @()
+    Release-VisioComObject -ComObject $decision
+    Release-VisioComObject -ComObject $terminator
+    $decision = $null
+    $terminator = $null
+    Release-VisioComObject -ComObject $page
+    $page = $null
+    if ($null -ne $workspace) {
+        $workspace.Page = $null
+        $workspace.Document = $null
+    }
+    Release-VisioComObject -ComObject $document
+    $document = $null
     Write-VisioStage -Stage "document_closed"
 
     if (-not (Test-Path -LiteralPath $outputPath)) {
@@ -213,7 +247,14 @@ try {
 
     $result = [ordered]@{
         OutputPath = $outputFile.FullName
+        PngPath = $pngResult.Path
         FileSizeBytes = [long]$outputFile.Length
+        PngFileSizeBytes = [long]$pngResult.FileSizeBytes
+        PngPixelWidth = [int]$pngResult.PixelWidth
+        PngPixelHeight = [int]$pngResult.PixelHeight
+        PngDpi = [int]$pngResult.Dpi
+        UsedTimestampFallback = [bool]$outputPair.UsedTimestampFallback
+        LockedPaths = @($outputPair.LockedPaths)
         ReopenValidation = "passed"
         PageCount = $validation.PageCount
         PageWidthIn = $validation.PageWidthIn
@@ -244,8 +285,20 @@ finally {
         }
         catch {
         }
-        $document = $null
     }
+    foreach ($shape in $modules) {
+        Release-VisioComObject -ComObject $shape
+    }
+    $modules = @()
+    Release-VisioComObject -ComObject $decision
+    Release-VisioComObject -ComObject $terminator
+    Release-VisioComObject -ComObject $page
+    if ($null -ne $workspace) {
+        $workspace.Page = $null
+        $workspace.Document = $null
+    }
+    Release-VisioComObject -ComObject $document
+    $document = $null
     $page = $null
     $workspace = $null
     Stop-VisioSession -Session $session
