@@ -210,6 +210,16 @@ python tools\export_architecture_pictures.py --mode online-workflow-assets `
 
 默认输出高分辨率 PNG 和一致性 manifest；添加 `--include-svg` 可同时导出 SVG。素材只显示局部观测与累计 belief，不会把真值地图画成策略输入。
 
+### 环境、局部雷达与八邻域动作空间论文图
+
+`tools/export_environment_model_figure.py` 为单一合并场景的独立导出入口，使用现有
+`RadarSensor` LOS 模板和 `ACTIONS_8` 方向定义。`--visual-ray-count` 仅控制代表性
+可视化射线采样数，不表示传感器线数；`--format` 支持 `png`、`svg` 或 `both`。
+
+```powershell
+python tools\export_environment_model_figure.py --help
+```
+
 ### 输入
 
 - 随机矩形障碍地图及 episode seed
