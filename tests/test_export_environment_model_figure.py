@@ -70,6 +70,21 @@ class EnvironmentModelFigureHelpersTest(unittest.TestCase):
         self.assertEqual(clipped, ray[:3])
         self.assertEqual(int(observation[clipped[-1][2], clipped[-1][3]]), OBSTACLE)
 
+    def test_ray_clipping_stops_before_invisible(self) -> None:
+        observation = np.full((9, 9), EMPTY, dtype=np.int8)
+        observation[4, 7] = INVISIBLE
+        observation[4, 8] = INVISIBLE
+        ray = (
+            (0, 0, 4, 4),
+            (0, 1, 4, 5),
+            (0, 2, 4, 6),
+            (0, 3, 4, 7),
+            (0, 4, 4, 8),
+        )
+        clipped = _clip_ray_to_observation(ray, observation)
+        self.assertEqual(clipped, ray[:3])
+        self.assertEqual(int(observation[clipped[-1][2], clipped[-1][3]]), EMPTY)
+
 
 if __name__ == "__main__":
     unittest.main()

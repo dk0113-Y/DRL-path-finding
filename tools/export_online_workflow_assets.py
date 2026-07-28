@@ -1,68 +1,51 @@
 from __future__ import annotations
 
-"""Export reusable paper assets for online exploration decisions and environment interaction."""
+"""Export seed-aligned paper assets for one online exploration decision cycle."""
 
+import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import BoundaryNorm, ListedColormap, to_rgba
-from matplotlib.patches import Circle, Ellipse, FancyArrowPatch, FancyBboxPatch, Polygon
-from matplotlib.transforms import Affine2D
+from matplotlib.patches import Circle, FancyArrowPatch
 
-from env.agent_version import LocalObservationModel
-from env.block_random_g import RandomMapGenerator
-from env.core_cummap import CumulativeBeliefMap
-from env.core_radar import RadarSensor
-from env.grid_topology import ACTIONS_8, EMPTY, INVISIBLE, OBSTACLE, GridTopology
+from env.grid_topology import ACTIONS_8, OBSTACLE
 from tools.export_architecture_pictures import (
     ACTION_TO_KEY,
     ExportConfig,
-    FIXED_ACTION_PREFERENCES,
-    KEY_TO_ACTION,
     Snapshot,
     WorldCanvas,
     _agent_world_to_canvas,
-    _build_method_world_canvas,
-    _capture_snapshot,
     _format_clean_axis,
     _format_output_path,
     _project_belief_to_canvas,
-    _select_fallback_action,
-    _set_global_seed,
-    _trajectory_world_to_canvas,
 )
-
-
-LOCAL_CMAP = ListedColormap(("#B4BCC4", "#F8F8F6", "#1E1E1E"))
-LOCAL_NORM = BoundaryNorm((-1.5, -0.5, 0.5, 1.5), LOCAL_CMAP.N)
+from tools.export_figure_demo_blueprint import (
+    FigureDemoBlueprint,
+    blueprint_manifest,
+    build_figure_demo_blueprint,
+)
+from tools.paper_figure_style import (
+    PaperFigureStyle,
+    draw_topdown_robot,
+    load_paper_figure_style,
+    occupancy_colormap,
+    robot_envelope_diameter_cells,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class OnlineWorkflowStyle:
-    """Centralized cell-relative styles shared by all online-workflow assets."""
+    """Figure-1 layout values plus the shared paper style contract."""
 
+    paper: PaperFigureStyle = field(default_factory=load_paper_figure_style)
     max_inches: float = 5.6
     min_inches: float = 3.4
     cell_inches: float = 0.205
-    body_width: float = 0.64
-    body_length: float = 0.88
-    body_color: str = "#55966B"
-    body_edge_color: str = "#2F5940"
-    wheel_color: str = "#30363B"
-    lidar_color: str = "#E99D4E"
-    lidar_edge_color: str = "#2F5940"
-    heading_color: str = "#F8F8F6"
-    trajectory_color: str = "#5185C0"
-    scan_color: str = "#5185C0"
-    legal_color: str = "#5185C0"
-    illegal_color: str = "#99AABB"
-    selected_color: str = "#C96144"
-    new_free_color: str = "#99C290"
-    new_obstacle_color: str = "#8281B9"
+    scan_boundary_alpha: float = 0.30
     action_start_radius_cells: float = 0.48
     action_length_cells: float = 1.50
 
@@ -75,11 +58,68 @@ class OnlineWorkflowAssets:
     action_index: int
     action_key: str
     valid_action_indices: tuple[int, ...]
-    trajectory_display_world: np.ndarray | None
+    invalid_action_indices: tuple[int, ...]
     local_observation: Snapshot
     belief_before_update: Snapshot
     belief_after_update: Snapshot
     environment_after_action: Snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class ActionArrowSpec:
+    action_index: int
+    state: str
+    color: str
+    start_row: float
+    start_col: float
+    end_row: float
+    end_col: float
+    linewidth_pt: float
+    mutation_scale: float
+
+    @property
+    def length_cells(self) -> float:
+        return float(math.hypot(self.end_row - self.start_row, self.end_col - self.start_col))
+
+
+def _assets_from_blueprint(blueprint: FigureDemoBlueprint) -> OnlineWorkflowAssets:
+    return OnlineWorkflowAssets(
+        step=int(blueprint.step),
+        action_index=int(blueprint.selected_action),
+        action_key=ACTION_TO_KEY[int(blueprint.selected_action)],
+        valid_action_indices=tuple(int(v) for v in blueprint.valid_action_indices),
+        invalid_action_indices=tuple(int(v) for v in blueprint.invalid_action_indices),
+        local_observation=blueprint.local_observation,
+        belief_before_update=blueprint.belief_before_update,
+        belief_after_update=blueprint.belief_after_update,
+        environment_after_action=blueprint.environment_after_action,
+    )
+
+
+def _run_online_workflow_rollout(
+    config: ExportConfig,
+    *,
+    target_step: int,
+    forced_method_action: str | None,
+    trajectory_visual_step: int | None,
+):
+    """Compatibility wrapper returning the shared seed/step blueprint snapshots."""
+
+    if trajectory_visual_step is not None:
+        if not (0 <= int(trajectory_visual_step) <= int(target_step)):
+            raise ValueError("trajectory_visual_step must be between 0 and target_step")
+    blueprint = build_figure_demo_blueprint(
+        seed=int(config.seed),
+        preferred_step=int(target_step),
+        scan_radius=int(config.scan_radius),
+        rows=int(config.rows),
+        cols=int(config.cols),
+        obstacle_ratio=float(config.obstacle_ratio),
+        obs_size=int(config.obs_size),
+        visual_ray_count=32,
+        forced_method_action=forced_method_action,
+    )
+    return blueprint.sensor, _assets_from_blueprint(blueprint)
 
 
 def _figure_size(shape: tuple[int, int], style: OnlineWorkflowStyle) -> tuple[float, float]:
@@ -116,8 +156,6 @@ def _save_online_figure(
     dpi: int,
     include_svg: bool,
 ) -> Path | None:
-    """Save one asset with a consistent opaque background and close its figure."""
-
     png_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(
         png_path,
@@ -140,89 +178,51 @@ def _save_online_figure(
     return svg_path
 
 
-def _heading_angle_deg(action_index: int) -> float:
-    dr, dc = ACTIONS_8[int(action_index)]
-    return float(math.degrees(math.atan2(float(dc), -float(dr))))
-
-
-def _draw_topdown_robot(
-    ax,
+def _action_arrow_specs(
     *,
-    row: float,
-    col: float,
-    heading_action: int,
+    center_row: float,
+    center_col: float,
+    valid_action_indices: tuple[int, ...],
+    chosen_action_index: int,
     style: OnlineWorkflowStyle,
-    alpha: float = 1.0,
-    zorder: int = 12,
-) -> None:
-    """Draw the shared robot glyph at a row/column grid-cell center."""
+) -> tuple[ActionArrowSpec, ...]:
+    valid = set(int(index) for index in valid_action_indices)
+    chosen = int(chosen_action_index)
+    if chosen not in valid:
+        raise ValueError(f"chosen action {chosen} is not legal: {sorted(valid)}")
 
-    body_w = float(style.body_width)
-    body_h = float(style.body_length)
-    transform = (
-        Affine2D()
-        .rotate_deg_around(float(col), float(row), _heading_angle_deg(heading_action))
-        + ax.transData
-    )
-    body = FancyBboxPatch(
-        (float(col) - body_w / 2.0, float(row) - body_h / 2.0),
-        body_w,
-        body_h,
-        boxstyle="round,pad=0.02,rounding_size=0.13",
-        facecolor=style.body_color,
-        edgecolor=style.body_edge_color,
-        linewidth=0.075,
-        alpha=float(alpha),
-        transform=transform,
-        zorder=zorder,
-    )
-    ax.add_patch(body)
-
-    wheel_width = 0.18
-    wheel_height = 0.34
-    for dx in (-0.43, 0.43):
-        for dy in (-0.27, 0.27):
-            ax.add_patch(
-                Ellipse(
-                    (float(col) + dx, float(row) + dy),
-                    width=wheel_width,
-                    height=wheel_height,
-                    facecolor=style.wheel_color,
-                    edgecolor="none",
-                    alpha=float(alpha),
-                    transform=transform,
-                    zorder=zorder - 1,
-                )
+    specs: list[ActionArrowSpec] = []
+    for action_index, (delta_row, delta_col) in enumerate(ACTIONS_8):
+        norm = math.hypot(float(delta_row), float(delta_col))
+        unit_row = float(delta_row) / norm
+        unit_col = float(delta_col) / norm
+        state = "selected" if action_index == chosen else "legal" if action_index in valid else "illegal"
+        start_radius = float(style.action_start_radius_cells)
+        end_radius = start_radius + float(style.action_length_cells)
+        specs.append(
+            ActionArrowSpec(
+                action_index=int(action_index),
+                state=state,
+                color=str(style.paper.fig1_action_palette[state]),
+                start_row=float(center_row) + start_radius * unit_row,
+                start_col=float(center_col) + start_radius * unit_col,
+                end_row=float(center_row) + end_radius * unit_row,
+                end_col=float(center_col) + end_radius * unit_col,
+                linewidth_pt=float(
+                    style.paper.rendering[
+                        "selected_action_linewidth_pt" if state == "selected" else "normal_action_linewidth_pt"
+                    ]
+                ),
+                mutation_scale=float(
+                    style.paper.rendering[
+                        "selected_action_arrowhead_scale"
+                        if state == "selected"
+                        else "normal_action_arrowhead_scale"
+                    ]
+                ),
             )
-
-    ax.add_patch(
-        Circle(
-            (float(col), float(row)),
-            radius=0.18,
-            facecolor=style.lidar_color,
-            edgecolor=style.lidar_edge_color,
-            linewidth=0.075,
-            alpha=float(alpha),
-            transform=transform,
-            zorder=zorder + 1,
         )
-    )
-    ax.add_patch(
-        Polygon(
-            (
-                (float(col), float(row) - 0.47),
-                (float(col) - 0.13, float(row) - 0.29),
-                (float(col) + 0.13, float(row) - 0.29),
-            ),
-            closed=True,
-            facecolor=style.heading_color,
-            edgecolor=style.body_edge_color,
-            linewidth=0.045,
-            alpha=float(alpha),
-            transform=transform,
-            zorder=zorder + 2,
-        )
-    )
+    return tuple(specs)
 
 
 def _draw_action_selection(
@@ -233,182 +233,106 @@ def _draw_action_selection(
     valid_action_indices: tuple[int, ...],
     chosen_action_index: int,
     style: OnlineWorkflowStyle,
-) -> None:
-    """Draw ACTIONS_8 legality and the selected action in canonical index order."""
-
-    valid = set(int(idx) for idx in valid_action_indices)
-    chosen = int(chosen_action_index)
-    if chosen not in valid:
-        raise ValueError(f"chosen action {chosen} is not legal: {sorted(valid)}")
-
-    for action_idx, (dr, dc) in enumerate(ACTIONS_8):
-        norm = math.hypot(float(dr), float(dc))
-        unit_r, unit_c = float(dr) / norm, float(dc) / norm
-        selected = int(action_idx) == chosen
-        color = (
-            style.selected_color
-            if selected
-            else style.legal_color
-            if int(action_idx) in valid
-            else style.illegal_color
-        )
-        start_radius = float(style.action_start_radius_cells)
-        end_radius = start_radius + float(style.action_length_cells)
-        arrow = FancyArrowPatch(
-            posA=(
-                float(center_col) + start_radius * unit_c,
-                float(center_row) + start_radius * unit_r,
-            ),
-            posB=(
-                float(center_col) + end_radius * unit_c,
-                float(center_row) + end_radius * unit_r,
-            ),
-            arrowstyle="-|>",
-            mutation_scale=15.0 if selected else 12.0,
-            linewidth=3.1 if selected else 1.75,
-            color=color,
-            alpha=1.0 if selected else 0.92,
-            capstyle="round",
-            joinstyle="round",
-            zorder=11 if selected else 9,
-        )
-        ax.add_patch(arrow)
-
-
-def _draw_recent_trajectory(
-    ax,
-    snapshot: Snapshot,
-    canvas: WorldCanvas,
-    trajectory_world: np.ndarray,
-    style: OnlineWorkflowStyle,
-) -> None:
-    rows, cols = _trajectory_world_to_canvas(
-        snapshot,
-        canvas,
-        trajectory_world=np.asarray(trajectory_world, dtype=np.int32),
+) -> tuple[ActionArrowSpec, ...]:
+    specs = _action_arrow_specs(
+        center_row=center_row,
+        center_col=center_col,
+        valid_action_indices=valid_action_indices,
+        chosen_action_index=chosen_action_index,
+        style=style,
     )
-    if rows.size <= 1:
-        return
-    ax.plot(
-        cols,
-        rows,
-        color=style.trajectory_color,
-        linewidth=1.8,
-        alpha=0.82,
-        solid_capstyle="round",
-        zorder=6,
-    )
+    for spec in specs:
+        ax.add_patch(
+            FancyArrowPatch(
+                posA=(spec.start_col, spec.start_row),
+                posB=(spec.end_col, spec.end_row),
+                arrowstyle="-|>",
+                mutation_scale=spec.mutation_scale,
+                linewidth=spec.linewidth_pt,
+                color=spec.color,
+                alpha=1.0 if spec.state == "selected" else 0.92,
+                capstyle="round",
+                joinstyle="round",
+                zorder=11 if spec.state == "selected" else 9,
+            )
+        )
+    return specs
 
 
-def _belief_update_rgba(
-    before_snapshot: Snapshot,
-    after_snapshot: Snapshot,
-    canvas: WorldCanvas,
-    style: OnlineWorkflowStyle,
-) -> tuple[np.ndarray, np.ndarray]:
-    before = _project_belief_to_canvas(before_snapshot, canvas)
-    after = _project_belief_to_canvas(after_snapshot, canvas)
-    rgba = np.asarray(LOCAL_CMAP(LOCAL_NORM(before)), dtype=np.float32)
-    new_mask = (before == INVISIBLE) & (after != INVISIBLE)
-    new_free = new_mask & (after == EMPTY)
-    new_obstacle = new_mask & (after == OBSTACLE)
-    rgba[new_free] = np.asarray(to_rgba(style.new_free_color), dtype=np.float32)
-    rgba[new_obstacle] = np.asarray(to_rgba(style.new_obstacle_color), dtype=np.float32)
-    return rgba, new_mask
+def _belief_background(assets: OnlineWorkflowAssets, canvas: WorldCanvas) -> np.ndarray:
+    return _project_belief_to_canvas(assets.belief_after_update, canvas)
 
 
 def _draw_environment_transition(
     ax,
     *,
-    before_snapshot: Snapshot,
-    after_snapshot: Snapshot,
+    assets: OnlineWorkflowAssets,
     canvas: WorldCanvas,
-    chosen_action_index: int,
     style: OnlineWorkflowStyle,
 ) -> None:
-    """Draw the real ACTIONS_8 displacement using old/new robot poses only."""
-
-    before_row, before_col = _agent_world_to_canvas(before_snapshot, canvas)
-    after_row, after_col = _agent_world_to_canvas(after_snapshot, canvas)
-    expected_dr, expected_dc = ACTIONS_8[int(chosen_action_index)]
+    before_row, before_col = _agent_world_to_canvas(assets.belief_after_update, canvas)
+    after_row, after_col = _agent_world_to_canvas(assets.environment_after_action, canvas)
+    expected = tuple(int(v) for v in ACTIONS_8[int(assets.action_index)])
     actual = (
-        int(after_snapshot.agent_world[0] - before_snapshot.agent_world[0]),
-        int(after_snapshot.agent_world[1] - before_snapshot.agent_world[1]),
+        int(assets.environment_after_action.agent_world[0] - assets.belief_after_update.agent_world[0]),
+        int(assets.environment_after_action.agent_world[1] - assets.belief_after_update.agent_world[1]),
     )
-    if actual != (int(expected_dr), int(expected_dc)):
-        raise ValueError(
-            f"transition delta {actual} does not match ACTIONS_8[{chosen_action_index}]="
-            f"{(expected_dr, expected_dc)}"
-        )
-
-    _draw_topdown_robot(
+    if actual != expected:
+        raise ValueError(f"transition delta {actual} does not match ACTIONS_8[{assets.action_index}]={expected}")
+    draw_topdown_robot(
         ax,
         row=before_row,
         col=before_col,
-        heading_action=chosen_action_index,
-        style=style,
+        heading_action=assets.action_index,
+        style=style.paper,
         alpha=0.42,
         zorder=17,
     )
-    _draw_topdown_robot(
+    draw_topdown_robot(
         ax,
         row=after_row,
         col=after_col,
-        heading_action=chosen_action_index,
-        style=style,
+        heading_action=assets.action_index,
+        style=style.paper,
         alpha=1.0,
         zorder=18,
     )
-
-
-def _recent_trajectory(
-    assets: OnlineWorkflowAssets,
-    *,
-    recent_steps: int = 10,
-) -> np.ndarray:
-    source = (
-        assets.belief_after_update.trajectory_world
-        if assets.trajectory_display_world is None
-        else assets.trajectory_display_world
-    )
-    trajectory = np.asarray(source, dtype=np.int32).reshape((-1, 2))
-    max_points = max(1, int(recent_steps) + 1)
-    return trajectory[-max_points:].copy()
 
 
 def _render_local_observation(
     path: Path,
     *,
     assets: OnlineWorkflowAssets,
-    sensor: RadarSensor,
     style: OnlineWorkflowStyle,
     dpi: int,
     include_svg: bool,
 ) -> tuple[Path | None, int]:
+    cmap, norm = occupancy_colormap(style.paper)
     snapshot = assets.local_observation
-    fig, ax = _create_axis(snapshot.local_snap.shape, style)
-    ax.imshow(snapshot.local_snap, cmap=LOCAL_CMAP, norm=LOCAL_NORM, origin="upper", interpolation="nearest")
-    center_r, center_c = float(sensor.center_state[0]), float(sensor.center_state[1])
+    fig, ax = _create_axis(tuple(snapshot.local_snap.shape), style)
+    ax.imshow(snapshot.local_snap, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
+    center_row = float(snapshot.local_snap.shape[0] // 2)
+    center_col = float(snapshot.local_snap.shape[1] // 2)
     ax.add_patch(
         Circle(
-            (center_c, center_r),
-            radius=float(sensor.scan_r) + 0.12,
+            (center_col, center_row),
+            radius=float(snapshot.local_snap.shape[0] // 2),
             fill=False,
-            edgecolor=style.scan_color,
+            edgecolor=style.paper.radar_palette["nominal_boundary"],
             linewidth=1.0,
             linestyle=(0, (4, 3)),
-            alpha=0.34,
+            alpha=float(style.scan_boundary_alpha),
             zorder=7,
         )
     )
-    _draw_topdown_robot(
+    draw_topdown_robot(
         ax,
-        row=center_r,
-        col=center_c,
+        row=center_row,
+        col=center_col,
         heading_action=assets.action_index,
-        style=style,
+        style=style.paper,
     )
-    _format_clean_axis(ax, snapshot.local_snap.shape)
+    _format_clean_axis(ax, tuple(snapshot.local_snap.shape))
     return _save_online_figure(fig, path, dpi=dpi, include_svg=include_svg), 0
 
 
@@ -416,33 +340,34 @@ def _render_action_selection(
     path: Path,
     *,
     assets: OnlineWorkflowAssets,
-    sensor: RadarSensor,
     style: OnlineWorkflowStyle,
     dpi: int,
     include_svg: bool,
-) -> Path | None:
-    snapshot = assets.belief_after_update
-    fig, ax = _create_axis(snapshot.local_snap.shape, style)
-    ax.imshow(snapshot.local_snap, cmap=LOCAL_CMAP, norm=LOCAL_NORM, origin="upper", interpolation="nearest")
-    center_r, center_c = float(sensor.center_state[0]), float(sensor.center_state[1])
-    _draw_action_selection(
+) -> tuple[Path | None, tuple[ActionArrowSpec, ...]]:
+    cmap, norm = occupancy_colormap(style.paper)
+    local_snap = assets.local_observation.local_snap
+    fig, ax = _create_axis(tuple(local_snap.shape), style)
+    ax.imshow(local_snap, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
+    center_row = float(local_snap.shape[0] // 2)
+    center_col = float(local_snap.shape[1] // 2)
+    specs = _draw_action_selection(
         ax,
-        center_row=center_r,
-        center_col=center_c,
+        center_row=center_row,
+        center_col=center_col,
         valid_action_indices=assets.valid_action_indices,
         chosen_action_index=assets.action_index,
         style=style,
     )
-    _draw_topdown_robot(
+    draw_topdown_robot(
         ax,
-        row=center_r,
-        col=center_c,
+        row=center_row,
+        col=center_col,
         heading_action=assets.action_index,
-        style=style,
+        style=style.paper,
         zorder=14,
     )
-    _format_clean_axis(ax, snapshot.local_snap.shape)
-    return _save_online_figure(fig, path, dpi=dpi, include_svg=include_svg)
+    _format_clean_axis(ax, tuple(local_snap.shape))
+    return _save_online_figure(fig, path, dpi=dpi, include_svg=include_svg), specs
 
 
 def _render_belief_update(
@@ -450,70 +375,28 @@ def _render_belief_update(
     *,
     assets: OnlineWorkflowAssets,
     canvas: WorldCanvas,
-    trajectory_world: np.ndarray,
     style: OnlineWorkflowStyle,
     dpi: int,
     include_svg: bool,
 ) -> tuple[Path | None, int]:
-    panel_width, panel_height = _figure_size(canvas.shape, style)
-    fig, axes = plt.subplots(
-        1,
-        3,
-        figsize=(min(8.4, panel_width * 2.35), max(2.2, panel_height * 0.78)),
-        gridspec_kw={"width_ratios": (1.0, 0.56, 1.0), "wspace": 0.08},
-        frameon=False,
+    """Render one B_t panel with only the robot at p_t."""
+
+    cmap, norm = occupancy_colormap(style.paper)
+    fig, ax = _create_axis(canvas.shape, style)
+    background = _belief_background(assets, canvas)
+    ax.imshow(background, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
+    robot_row, robot_col = _agent_world_to_canvas(assets.belief_after_update, canvas)
+    draw_topdown_robot(
+        ax,
+        row=robot_row,
+        col=robot_col,
+        heading_action=assets.action_index,
+        style=style.paper,
     )
-    fig.patch.set_facecolor("white")
-    rgba, new_mask = _belief_update_rgba(
-        assets.belief_before_update,
-        assets.belief_after_update,
-        canvas,
-        style,
-    )
+    _format_clean_axis(ax, canvas.shape)
     before = _project_belief_to_canvas(assets.belief_before_update, canvas)
-    axes[0].imshow(before, cmap=LOCAL_CMAP, norm=LOCAL_NORM, origin="upper", interpolation="nearest", alpha=0.62)
-    _draw_recent_trajectory(axes[0], assets.belief_before_update, canvas, trajectory_world, style)
-    before_row, before_col = _agent_world_to_canvas(assets.belief_before_update, canvas)
-    _draw_topdown_robot(
-        axes[0],
-        row=before_row,
-        col=before_col,
-        heading_action=assets.action_index,
-        style=style,
-        alpha=0.68,
-    )
-    _format_clean_axis(axes[0], canvas.shape)
-
-    local = assets.local_observation.local_snap
-    axes[1].imshow(local, cmap=LOCAL_CMAP, norm=LOCAL_NORM, origin="upper", interpolation="nearest")
-    local_row, local_col = local.shape[0] // 2, local.shape[1] // 2
-    _draw_topdown_robot(
-        axes[1],
-        row=float(local_row),
-        col=float(local_col),
-        heading_action=assets.action_index,
-        style=style,
-    )
-    _format_clean_axis(axes[1], local.shape)
-
-    axes[2].imshow(rgba, origin="upper", interpolation="nearest")
-    _draw_recent_trajectory(axes[2], assets.belief_after_update, canvas, trajectory_world, style)
-    after_row, after_col = _agent_world_to_canvas(assets.belief_after_update, canvas)
-    _draw_topdown_robot(
-        axes[2],
-        row=after_row,
-        col=after_col,
-        heading_action=assets.action_index,
-        style=style,
-    )
-    _format_clean_axis(axes[2], canvas.shape)
-    axes[0].set_title(r"$B_{t-1}$", fontsize=10)
-    axes[1].set_title(r"$o_t$", fontsize=10)
-    axes[2].set_title(r"$B_t$", fontsize=10)
-    return (
-        _save_online_figure(fig, path, dpi=dpi, include_svg=include_svg),
-        int(np.count_nonzero(new_mask)),
-    )
+    new_count = int(np.count_nonzero((before < 0) & (background >= 0)))
+    return _save_online_figure(fig, path, dpi=dpi, include_svg=include_svg), new_count
 
 
 def _render_environment_execution(
@@ -525,155 +408,18 @@ def _render_environment_execution(
     dpi: int,
     include_svg: bool,
 ) -> Path | None:
+    cmap, norm = occupancy_colormap(style.paper)
     fig, ax = _create_axis(canvas.shape, style)
-    belief_after = _project_belief_to_canvas(assets.belief_after_update, canvas)
-    ax.imshow(belief_after, cmap=LOCAL_CMAP, norm=LOCAL_NORM, origin="upper", interpolation="nearest")
-    _draw_environment_transition(
-        ax,
-        before_snapshot=assets.belief_after_update,
-        after_snapshot=assets.environment_after_action,
-        canvas=canvas,
-        chosen_action_index=assets.action_index,
-        style=style,
-    )
+    background = _belief_background(assets, canvas)
+    ax.imshow(background, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
+    _draw_environment_transition(ax, assets=assets, canvas=canvas, style=style)
     _format_clean_axis(ax, canvas.shape)
     return _save_online_figure(fig, path, dpi=dpi, include_svg=include_svg)
 
 
-def _choose_action(
-    *,
-    planned_key: str,
-    forced_key: str | None,
-    valid_actions: tuple[int, ...],
-    agent_state: tuple[int, int],
-    visit_counts: dict[tuple[int, int], int],
-) -> int:
-    desired_action = int(KEY_TO_ACTION[forced_key or planned_key])
-    if forced_key is not None and desired_action not in valid_actions:
-        valid_keys = " ".join(ACTION_TO_KEY[int(idx)] for idx in valid_actions)
-        raise RuntimeError(f"forced method action '{forced_key}' is illegal; valid actions: {valid_keys}")
-    if desired_action in valid_actions:
-        return desired_action
-    return _select_fallback_action(
-        valid_actions,
-        agent_state=agent_state,
-        visit_counts=visit_counts,
-    )
-
-
-def _run_online_workflow_rollout(
-    config: ExportConfig,
-    *,
-    target_step: int,
-    forced_method_action: str | None,
-    trajectory_visual_step: int | None,
-) -> tuple[RadarSensor, OnlineWorkflowAssets]:
-    """Capture o_t -> B_t -> a_t -> p_(t+1) without fusing o_(t+1)."""
-
-    if int(target_step) < 1:
-        raise ValueError("online workflow step must be >= 1")
-    forced_key = None if forced_method_action is None else str(forced_method_action).strip().lower()
-    if forced_key is not None and forced_key not in KEY_TO_ACTION:
-        raise ValueError(f"forced_method_action must be one of: {', '.join(sorted(KEY_TO_ACTION))}")
-    if trajectory_visual_step is not None and not (0 <= int(trajectory_visual_step) <= int(target_step)):
-        raise ValueError("trajectory_visual_step must be between 0 and target_step")
-
-    _set_global_seed(config.seed)
-    generator = RandomMapGenerator(
-        rows=int(config.rows),
-        cols=int(config.cols),
-        obs_size=int(config.obs_size),
-        obstacle_ratio=float(config.obstacle_ratio),
-    )
-    true_grid, start_state = generator.generate_map()
-    free_mask = GridTopology.free_mask(true_grid)
-    sensor = RadarSensor(scan_radius=int(config.scan_radius))
-    obs_model = LocalObservationModel(true_grid, start_state, sensor=sensor)
-    agent_state = (int(start_state[0]), int(start_state[1]))
-    local_snap = np.asarray(obs_model.local_snap, dtype=np.int8).copy()
-    cum_map = CumulativeBeliefMap(true_grid, agent_state, local_snap)
-    trajectory_world = [agent_state]
-    visit_counts: dict[tuple[int, int], int] = {agent_state: 1}
-    trajectory_display_world = (
-        np.asarray(trajectory_world, dtype=np.int32).copy()
-        if trajectory_visual_step is not None and int(trajectory_visual_step) == 0
-        else None
-    )
-
-    for step_idx in range(1, int(target_step) + 1):
-        incoming_valid = GridTopology.valid_action_indices_fast(free_mask, agent_state)
-        if not incoming_valid:
-            raise RuntimeError(f"agent has no legal incoming move at step {step_idx}")
-        incoming_action = _choose_action(
-            planned_key=FIXED_ACTION_PREFERENCES[(step_idx - 1) % len(FIXED_ACTION_PREFERENCES)],
-            forced_key=None,
-            valid_actions=incoming_valid,
-            agent_state=agent_state,
-            visit_counts=visit_counts,
-        )
-        incoming_dr, incoming_dc = ACTIONS_8[incoming_action]
-        agent_state = (int(agent_state[0] + incoming_dr), int(agent_state[1] + incoming_dc))
-        trajectory_world.append(agent_state)
-        visit_counts[agent_state] = int(visit_counts.get(agent_state, 0) + 1)
-        local_snap = np.asarray(obs_model.observe_fast(agent_state), dtype=np.int8).copy()
-        if trajectory_visual_step is not None and step_idx == int(trajectory_visual_step):
-            trajectory_display_world = np.asarray(trajectory_world, dtype=np.int32).copy()
-
-        if step_idx < int(target_step):
-            cum_map.update(agent_state, local_snap)
-            continue
-
-        belief_before = _capture_snapshot(
-            step=step_idx,
-            agent_state=agent_state,
-            trajectory_world=trajectory_world,
-            local_snap=local_snap,
-            cum_map=cum_map,
-        )
-        local_observation = belief_before
-        cum_map.update(agent_state, local_snap)
-        belief_after = _capture_snapshot(
-            step=step_idx,
-            agent_state=agent_state,
-            trajectory_world=trajectory_world,
-            local_snap=local_snap,
-            cum_map=cum_map,
-        )
-
-        valid_actions = GridTopology.valid_action_indices_fast(free_mask, agent_state)
-        if not valid_actions:
-            raise RuntimeError(f"agent has no legal decision action at step {step_idx}")
-        action_index = _choose_action(
-            planned_key=FIXED_ACTION_PREFERENCES[step_idx % len(FIXED_ACTION_PREFERENCES)],
-            forced_key=forced_key,
-            valid_actions=valid_actions,
-            agent_state=agent_state,
-            visit_counts=visit_counts,
-        )
-        dr, dc = ACTIONS_8[action_index]
-        next_state = (int(agent_state[0] + dr), int(agent_state[1] + dc))
-        environment_trajectory = [*trajectory_world, next_state]
-        next_observation = np.asarray(obs_model.observe_fast(next_state), dtype=np.int8).copy()
-        environment_after = _capture_snapshot(
-            step=step_idx + 1,
-            agent_state=next_state,
-            trajectory_world=environment_trajectory,
-            local_snap=next_observation,
-            cum_map=cum_map,
-        )
-        return sensor, OnlineWorkflowAssets(
-            step=step_idx,
-            action_index=int(action_index),
-            action_key=ACTION_TO_KEY[int(action_index)],
-            valid_action_indices=tuple(int(idx) for idx in valid_actions),
-            trajectory_display_world=trajectory_display_world,
-            local_observation=local_observation,
-            belief_before_update=belief_before,
-            belief_after_update=belief_after,
-            environment_after_action=environment_after,
-        )
-
-    raise RuntimeError("online workflow rollout did not capture the requested step")
+def _matrix_sha256(matrix: np.ndarray) -> str:
+    contiguous = np.ascontiguousarray(np.asarray(matrix, dtype=np.int8))
+    return hashlib.sha256(contiguous.tobytes()).hexdigest()
 
 
 def export_online_workflow_assets(
@@ -685,31 +431,29 @@ def export_online_workflow_assets(
     trajectory_visual_step: int | None = None,
     include_svg: bool = False,
 ) -> dict[str, object]:
-    """Export four mutually consistent assets from one deterministic rollout transition."""
+    """Export four mutually consistent assets from the shared deterministic blueprint."""
 
     output_dir_path = Path(output_dir)
     base = config if config is not None else ExportConfig(output_dir=output_dir_path)
-    rollout_config = ExportConfig(
+    target_step = int(base.step_late if step is None else step)
+    if trajectory_visual_step is not None and not (0 <= int(trajectory_visual_step) <= target_step):
+        raise ValueError("trajectory_visual_step must be between 0 and target_step")
+    blueprint = build_figure_demo_blueprint(
+        seed=int(base.seed),
+        preferred_step=target_step,
+        scan_radius=int(base.scan_radius),
         rows=int(base.rows),
         cols=int(base.cols),
         obstacle_ratio=float(base.obstacle_ratio),
         obs_size=int(base.obs_size),
-        scan_radius=int(base.scan_radius),
-        seed=int(base.seed),
-        step_mid=int(base.step_mid),
-        step_late=int(base.step_late),
-        dpi=int(base.dpi),
-        output_dir=output_dir_path,
-    )
-    target_step = int(rollout_config.step_late if step is None else step)
-    sensor, assets = _run_online_workflow_rollout(
-        rollout_config,
-        target_step=target_step,
+        visual_ray_count=32,
         forced_method_action=forced_method_action,
-        trajectory_visual_step=trajectory_visual_step,
     )
-    if int(assets.action_index) not in set(int(idx) for idx in assets.valid_action_indices):
-        raise RuntimeError("rollout selected an action outside the legal action set")
+    assets = _assets_from_blueprint(blueprint)
+    style = OnlineWorkflowStyle()
+    canvas = blueprint.belief_canvas
+    if not np.array_equal(_belief_background(assets, canvas), blueprint.belief_display):
+        raise RuntimeError("Figure 1 B_t background drifted from the shared blueprint")
 
     expected_delta = tuple(int(v) for v in ACTIONS_8[int(assets.action_index)])
     actual_delta = (
@@ -726,31 +470,21 @@ def export_online_workflow_assets(
         "belief_map_update_with_robot": output_dir_path / "belief_map_update_with_robot.png",
         "environment_execution": output_dir_path / "environment_execution.png",
     }
-    style = OnlineWorkflowStyle()
-    canvas = _build_method_world_canvas(
-        assets.belief_before_update,
-        assets.belief_after_update,
-        sensor,
-    )
-    trajectory_world = _recent_trajectory(assets, recent_steps=10)
-
     svg_files: dict[str, Path] = {}
     local_svg, radar_ray_count = _render_local_observation(
         files["local_observation_with_robot_radar"],
         assets=assets,
-        sensor=sensor,
         style=style,
-        dpi=int(rollout_config.dpi),
+        dpi=int(base.dpi),
         include_svg=include_svg,
     )
     if local_svg is not None:
         svg_files["local_observation_with_robot_radar"] = local_svg
-    action_svg = _render_action_selection(
+    action_svg, action_specs = _render_action_selection(
         files["legal_action_selection"],
         assets=assets,
-        sensor=sensor,
         style=style,
-        dpi=int(rollout_config.dpi),
+        dpi=int(base.dpi),
         include_svg=include_svg,
     )
     if action_svg is not None:
@@ -759,9 +493,8 @@ def export_online_workflow_assets(
         files["belief_map_update_with_robot"],
         assets=assets,
         canvas=canvas,
-        trajectory_world=trajectory_world,
         style=style,
-        dpi=int(rollout_config.dpi),
+        dpi=int(base.dpi),
         include_svg=include_svg,
     )
     if belief_svg is not None:
@@ -771,51 +504,61 @@ def export_online_workflow_assets(
         assets=assets,
         canvas=canvas,
         style=style,
-        dpi=int(rollout_config.dpi),
+        dpi=int(base.dpi),
         include_svg=include_svg,
     )
     if environment_svg is not None:
         svg_files["environment_execution"] = environment_svg
 
+    background_hash = _matrix_sha256(blueprint.belief_display)
+    selected_spec = next(spec for spec in action_specs if spec.state == "selected")
+    normal_width = float(style.paper.rendering["normal_action_linewidth_pt"])
     manifest = {
-        "seed": int(rollout_config.seed),
-        "step": int(assets.step),
+        **blueprint_manifest(blueprint),
         "chosen_action_index": int(assets.action_index),
         "chosen_action_key": str(assets.action_key),
         "chosen_action_delta_row_col": list(expected_delta),
-        "valid_action_indices": [int(idx) for idx in assets.valid_action_indices],
-        "valid_action_keys": [ACTION_TO_KEY[int(idx)] for idx in assets.valid_action_indices],
         "agent_position_at_observation": [int(v) for v in assets.local_observation.agent_world],
-        "agent_position_during_belief_update_before": [int(v) for v in assets.belief_before_update.agent_world],
-        "agent_position_during_belief_update_after": [int(v) for v in assets.belief_after_update.agent_world],
         "agent_position_before_action": [int(v) for v in assets.belief_after_update.agent_world],
         "agent_position_after_action": [int(v) for v in assets.environment_after_action.agent_world],
-        "belief_origin": [int(v) for v in assets.belief_after_update.belief_origin_world],
-        "belief_origin_before": [int(v) for v in assets.belief_before_update.belief_origin_world],
-        "belief_origin_after": [int(v) for v in assets.belief_after_update.belief_origin_world],
         "belief_canvas_origin": [int(v) for v in canvas.origin_world],
         "belief_canvas_shape": [int(v) for v in canvas.shape],
+        "belief_update_panel_count": 1,
+        "belief_update_semantics": "B_t with one robot at p_t",
+        "belief_update_robot_count": 1,
+        "belief_update_has_trajectory": False,
+        "belief_update_has_new_cell_highlight": False,
+        "environment_robot_count": 2,
+        "environment_motion_arrow_count": 0,
+        "belief_update_background_sha256": background_hash,
+        "environment_background_sha256": background_hash,
         "radar_ray_count": int(radar_ray_count),
         "newly_observed_cell_count": int(newly_observed_cell_count),
         "action_arrow_geometry": {
             "start_radius_cells": float(style.action_start_radius_cells),
-            "end_radius_cells": float(style.action_start_radius_cells + style.action_length_cells),
             "euclidean_length_cells": float(style.action_length_cells),
-            "per_direction_lengths_cells": [
-                float(style.action_length_cells) for _ in ACTIONS_8
-            ],
+            "per_direction_lengths_cells": [float(spec.length_cells) for spec in action_specs],
+            "normal_linewidth_pt": normal_width,
+            "selected_linewidth_pt": float(selected_spec.linewidth_pt),
+            "selected_to_normal_linewidth_ratio": float(selected_spec.linewidth_pt / normal_width),
         },
-        "coordinate_semantics": {
-            "world_and_array_order": "row_col",
-            "row_direction": "increases_downward",
-            "action_order": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
-            "diagonal_legality": "target and both orthogonal side cells must be free",
+        "action_colors": dict(style.paper.fig1_action_palette),
+        "robot_style": {
+            "contract_path": str(style.paper.contract_path),
+            "contract_version": str(style.paper.version),
+            "palette": dict(style.paper.robot_palette),
+            "geometry_cell_relative": dict(style.paper.robot_geometry_cell_relative),
+            "envelope_diameter_cells": float(robot_envelope_diameter_cells(style.paper)),
         },
         "method_semantics": {
-            "local_and_action_assets": "same-time local observation and legal action selection at p_t",
-            "belief_update_asset": "o_t fused from B_(t-1) to B_t while the robot remains at p_t",
-            "environment_asset": "p_t to p_(t+1) on B_t; o_(t+1) is returned but not fused into B_(t+1)",
-            "truth_map_visibility": "not rendered; used only by existing sensor simulation and legal transition",
+            "local_and_action_assets": "same seed-1 local_snap and legal action selection at p_t",
+            "belief_update_asset": "single B_t state with one robot at p_t",
+            "environment_asset": "p_t and p_(t+1) over the unchanged B_t background; no motion arrow",
+            "truth_map_visibility": "not rendered; used only by the existing sensor and transition semantics",
+        },
+        "figure_planning": {
+            "claim": "One online cycle turns the current observation and cumulative belief into a legal action and feedback without advancing the displayed belief beyond B_t.",
+            "anchor_module": "legal action mask and selected action",
         },
         "files": {name: _format_output_path(path) for name, path in files.items()},
         "svg_files": {name: _format_output_path(path) for name, path in svg_files.items()},

@@ -1,5 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:PaperFigureStyleDefaultPath = [IO.Path]::GetFullPath(
+    (Join-Path $PSScriptRoot "..\paper_figure_style.json")
+)
 
 function Release-VisioComObject {
     [CmdletBinding()]
@@ -516,6 +519,242 @@ function New-ArrowShape {
     return ,$shape
 }
 
+function Import-PaperFigureStyle {
+    [CmdletBinding()]
+    param(
+        [string]$Path = $script:PaperFigureStyleDefaultPath
+    )
+
+    $resolvedPath = [IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $resolvedPath)) {
+        throw "Paper figure style contract was not found at '$resolvedPath'."
+    }
+    $style = Get-Content -LiteralPath $resolvedPath -Raw | ConvertFrom-Json
+    foreach ($section in @(
+        "occupancy_palette",
+        "robot_palette",
+        "robot_geometry_cell_relative",
+        "fig1_action_palette",
+        "radar_palette",
+        "rendering"
+    )) {
+        if ($null -eq $style.$section) {
+            throw "Paper figure style contract is missing section '$section'."
+        }
+    }
+    foreach ($colorPath in @(
+        @("occupancy_palette", "unknown"),
+        @("occupancy_palette", "free"),
+        @("occupancy_palette", "obstacle"),
+        @("robot_palette", "body"),
+        @("robot_palette", "body_edge"),
+        @("robot_palette", "wheels"),
+        @("robot_palette", "radar"),
+        @("robot_palette", "heading"),
+        @("fig1_action_palette", "legal"),
+        @("fig1_action_palette", "illegal"),
+        @("fig1_action_palette", "selected"),
+        @("radar_palette", "ray"),
+        @("radar_palette", "nominal_boundary"),
+        @("radar_palette", "grid_line"),
+        @("radar_palette", "action")
+    )) {
+        $value = [string]$style.($colorPath[0]).($colorPath[1])
+        if ($value -notmatch '^#[0-9A-Fa-f]{6}$') {
+            throw "Invalid style color '$($colorPath -join '.')': '$value'."
+        }
+    }
+
+    $geometry = $style.robot_geometry_cell_relative
+    $bodyRadius = [Math]::Sqrt(
+        ([double]$geometry.body_width_cells / 2.0) * ([double]$geometry.body_width_cells / 2.0) +
+        ([double]$geometry.body_length_cells / 2.0) * ([double]$geometry.body_length_cells / 2.0)
+    )
+    $wheelRadius = [Math]::Sqrt(
+        (
+            [double]$geometry.wheel_offset_x_cells +
+            ([double]$geometry.wheel_width_cells / 2.0)
+        ) * (
+            [double]$geometry.wheel_offset_x_cells +
+            ([double]$geometry.wheel_width_cells / 2.0)
+        ) +
+        (
+            [double]$geometry.wheel_offset_y_cells +
+            ([double]$geometry.wheel_length_cells / 2.0)
+        ) * (
+            [double]$geometry.wheel_offset_y_cells +
+            ([double]$geometry.wheel_length_cells / 2.0)
+        )
+    )
+    $headingRadius = (
+        [double]$geometry.heading_start_cells +
+        [double]$geometry.heading_length_cells
+    )
+    $envelopeDiameter = 2.0 * [Math]::Max(
+        [Math]::Max($bodyRadius, $wheelRadius),
+        [Math]::Max([double]$geometry.radar_radius_cells, $headingRadius)
+    )
+    if ($envelopeDiameter -gt ([double]$geometry.envelope_target_cells + 0.000001)) {
+        throw (
+            "Robot geometry envelope $envelopeDiameter cells exceeds contract target " +
+            "$([double]$geometry.envelope_target_cells)."
+        )
+    }
+    if (
+        [double]$style.rendering.selected_action_linewidth_pt -lt
+        (1.6 * [double]$style.rendering.normal_action_linewidth_pt)
+    ) {
+        throw "Selected action linewidth must be at least 1.6x the normal action linewidth."
+    }
+    return [pscustomobject]@{
+        ContractPath = $resolvedPath
+        Version = [string]$style.version
+        OccupancyPalette = $style.occupancy_palette
+        RobotPalette = $style.robot_palette
+        RobotGeometry = $style.robot_geometry_cell_relative
+        Fig1ActionPalette = $style.fig1_action_palette
+        RadarPalette = $style.radar_palette
+        Rendering = $style.rendering
+        RobotEnvelopeDiameterCells = [double]$envelopeDiameter
+    }
+}
+
+function Add-PaperFigureRobotParts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Page,
+        [Parameter(Mandatory = $true)]
+        $Layer,
+        [Parameter(Mandatory = $true)]
+        [string]$NamePrefix,
+        [Parameter(Mandatory = $true)]
+        [double]$CenterX,
+        [Parameter(Mandatory = $true)]
+        [double]$CenterY,
+        [Parameter(Mandatory = $true)]
+        [double]$CellSizeIn,
+        [Parameter(Mandatory = $true)]
+        $Style,
+        [ValidateRange(0, 7)]
+        [int]$HeadingAction = 0,
+        [double]$TransparencyPercent = 0.0
+    )
+
+    $actionDeltas = @(
+        @(-1.0, 0.0),
+        @(-1.0, 1.0),
+        @(0.0, 1.0),
+        @(1.0, 1.0),
+        @(1.0, 0.0),
+        @(1.0, -1.0),
+        @(0.0, -1.0),
+        @(-1.0, -1.0)
+    )
+    $deltaRow = [double]$actionDeltas[$HeadingAction][0]
+    $deltaCol = [double]$actionDeltas[$HeadingAction][1]
+    $norm = [Math]::Sqrt(($deltaRow * $deltaRow) + ($deltaCol * $deltaCol))
+    $headingX = $deltaCol / $norm
+    $headingY = -$deltaRow / $norm
+    # A Visio rectangle's local long axis is +Y at Angle=0.
+    $angleRad = [Math]::Atan2(-$headingX, $headingY)
+    $angleFormula = $angleRad.ToString("R", [Globalization.CultureInfo]::InvariantCulture) + " rad"
+    $cosAngle = [Math]::Cos($angleRad)
+    $sinAngle = [Math]::Sin($angleRad)
+    $geometry = $Style.RobotGeometry
+    $palette = $Style.RobotPalette
+    $rendering = $Style.Rendering
+    $parts = @()
+
+    $wheelWidth = [double]$geometry.wheel_width_cells * $CellSizeIn
+    $wheelLength = [double]$geometry.wheel_length_cells * $CellSizeIn
+    $wheelOffsetX = [double]$geometry.wheel_offset_x_cells * $CellSizeIn
+    $wheelOffsetY = [double]$geometry.wheel_offset_y_cells * $CellSizeIn
+    $wheelIndex = 0
+    foreach ($localY in @(-$wheelOffsetY, $wheelOffsetY)) {
+        foreach ($localX in @(-$wheelOffsetX, $wheelOffsetX)) {
+            $wheelIndex++
+            $offsetX = ($localX * $cosAngle) - ($localY * $sinAngle)
+            $offsetY = ($localX * $sinAngle) + ($localY * $cosAngle)
+            $wheel = $Page.DrawRectangle(
+                $CenterX + $offsetX - ($wheelWidth / 2.0),
+                $CenterY + $offsetY - ($wheelLength / 2.0),
+                $CenterX + $offsetX + ($wheelWidth / 2.0),
+                $CenterY + $offsetY + ($wheelLength / 2.0)
+            )
+            Set-VisioShapeName -Shape $wheel -Name ("{0}_wheel_{1:D2}" -f $NamePrefix, $wheelIndex)
+            Set-VisioNodeStyle `
+                -Shape $wheel `
+                -FillColor ([string]$palette.wheels) `
+                -LineColor ([string]$palette.wheels) `
+                -LineWeightPt ([double]$rendering.wheel_edge_linewidth_pt) `
+                -RoundingIn ([Math]::Max(0.001, 0.04 * $CellSizeIn)) `
+                -FillTransparencyPercent $TransparencyPercent
+            Set-VisioCellFormula -Shape $wheel -CellName "Angle" -Formula $angleFormula
+            Set-VisioCellFormula -Shape $wheel -CellName "LineColorTrans" -Formula "$TransparencyPercent%" -Optional
+            Add-ShapeToVisioLayer -Layer $Layer -Shape $wheel
+            $parts += $wheel
+        }
+    }
+
+    $bodyWidth = [double]$geometry.body_width_cells * $CellSizeIn
+    $bodyLength = [double]$geometry.body_length_cells * $CellSizeIn
+    $body = $Page.DrawRectangle(
+        $CenterX - ($bodyWidth / 2.0),
+        $CenterY - ($bodyLength / 2.0),
+        $CenterX + ($bodyWidth / 2.0),
+        $CenterY + ($bodyLength / 2.0)
+    )
+    Set-VisioShapeName -Shape $body -Name "${NamePrefix}_body"
+    Set-VisioNodeStyle `
+        -Shape $body `
+        -FillColor ([string]$palette.body) `
+        -LineColor ([string]$palette.body_edge) `
+        -LineWeightPt ([double]$rendering.body_edge_linewidth_pt) `
+        -RoundingIn ([Math]::Max(0.001, 0.10 * $CellSizeIn)) `
+        -FillTransparencyPercent $TransparencyPercent
+    Set-VisioCellFormula -Shape $body -CellName "Angle" -Formula $angleFormula
+    Set-VisioCellFormula -Shape $body -CellName "LineColorTrans" -Formula "$TransparencyPercent%" -Optional
+    Add-ShapeToVisioLayer -Layer $Layer -Shape $body
+    $parts += $body
+
+    $radarRadius = [double]$geometry.radar_radius_cells * $CellSizeIn
+    $radar = $Page.DrawOval(
+        $CenterX - $radarRadius,
+        $CenterY - $radarRadius,
+        $CenterX + $radarRadius,
+        $CenterY + $radarRadius
+    )
+    Set-VisioShapeName -Shape $radar -Name "${NamePrefix}_radar"
+    Set-VisioNodeStyle `
+        -Shape $radar `
+        -FillColor ([string]$palette.radar) `
+        -LineColor ([string]$palette.body_edge) `
+        -LineWeightPt ([double]$rendering.radar_edge_linewidth_pt) `
+        -FillTransparencyPercent $TransparencyPercent
+    Set-VisioCellFormula -Shape $radar -CellName "LineColorTrans" -Formula "$TransparencyPercent%" -Optional
+    Add-ShapeToVisioLayer -Layer $Layer -Shape $radar
+    $parts += $radar
+
+    $headingStart = [double]$geometry.heading_start_cells * $CellSizeIn
+    $headingLength = [double]$geometry.heading_length_cells * $CellSizeIn
+    $heading = New-ArrowShape `
+        -Page $Page `
+        -Layer $Layer `
+        -Name "${NamePrefix}_heading" `
+        -BeginX ($CenterX + ($headingX * $headingStart)) `
+        -BeginY ($CenterY + ($headingY * $headingStart)) `
+        -EndX ($CenterX + ($headingX * ($headingStart + $headingLength))) `
+        -EndY ($CenterY + ($headingY * ($headingStart + $headingLength))) `
+        -LineColor ([string]$palette.heading) `
+        -LineWeightPt ([double]$rendering.heading_linewidth_pt) `
+        -EndArrow 13 `
+        -EndArrowSize 1
+    Set-VisioCellFormula -Shape $heading -CellName "LineColorTrans" -Formula "$TransparencyPercent%" -Optional
+    $parts += $heading
+    return $parts
+}
+
 function New-VisioShapeGroup {
     [CmdletBinding()]
     param(
@@ -905,7 +1144,9 @@ function Test-VisioOnlineInteractionDocument {
         [int]$ExpectedMainConnectorCount = 6,
         [string[]]$RequiredIllustrationNames = @(),
         [string[]]$ForbiddenTexts = @(),
-        [string]$ActionArrowGroupName = ""
+        [string]$ActionArrowGroupName = "",
+        $Blueprint,
+        $Style
     )
 
     if ([int]$Document.Pages.Count -ne 1) {
@@ -1010,10 +1251,20 @@ function Test-VisioOnlineInteractionDocument {
         $actionArrowCount = 0
         $actionArrowLengthMin = 0.0
         $actionArrowLengthMax = 0.0
+        $actionLegalCount = 0
+        $actionIllegalCount = 0
+        $actionSelectedCount = 0
+        $selectedActionLineWeightIn = 0.0
+        $normalActionLineWeightMaxIn = 0.0
         if (-not [string]::IsNullOrWhiteSpace($ActionArrowGroupName)) {
             $actionGroup = Get-VisioShapeByName -Page $page -Name $ActionArrowGroupName
             try {
                 $actionLengths = New-Object System.Collections.Generic.List[double]
+                $normalWeights = New-Object System.Collections.Generic.List[double]
+                $actionIndexByName = @{
+                    N = 0; NE = 1; E = 2; SE = 3
+                    S = 4; SW = 5; W = 6; NW = 7
+                }
                 for ($index = 1; $index -le [int]$actionGroup.Shapes.Count; $index++) {
                     $arrow = $actionGroup.Shapes.Item($index)
                     try {
@@ -1030,6 +1281,42 @@ function Test-VisioOnlineInteractionDocument {
                                 (($endY - $beginY) * ($endY - $beginY))
                             )
                         )
+                        if ($null -ne $Blueprint -and $null -ne $Style) {
+                            $directionName = ([string]$arrow.NameU).Substring("fig1_action_arrow_".Length)
+                            if (-not $actionIndexByName.ContainsKey($directionName)) {
+                                throw "Unknown Figure 1 action direction '$directionName'."
+                            }
+                            $actionIndex = [int]$actionIndexByName[$directionName]
+                            $validIndices = @($Blueprint.valid_action_indices | ForEach-Object { [int]$_ })
+                            $state = if ($actionIndex -eq [int]$Blueprint.selected_action) {
+                                $actionSelectedCount++
+                                "selected"
+                            }
+                            elseif ($actionIndex -in $validIndices) {
+                                $actionLegalCount++
+                                "legal"
+                            }
+                            else {
+                                $actionIllegalCount++
+                                "illegal"
+                            }
+                            $expectedColor = [string]$Style.Fig1ActionPalette.$state
+                            $expectedFormula = ConvertTo-VisioRgbFormula -HexColor $expectedColor
+                            $actualFormula = [string]$arrow.CellsU("LineColor").FormulaU
+                            if (-not $actualFormula.ToUpperInvariant().Contains($expectedFormula.ToUpperInvariant())) {
+                                throw (
+                                    "Figure 1 action '$directionName' color '$actualFormula' " +
+                                    "does not match $state contract color '$expectedFormula'."
+                                )
+                            }
+                            $weight = [double]$arrow.CellsU("LineWeight").ResultIU
+                            if ($state -eq "selected") {
+                                $selectedActionLineWeightIn = $weight
+                            }
+                            else {
+                                $normalWeights.Add($weight)
+                            }
+                        }
                     }
                     finally {
                         [void][Runtime.InteropServices.Marshal]::ReleaseComObject($arrow)
@@ -1047,9 +1334,115 @@ function Test-VisioOnlineInteractionDocument {
                         "max=$actionArrowLengthMax."
                     )
                 }
+                if ($null -ne $Blueprint -and $null -ne $Style) {
+                    $normalActionLineWeightMaxIn = [double](($normalWeights | Measure-Object -Maximum).Maximum)
+                    if ($actionSelectedCount -ne 1) {
+                        throw "Expected one selected Figure 1 action arrow, found $actionSelectedCount."
+                    }
+                    if ($actionLegalCount -lt 1 -or $actionIllegalCount -lt 1) {
+                        throw "Figure 1 must contain both legal and illegal unselected action arrows."
+                    }
+                    if ($selectedActionLineWeightIn -lt (1.6 * $normalActionLineWeightMaxIn)) {
+                        throw "Selected Figure 1 action arrow is not at least 1.6x thicker than normal arrows."
+                    }
+                }
             }
             finally {
                 [void][Runtime.InteropServices.Marshal]::ReleaseComObject($actionGroup)
+            }
+        }
+
+        $beliefPanelCount = 0
+        $beliefRobotCount = 0
+        $environmentRobotCount = 0
+        $beliefBackgroundMatchesEnvironment = $false
+        if ($null -ne $Blueprint -and $null -ne $Style) {
+            $beliefGroup = Get-VisioShapeByName -Page $page -Name "fig1_illustration_belief_update"
+            $environmentGroup = Get-VisioShapeByName -Page $page -Name "fig1_illustration_environment"
+            $localGroup = Get-VisioShapeByName -Page $page -Name "fig1_illustration_local_observation"
+            try {
+                $beliefCells = @{}
+                $environmentCells = @{}
+                for ($index = 1; $index -le [int]$beliefGroup.Shapes.Count; $index++) {
+                    $child = $beliefGroup.Shapes.Item($index)
+                    try {
+                        $name = [string]$child.NameU
+                        if ($name -like "fig1_belief_grid_cell_*") {
+                            $suffix = $name.Substring("fig1_belief_grid_cell_".Length)
+                            $beliefCells[$suffix] = [string]$child.CellsU("FillForegnd").FormulaU
+                        }
+                        if ($name -eq "fig1_belief_robot_body") {
+                            $beliefRobotCount++
+                        }
+                        if (
+                            $name -like "*belief_old*" -or
+                            $name -like "*belief_observation*" -or
+                            $name -like "*fusion_arrow*"
+                        ) {
+                            throw "Legacy B_(t-1)/o_t/fusion content remains in the Figure 1 B_t module."
+                        }
+                    }
+                    finally {
+                        Release-VisioComObject -ComObject $child
+                    }
+                }
+                for ($index = 1; $index -le [int]$environmentGroup.Shapes.Count; $index++) {
+                    $child = $environmentGroup.Shapes.Item($index)
+                    try {
+                        $name = [string]$child.NameU
+                        if ($name -like "fig1_environment_grid_cell_*") {
+                            $suffix = $name.Substring("fig1_environment_grid_cell_".Length)
+                            $environmentCells[$suffix] = [string]$child.CellsU("FillForegnd").FormulaU
+                        }
+                        if ($name -in @(
+                            "fig1_environment_robot_old_body",
+                            "fig1_environment_robot_new_body"
+                        )) {
+                            $environmentRobotCount++
+                        }
+                        if ($name -like "*motion_arrow*") {
+                            throw "The Figure 1 environment module must not contain a motion arrow."
+                        }
+                    }
+                    finally {
+                        Release-VisioComObject -ComObject $child
+                    }
+                }
+                for ($index = 1; $index -le [int]$localGroup.Shapes.Count; $index++) {
+                    $child = $localGroup.Shapes.Item($index)
+                    try {
+                        if ([string]$child.NameU -like "*ray*") {
+                            throw "Figure 1 local observation must not contain radar rays."
+                        }
+                    }
+                    finally {
+                        Release-VisioComObject -ComObject $child
+                    }
+                }
+                $beliefPanelCount = 1
+                if ($beliefRobotCount -ne 1) {
+                    throw "Figure 1 B_t module must contain exactly one robot, found $beliefRobotCount."
+                }
+                if ($environmentRobotCount -ne 2) {
+                    throw "Figure 1 environment module must contain two robots, found $environmentRobotCount."
+                }
+                if ($beliefCells.Count -ne $environmentCells.Count) {
+                    throw "Figure 1 B_t and environment grids contain different known-cell counts."
+                }
+                foreach ($suffix in $beliefCells.Keys) {
+                    if (
+                        -not $environmentCells.ContainsKey($suffix) -or
+                        $environmentCells[$suffix] -ne $beliefCells[$suffix]
+                    ) {
+                        throw "Figure 1 B_t and environment backgrounds differ at '$suffix'."
+                    }
+                }
+                $beliefBackgroundMatchesEnvironment = $true
+            }
+            finally {
+                Release-VisioComObject -ComObject $beliefGroup
+                Release-VisioComObject -ComObject $environmentGroup
+                Release-VisioComObject -ComObject $localGroup
             }
         }
 
@@ -1070,6 +1463,17 @@ function Test-VisioOnlineInteractionDocument {
             ActionArrowCount = [int]$actionArrowCount
             ActionArrowLengthMinIn = [Math]::Round($actionArrowLengthMin, 4)
             ActionArrowLengthMaxIn = [Math]::Round($actionArrowLengthMax, 4)
+            ActionLegalCount = [int]$actionLegalCount
+            ActionIllegalCount = [int]$actionIllegalCount
+            ActionSelectedCount = [int]$actionSelectedCount
+            SelectedActionLineWeightIn = [Math]::Round($selectedActionLineWeightIn, 6)
+            NormalActionLineWeightMaxIn = [Math]::Round($normalActionLineWeightMaxIn, 6)
+            BeliefUpdatePanelCount = [int]$beliefPanelCount
+            BeliefUpdateRobotCount = [int]$beliefRobotCount
+            EnvironmentRobotCount = [int]$environmentRobotCount
+            BeliefBackgroundMatchesEnvironment = [bool]$beliefBackgroundMatchesEnvironment
+            StyleContractPath = $(if ($null -ne $Style) { [string]$Style.ContractPath } else { "" })
+            StyleContractVersion = $(if ($null -ne $Style) { [string]$Style.Version } else { "" })
             NativeTopLevelShapeCount = [int]$page.Shapes.Count
             ForeignObjectCount = [int]$foreignObjectCount
             ExternalLinkCount = [int]($externalLinkCount + $dataRecordsetCount)

@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "occupancy_palette": {
+    "unknown": "#B4BCC4",
+    "free": "#F8F8F6",
+    "obstacle": "#1E1E1E"
+  },
+  "robot_palette": {
+    "body": "#55966B",
+    "body_edge": "#2F5940",
+    "wheels": "#30363B",
+    "radar": "#E99D4E",
+    "heading": "#F8F8F6"
+  },
+  "robot_geometry_cell_relative": {
+    "body_width_cells": 0.48,
+    "body_length_cells": 0.68,
+    "wheel_width_cells": 0.10,
+    "wheel_length_cells": 0.20,
+    "wheel_offset_x_cells": 0.29,
+    "wheel_offset_y_cells": 0.20,
+    "radar_radius_cells": 0.12,
+    "heading_start_cells": 0.05,
+    "heading_length_cells": 0.30,
+    "envelope_target_cells": 0.95
+  },
+  "fig1_action_palette": {
+    "legal": "#2A9D55",
+    "illegal": "#D1495B",
+    "selected": "#1565C0"
+  },
+  "radar_palette": {
+    "ray": "#5185C0",
+    "nominal_boundary": "#5185C0",
+    "grid_line": "#C8D2DA",
+    "action": "#C96144"
+  },
+  "rendering": {
+    "body_edge_linewidth_pt": 0.85,
+    "wheel_edge_linewidth_pt": 0.45,
+    "radar_edge_linewidth_pt": 0.70,
+    "heading_linewidth_pt": 0.85,
+    "normal_action_linewidth_pt": 1.75,
+    "selected_action_linewidth_pt": 3.10,
+    "normal_action_arrowhead_scale": 12.0,
+    "selected_action_arrowhead_scale": 15.0
+  }
+}

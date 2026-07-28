@@ -115,7 +115,7 @@ class ExportConfig:
     obstacle_ratio: float = 0.20
     obs_size: int = 6
     scan_radius: int = 10
-    seed: int = 0
+    seed: int = 1
     step_mid: int = 4
     step_late: int = 8
     dpi: int = 240
@@ -1247,7 +1247,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--output-dir", type=Path, default=REPO_ROOT / "run_picture")
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--rows", type=int, default=40)
     parser.add_argument("--cols", type=int, default=60)
     parser.add_argument("--obstacle-ratio", type=float, default=0.20)

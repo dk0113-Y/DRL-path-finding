@@ -204,17 +204,19 @@ experiment_records/final_method/unified_final_probe/
 ```powershell
 python tools\export_architecture_pictures.py --mode online-workflow-assets `
   --output-dir tmp_plot_smoke\online_workflow_assets `
-  --seed 0 --rows 40 --cols 60 --obstacle-ratio 0.20 `
+  --seed 1 --rows 40 --cols 60 --obstacle-ratio 0.20 `
   --obs-size 6 --scan-radius 10 --method-step 8 --dpi 240
 ```
 
-默认输出高分辨率 PNG 和一致性 manifest；添加 `--include-svg` 可同时导出 SVG。四张素材按同一在线决策周期组织：局部观测、`B_(t-1) -> B_t` 融合与动作选择保持在位置 `p_t`，环境执行仅显示 `p_t -> p_(t+1)`，不会提前把 `o_(t+1)` 融合为 `B_(t+1)`。局部观测素材不绘制雷达射线，真值地图也不会被画成策略输入。
+默认输出高分辨率 PNG 和一致性 manifest；添加 `--include-svg` 可同时导出 SVG。图 1 与图 2 共用 `tools/paper_figure_style.json` 和 seed-1 演示蓝图。当前 seed 1 的 step 8 满足合法/非法动作并存且局部观测含障碍物：局部观测、单一 `B_t` 累计信念地图和动作选择均位于 `p_t`，环境执行在不改变 `B_t` 背景的前提下显示半透明 `p_t` 与实色 `p_(t+1)`，且不绘制运动箭头或提前融合 `o_(t+1)`。局部观测素材不绘制雷达射线，真值地图也不会被画成策略输入。
 
 ### 环境、局部雷达与八邻域动作空间论文图
 
-`tools/export_environment_model_figure.py` 为单一合并场景的独立导出入口，使用现有
-`RadarSensor` LOS 模板和 `ACTIONS_8` 方向定义。`--visual-ray-count` 仅控制代表性
-可视化射线采样数，不表示传感器线数；`--format` 支持 `png`、`svg` 或 `both`。
+`tools/export_environment_model_figure.py` 为单一合并场景的独立导出入口，使用与图 1
+相同的 seed-1 step-8 蓝图、`RadarSensor(scan_radius=10)` 的 21×21 `local_snap`、
+实际 LOS 模板和 `ACTIONS_8` 方向定义。代表性射线在首个障碍或不可见栅格前终止，
+因此长度随遮挡而变化。`--visual-ray-count` 仅控制从实际模板中抽取的可视化射线数，
+不表示传感器线数；`--format` 支持 `png`、`svg` 或 `both`。
 
 ```powershell
 python tools\export_environment_model_figure.py --help
