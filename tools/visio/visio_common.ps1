@@ -140,12 +140,13 @@ function Set-VisioNodeStyle {
         [string]$FillColor,
         [string]$LineColor = "#314D63",
         [double]$LineWeightPt = 1.35,
-        [double]$RoundingIn = 0.0
+        [double]$RoundingIn = 0.0,
+        [double]$FillTransparencyPercent = 0.0
     )
 
     Set-VisioCellFormula -Shape $Shape -CellName "FillPattern" -Formula "1"
     Set-VisioCellFormula -Shape $Shape -CellName "FillForegnd" -Formula (ConvertTo-VisioRgbFormula $FillColor)
-    Set-VisioCellFormula -Shape $Shape -CellName "FillForegndTrans" -Formula "0%"
+    Set-VisioCellFormula -Shape $Shape -CellName "FillForegndTrans" -Formula "$FillTransparencyPercent%"
     Set-VisioCellFormula -Shape $Shape -CellName "LinePattern" -Formula "1"
     Set-VisioCellFormula -Shape $Shape -CellName "LineColor" -Formula (ConvertTo-VisioRgbFormula $LineColor)
     Set-VisioCellFormula -Shape $Shape -CellName "LineWeight" -Formula "$LineWeightPt pt"
@@ -638,7 +639,8 @@ function Add-VisioTextBlock {
         [ValidateSet("Left", "Center", "Right")]
         [string]$HorizontalAlign = "Center",
         [ValidateSet("Top", "Middle", "Bottom")]
-        [string]$VerticalAlign = "Middle"
+        [string]$VerticalAlign = "Middle",
+        [string]$TextColor = "#233746"
     )
 
     $shape = $Page.DrawRectangle(
@@ -656,7 +658,8 @@ function Add-VisioTextBlock {
         -FontName $FontName `
         -FontSizePt $FontSizePt `
         -HorizontalAlign $HorizontalAlign `
-        -VerticalAlign $VerticalAlign
+        -VerticalAlign $VerticalAlign `
+        -TextColor $TextColor
     return ,$shape
 }
 
@@ -679,7 +682,9 @@ function Add-VisioRoundedModule {
         [Parameter(Mandatory = $true)]
         [double]$Height,
         [Parameter(Mandatory = $true)]
-        [string]$FillColor
+        [string]$FillColor,
+        [double]$TitleFontSizePt = 9.6,
+        [double]$FormulaFontSizePt = 11.0
     )
 
     $shape = $Page.DrawRectangle(
@@ -701,7 +706,7 @@ function Add-VisioRoundedModule {
         -Width ($Width - 0.10) `
         -Height 0.42 `
         -FontName "Microsoft YaHei" `
-        -FontSizePt 9.6
+        -FontSizePt $TitleFontSizePt
 
     if (-not [string]::IsNullOrWhiteSpace($Formula)) {
         $null = Add-VisioTextBlock `
@@ -713,7 +718,7 @@ function Add-VisioRoundedModule {
             -Width ($Width - 0.12) `
             -Height 0.38 `
             -FontName "Cambria Math" `
-            -FontSizePt 11.0
+            -FontSizePt $FormulaFontSizePt
     }
     return ,$shape
 }
@@ -895,7 +900,12 @@ function Test-VisioOnlineInteractionDocument {
         [Parameter(Mandatory = $true)]
         [string]$DecisionName,
         [Parameter(Mandatory = $true)]
-        [string]$TerminatorName
+        [string]$TerminatorName,
+        [int]$ExpectedMainModuleCount = 6,
+        [int]$ExpectedMainConnectorCount = 6,
+        [string[]]$RequiredIllustrationNames = @(),
+        [string[]]$ForbiddenTexts = @(),
+        [string]$ActionArrowGroupName = ""
     )
 
     if ([int]$Document.Pages.Count -ne 1) {
@@ -905,6 +915,10 @@ function Test-VisioOnlineInteractionDocument {
     try {
         foreach ($nodeName in $RequiredNodeNames) {
             $shape = Get-VisioShapeByName -Page $page -Name $nodeName
+            [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shape)
+        }
+        foreach ($illustrationName in $RequiredIllustrationNames) {
+            $shape = Get-VisioShapeByName -Page $page -Name $illustrationName
             [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shape)
         }
 
@@ -941,8 +955,13 @@ function Test-VisioOnlineInteractionDocument {
                 throw "Required Visio text '$requiredText' was not found."
             }
         }
+        foreach ($forbiddenText in $ForbiddenTexts) {
+            if ($joinedText.Contains($forbiddenText)) {
+                throw "Forbidden training-related Visio text '$forbiddenText' was found."
+            }
+        }
 
-        $expectedMainConnectors = 1..7 | ForEach-Object { "connector_main_$_" }
+        $expectedMainConnectors = 1..$ExpectedMainConnectorCount | ForEach-Object { "connector_main_$_" }
         foreach ($connectorName in $expectedMainConnectors) {
             if (-not $connectorNames.Contains($connectorName)) {
                 throw "Required main-flow connector '$connectorName' was not found."
@@ -988,6 +1007,52 @@ function Test-VisioOnlineInteractionDocument {
             throw "Found external hyperlinks or data links; expected none."
         }
 
+        $actionArrowCount = 0
+        $actionArrowLengthMin = 0.0
+        $actionArrowLengthMax = 0.0
+        if (-not [string]::IsNullOrWhiteSpace($ActionArrowGroupName)) {
+            $actionGroup = Get-VisioShapeByName -Page $page -Name $ActionArrowGroupName
+            try {
+                $actionLengths = New-Object System.Collections.Generic.List[double]
+                for ($index = 1; $index -le [int]$actionGroup.Shapes.Count; $index++) {
+                    $arrow = $actionGroup.Shapes.Item($index)
+                    try {
+                        if ([string]$arrow.NameU -notlike "fig1_action_arrow_*") {
+                            continue
+                        }
+                        $beginX = [double]$arrow.CellsU("BeginX").ResultIU
+                        $beginY = [double]$arrow.CellsU("BeginY").ResultIU
+                        $endX = [double]$arrow.CellsU("EndX").ResultIU
+                        $endY = [double]$arrow.CellsU("EndY").ResultIU
+                        $actionLengths.Add(
+                            [Math]::Sqrt(
+                                (($endX - $beginX) * ($endX - $beginX)) +
+                                (($endY - $beginY) * ($endY - $beginY))
+                            )
+                        )
+                    }
+                    finally {
+                        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($arrow)
+                    }
+                }
+                $actionArrowCount = [int]$actionLengths.Count
+                if ($actionArrowCount -ne 8) {
+                    throw "Expected 8 normalized action arrows, found $actionArrowCount."
+                }
+                $actionArrowLengthMin = [double]($actionLengths | Measure-Object -Minimum).Minimum
+                $actionArrowLengthMax = [double]($actionLengths | Measure-Object -Maximum).Maximum
+                if (($actionArrowLengthMax - $actionArrowLengthMin) -gt 0.01) {
+                    throw (
+                        "Action-arrow lengths are inconsistent: min=$actionArrowLengthMin, " +
+                        "max=$actionArrowLengthMax."
+                    )
+                }
+            }
+            finally {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($actionGroup)
+            }
+        }
+
         $pageWidth = [double]$page.PageSheet.CellsU("PageWidth").ResultIU
         $pageHeight = [double]$page.PageSheet.CellsU("PageHeight").ResultIU
         return [pscustomobject]@{
@@ -995,18 +1060,23 @@ function Test-VisioOnlineInteractionDocument {
             PageWidthIn = [Math]::Round($pageWidth, 3)
             PageHeightIn = [Math]::Round($pageHeight, 3)
             LogicalNodeCount = [int]$RequiredNodeNames.Count
-            MainModuleCount = 7
+            MainModuleCount = [int]$ExpectedMainModuleCount
             DecisionNodeCount = 1
             TerminatorNodeCount = 1
             ConnectorCount = [int]$connectorNames.Count
-            MainConnectorCount = 7
+            MainConnectorCount = [int]$ExpectedMainConnectorCount
             BranchConnectorCount = 2
+            IllustrationGroupCount = [int]$RequiredIllustrationNames.Count
+            ActionArrowCount = [int]$actionArrowCount
+            ActionArrowLengthMinIn = [Math]::Round($actionArrowLengthMin, 4)
+            ActionArrowLengthMaxIn = [Math]::Round($actionArrowLengthMax, 4)
             NativeTopLevelShapeCount = [int]$page.Shapes.Count
             ForeignObjectCount = [int]$foreignObjectCount
             ExternalLinkCount = [int]($externalLinkCount + $dataRecordsetCount)
             NoLoopTargets = @($noTargets)
             YesBranchTargets = @($yesTargets)
             RequiredTextVerified = $true
+            ForbiddenTextVerified = $true
         }
     }
     finally {

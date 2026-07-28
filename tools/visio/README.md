@@ -16,11 +16,14 @@ Outputs are written outside the repository to:
 C:\Users\Dk\Desktop\SCI\paper_picture\visio_outputs
 ```
 
-Figure 1 is the online decision and environment-interaction loop only. Figure 2
-is a fixed 15-by-15 local occupancy-grid scene with a one-cell robot, the full
-eight-neighbor candidate action space, and 32 representative equal-length rays
-for schematic visualization. The ray count is a drawing choice, not a physical
-sensor-channel specification.
+Figure 1 is the online decision and environment-interaction loop only. It uses
+six main modules plus a termination decision and episode-end node. Its local
+observation, belief fusion, policy-state, online-Q, masked-action, and
+pose-transition illustrations are native editable Visio shapes; no raster
+artwork is embedded. Figure 2 is a fixed 15-by-15 local occupancy-grid scene
+with a one-cell robot, the full eight-neighbor candidate action space, and 32
+representative equal-length rays for schematic visualization. The ray count is
+a drawing choice, not a physical sensor-channel specification.
 
 Each script exports a 300 DPI PNG preview from Visio and then reopens the VSDX
 in an independent hidden Visio process for structural validation. If a target

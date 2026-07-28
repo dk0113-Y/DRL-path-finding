@@ -208,7 +208,7 @@ python tools\export_architecture_pictures.py --mode online-workflow-assets `
   --obs-size 6 --scan-radius 10 --method-step 8 --dpi 240
 ```
 
-默认输出高分辨率 PNG 和一致性 manifest；添加 `--include-svg` 可同时导出 SVG。素材只显示局部观测与累计 belief，不会把真值地图画成策略输入。
+默认输出高分辨率 PNG 和一致性 manifest；添加 `--include-svg` 可同时导出 SVG。四张素材按同一在线决策周期组织：局部观测、`B_(t-1) -> B_t` 融合与动作选择保持在位置 `p_t`，环境执行仅显示 `p_t -> p_(t+1)`，不会提前把 `o_(t+1)` 融合为 `B_(t+1)`。局部观测素材不绘制雷达射线，真值地图也不会被画成策略输入。
 
 ### 环境、局部雷达与八邻域动作空间论文图
 
