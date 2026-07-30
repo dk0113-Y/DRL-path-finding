@@ -73,7 +73,7 @@ function Add-Fig3Rect {
         if ($Bold) {
             Set-VisioCellFormula -Shape $shape -CellName "Char.Style" -Formula "1"
         }
-        foreach ($marginName in @("TxtMarginLeft", "TxtMarginRight", "TxtMarginTop", "TxtMarginBottom")) {
+        foreach ($marginName in @("LeftMargin", "RightMargin", "TopMargin", "BottomMargin")) {
             Set-VisioCellFormula -Shape $shape -CellName $marginName -Formula "0.01 in" -Optional
         }
     }
@@ -107,7 +107,7 @@ function Add-Fig3Text {
     if ($Bold) {
         Set-VisioCellFormula -Shape $shape -CellName "Char.Style" -Formula "1"
     }
-    foreach ($marginName in @("TxtMarginLeft", "TxtMarginRight", "TxtMarginTop", "TxtMarginBottom")) {
+    foreach ($marginName in @("LeftMargin", "RightMargin", "TopMargin", "BottomMargin")) {
         Set-VisioCellFormula -Shape $shape -CellName $marginName -Formula "0.005 in" -Optional
     }
     return ,$shape
@@ -244,7 +244,7 @@ function Add-Fig3QMatrix {
                 -LineWeightPt 0.65 `
                 -RoundingIn 0.0 `
                 -Text $label `
-                -FontSizePt 3.5 `
+                -FontSizePt 4.2 `
                 -TextColor $script:Ink
         }
     }
@@ -422,24 +422,24 @@ try {
 
     # Module 2 upper local branch.
     $null = Add-Fig3Rect -Page $page -Name "module2_local_input" -Left 2.64 -Bottom 1.76 -Right 3.08 -Top 2.48 -Fill $script:WarmLight -Line $script:Warm -LineWeightPt 0.9 -RoundingIn 0.05
-    $null = Add-Fig3Text -Page $page -Name "module2_local_input_label" -Text "Local`noccupancy–behavior`nstate" -CenterX 2.86 -CenterY 2.31 -Width 0.50 -Height 0.30 -FontSizePt 3.6
-    $null = Add-Fig3Svg -Page $page -Name "asset_local_state_module2" -Path ([string]$assetPaths["local_occupancy_behavior_state"]) -CenterX 2.86 -CenterY 1.98 -MaxWidth 0.30 -MaxHeight 0.30
+    $null = Add-Fig3Text -Page $page -Name "module2_local_input_label" -Text "Local`noccupancy–`nbehavior`nstate" -CenterX 2.86 -CenterY 2.30 -Width 0.50 -Height 0.36 -FontSizePt 5.0
+    $null = Add-Fig3Svg -Page $page -Name "asset_local_state_module2" -Path ([string]$assetPaths["local_occupancy_behavior_state"]) -CenterX 2.86 -CenterY 1.91 -MaxWidth 0.28 -MaxHeight 0.28
     $null = Add-Fig3Rect -Page $page -Name "local_advantage_branch" -Left 3.23 -Bottom 1.76 -Right 3.81 -Top 2.48 -Fill $script:WarmLight -Line $script:Warm -LineWeightPt 0.9 -RoundingIn 0.05
     $null = Add-Fig3Text -Page $page -Name "local_advantage_branch_label" -Text "Local advantage`nbranch" -CenterX 3.52 -CenterY 2.35 -Width 0.50 -Height 0.22 -FontSizePt 5.6 -Bold $true
     Add-Fig3FeatureBlocks -Page $page -Prefix "local_encoder" -CenterX 3.52 -CenterY 1.99 -Color $script:Warm -LightColor "#F2CB9F" -Mode "Encoder"
     $null = Add-Fig3Rect -Page $page -Name "action_conditioned_features" -Left 3.96 -Bottom 1.76 -Right 4.52 -Top 2.48 -Fill $script:WarmLight -Line $script:Warm -LineWeightPt 0.9 -RoundingIn 0.05
-    $null = Add-Fig3Text -Page $page -Name "action_conditioned_features_label" -Text "Action-conditioned`nlocal features" -CenterX 4.24 -CenterY 2.35 -Width 0.50 -Height 0.22 -FontSizePt 4.8
+    $null = Add-Fig3Text -Page $page -Name "action_conditioned_features_label" -Text "Action-`nconditioned`nlocal features" -CenterX 4.24 -CenterY 2.32 -Width 0.50 -Height 0.30 -FontSizePt 5.0
     Add-Fig3FeatureBlocks -Page $page -Prefix "local_feature_vector" -CenterX 4.24 -CenterY 1.99 -Color $script:Warm -LightColor "#F2CB9F" -Mode "Vector"
 
     # Module 2 lower global branch.
     $null = Add-Fig3Rect -Page $page -Name "module2_global_input" -Left 2.64 -Bottom 0.48 -Right 3.08 -Top 1.20 -Fill $script:CoolLight -Line $script:Cool -LineWeightPt 0.9 -RoundingIn 0.05
-    $null = Add-Fig3Text -Page $page -Name "module2_global_input_label" -Text "Global`nhierarchical`nsemantic state" -CenterX 2.86 -CenterY 1.04 -Width 0.50 -Height 0.30 -FontSizePt 3.8
+    $null = Add-Fig3Text -Page $page -Name "module2_global_input_label" -Text "Global`nhierarchical`nsemantic state" -CenterX 2.86 -CenterY 1.04 -Width 0.50 -Height 0.30 -FontSizePt 5.0
     $null = Add-Fig3Svg -Page $page -Name "asset_global_state_module2" -Path ([string]$assetPaths["global_hierarchical_semantic_state"]) -CenterX 2.86 -CenterY 0.70 -MaxWidth 0.34 -MaxHeight 0.28
     $null = Add-Fig3Rect -Page $page -Name "global_value_branch" -Left 3.23 -Bottom 0.48 -Right 3.81 -Top 1.20 -Fill $script:CoolLight -Line $script:Cool -LineWeightPt 0.9 -RoundingIn 0.05
     $null = Add-Fig3Text -Page $page -Name "global_value_branch_label" -Text "Global value`nbranch" -CenterX 3.52 -CenterY 1.07 -Width 0.50 -Height 0.22 -FontSizePt 5.6 -Bold $true
     Add-Fig3FeatureBlocks -Page $page -Prefix "global_encoder" -CenterX 3.52 -CenterY 0.71 -Color $script:Cool -LightColor "#C8D9EB" -Mode "Encoder"
     $null = Add-Fig3Rect -Page $page -Name "global_exploration_value_feature" -Left 3.96 -Bottom 0.48 -Right 4.52 -Top 1.20 -Fill $script:CoolLight -Line $script:Cool -LineWeightPt 0.9 -RoundingIn 0.05
-    $null = Add-Fig3Text -Page $page -Name "global_exploration_value_feature_label" -Text "Global`nexploration-value`nfeature" -CenterX 4.24 -CenterY 1.04 -Width 0.50 -Height 0.30 -FontSizePt 4.6
+    $null = Add-Fig3Text -Page $page -Name "global_exploration_value_feature_label" -Text "Global`nexploration-`nvalue feature" -CenterX 4.24 -CenterY 1.04 -Width 0.50 -Height 0.30 -FontSizePt 5.0
     Add-Fig3FeatureBlocks -Page $page -Prefix "global_feature_vector" -CenterX 4.24 -CenterY 0.71 -Color $script:Cool -LightColor "#C8D9EB" -Mode "Vector"
 
     $null = Add-Fig3Line -Page $page -Name "connector_local_state_to_module2" -BeginX 2.34 -BeginY 2.11 -EndX 2.64 -EndY 2.11 -Color $script:Warm -WeightPt 1.25 -Arrow $true
@@ -476,8 +476,8 @@ try {
     Add-Fig3MaskGlyph -Page $page -CenterX 6.37 -CenterY 0.51
     $null = Add-Fig3Line -Page $page -Name "connector_qvalues_to_mask" -BeginX 6.37 -BeginY 1.59 -EndX 6.37 -EndY 1.02 -Color $script:Green -WeightPt 1.2 -Arrow $true
 
-    $null = Add-Fig3Rect -Page $page -Name "selected_action" -Left 6.77 -Bottom 0.43 -Right 7.15 -Top 0.87 -Fill $script:GreenLight -Line $script:Green -LineWeightPt 1.0 -RoundingIn 0.06 -Text "Selected`naction" -FontSizePt 3.6 -Bold $true
-    $null = Add-Fig3Line -Page $page -Name "connector_mask_to_selected_action" -BeginX 6.74 -BeginY 0.65 -EndX 6.77 -EndY 0.65 -Color $script:Green -WeightPt 1.2 -Arrow $true
+    $null = Add-Fig3Rect -Page $page -Name "selected_action" -Left 6.74 -Bottom 0.43 -Right 7.15 -Top 0.87 -Fill $script:GreenLight -Line $script:Green -LineWeightPt 1.0 -RoundingIn 0.06 -Text "Selected`naction" -FontSizePt 5.0 -Bold $true
+    $null = Add-Fig3Line -Page $page -Name "connector_mask_to_selected_action" -BeginX 6.72 -BeginY 0.65 -EndX 6.74 -EndY 0.65 -Color $script:Green -WeightPt 1.2 -Arrow $true
 
     $document.SaveAs($vsdxPath)
 
