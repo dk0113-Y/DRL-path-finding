@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Export deterministic, data-driven assets for Figure 3.
 
-The five assets in this module share one deterministic cumulative-belief
-snapshot.  Occupancy, visit history, the four-channel advantage canvas, and the
-hierarchical semantic tree are all computed through the active project
-implementation rather than reconstructed from a previously rendered figure.
+The Figure 3 input assets share one deterministic cumulative-belief scene.
+Occupancy, the complete executed trajectory, robot pose, the four-channel
+advantage canvas, and the hierarchical semantic tree are computed through the
+active project implementation rather than reconstructed from rendered figures.
 """
 
 import argparse
@@ -24,7 +24,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap
-from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
+from matplotlib.patches import Circle, FancyBboxPatch
+from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -39,10 +40,11 @@ from env.agent_version import LocalObservationModel  # noqa: E402
 from env.block_random_g import RandomMapGenerator  # noqa: E402
 from env.core_cummap import CumulativeBeliefMap  # noqa: E402
 from env.core_radar import RadarSensor  # noqa: E402
-from env.grid_topology import ACTIONS_8, INVISIBLE, GridTopology  # noqa: E402
+from env.grid_topology import ACTIONS_8, GridTopology  # noqa: E402
 from env.shared_semantic_layer import SharedSemanticLayer, SharedSemanticSnapshot  # noqa: E402
 from env.value_state_builder import ValueStateBuilder  # noqa: E402
 from tools.export_architecture_pictures import (  # noqa: E402
+    ACTION_TO_KEY,
     ExportConfig,
     FIXED_ACTION_PREFERENCES,
     KEY_TO_ACTION,
@@ -52,7 +54,15 @@ from tools.export_figure_demo_blueprint import (  # noqa: E402
     FigureDemoBlueprint,
     build_figure_demo_blueprint,
 )
-from tools.paper_figure_style import load_paper_figure_style  # noqa: E402
+from tools.export_online_workflow_assets import (  # noqa: E402
+    OnlineWorkflowStyle,
+    _figure_size,
+)
+from tools.paper_figure_style import (  # noqa: E402
+    draw_topdown_robot,
+    load_paper_figure_style,
+    occupancy_colormap,
+)
 
 
 DEFAULT_OUTPUT_DIR = (
@@ -70,7 +80,6 @@ DEFAULT_SOURCE_MANIFEST = (
     / "online_workflow_assets_manifest.json"
 )
 MANIFEST_FILENAME = "fig3_overview_assets_manifest.json"
-LOCAL_CROP_SIZE = 11
 MAX_DISPLAY_BLOCKS = 4
 MAX_DISPLAY_ENTRIES_PER_BLOCK = 4
 
@@ -82,22 +91,6 @@ BLUE_LIGHT = "#E8F0F8"
 GREEN = "#55966B"
 INK = "#233746"
 GRID = "#C7D0D8"
-
-
-@dataclass(frozen=True, slots=True)
-class CropBounds:
-    array_r0: int
-    array_r1: int
-    array_c0: int
-    array_c1: int
-    world_r0: int
-    world_r1: int
-    world_c0: int
-    world_c1: int
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self.array_r1 - self.array_r0, self.array_c1 - self.array_c0
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,8 +107,6 @@ class Fig3OverviewScene:
     advantage_canvas: np.ndarray
     advantage_meta: dict[str, object]
     value_meta: dict[str, float]
-    crop_bounds: CropBounds
-    crop_belief: np.ndarray
 
 
 def _configure_matplotlib() -> None:
@@ -162,37 +153,6 @@ def _sha256_int8(array: np.ndarray) -> str:
     return hashlib.sha256(
         np.ascontiguousarray(np.asarray(array, dtype=np.int8)).tobytes()
     ).hexdigest()
-
-
-def _fixed_crop(
-    array: np.ndarray,
-    *,
-    center_rc: tuple[int, int],
-    size: int,
-    fill_value: int,
-) -> tuple[np.ndarray, tuple[int, int, int, int]]:
-    if int(size) <= 0 or int(size) % 2 != 1:
-        raise ValueError("crop size must be a positive odd integer")
-    source = np.asarray(array)
-    half = int(size) // 2
-    desired_r0 = int(center_rc[0]) - half
-    desired_c0 = int(center_rc[1]) - half
-    desired_r1 = desired_r0 + int(size)
-    desired_c1 = desired_c0 + int(size)
-    output = np.full((int(size), int(size)), fill_value, dtype=source.dtype)
-
-    src_r0 = max(0, desired_r0)
-    src_r1 = min(int(source.shape[0]), desired_r1)
-    src_c0 = max(0, desired_c0)
-    src_c1 = min(int(source.shape[1]), desired_c1)
-    if src_r0 < src_r1 and src_c0 < src_c1:
-        dst_r0 = src_r0 - desired_r0
-        dst_c0 = src_c0 - desired_c0
-        output[
-            dst_r0 : dst_r0 + (src_r1 - src_r0),
-            dst_c0 : dst_c0 + (src_c1 - src_c0),
-        ] = source[src_r0:src_r1, src_c0:src_c1]
-    return output, (desired_r0, desired_r1, desired_c0, desired_c1)
 
 
 def _replay_canonical_snapshot(
@@ -345,25 +305,6 @@ def build_fig3_overview_scene(
     if int(np.count_nonzero(entry_mask)) != total_entries:
         raise RuntimeError("ValueStateBuilder entry packing drifted from semantic snapshot")
 
-    agent_array = tuple(int(v) for v in cum_map.world_to_array(agent_world))
-    crop_belief, desired_bounds = _fixed_crop(
-        cum_map.map,
-        center_rc=agent_array,
-        size=LOCAL_CROP_SIZE,
-        fill_value=INVISIBLE,
-    )
-    array_r0, array_r1, array_c0, array_c1 = desired_bounds
-    origin_r, origin_c = (int(v) for v in cum_map.origin_world_rc)
-    crop_bounds = CropBounds(
-        array_r0=array_r0,
-        array_r1=array_r1,
-        array_c0=array_c0,
-        array_c1=array_c1,
-        world_r0=origin_r + array_r0,
-        world_r1=origin_r + array_r1,
-        world_c0=origin_c + array_c0,
-        world_c1=origin_c + array_c1,
-    )
     return Fig3OverviewScene(
         config=config,
         requested_step=int(step),
@@ -377,20 +318,53 @@ def build_fig3_overview_scene(
         advantage_canvas=np.asarray(advantage_canvas, dtype=np.float32).copy(),
         advantage_meta=dict(advantage_meta),
         value_meta=dict(value_meta),
-        crop_bounds=crop_bounds,
-        crop_belief=np.asarray(crop_belief, dtype=np.int8).copy(),
     )
 
 
-def _occupancy_cmap():
-    style = load_paper_figure_style()
-    return ListedColormap(
-        [
-            style.occupancy_palette["unknown"],
-            style.occupancy_palette["free"],
-            style.occupancy_palette["obstacle"],
-        ]
+def _canonical_belief_background(scene: Fig3OverviewScene) -> np.ndarray:
+    """Return the exact B_t canvas used by the shared Figure 2 blueprint."""
+
+    background = np.asarray(scene.blueprint.belief_display, dtype=np.int8)
+    canvas_shape = tuple(int(v) for v in scene.blueprint.belief_canvas.shape)
+    if tuple(background.shape) != canvas_shape:
+        raise RuntimeError(
+            "shared belief background shape drifted from the blueprint canvas"
+        )
+    if not np.array_equal(
+        scene.cum_map.map,
+        scene.blueprint.belief_after_update.belief_map,
+    ):
+        raise RuntimeError("Figure 3 cumulative belief drifted from Figure 2 B_t")
+    return background.copy()
+
+
+def _trajectory_world_to_shared_canvas(
+    scene: Fig3OverviewScene,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project the complete executed trajectory onto the shared world canvas."""
+
+    points = np.asarray(scene.trajectory_world, dtype=np.float32)
+    if points.ndim != 2 or points.shape[1] != 2 or points.shape[0] < 2:
+        raise RuntimeError("the shared scene needs at least two trajectory points")
+    if tuple(int(v) for v in points[-1]) != tuple(scene.agent_world):
+        raise RuntimeError("executed trajectory does not terminate at the robot")
+    origin_row, origin_col = (
+        int(v) for v in scene.blueprint.belief_canvas.origin_world
     )
+    rows = points[:, 0] - float(origin_row)
+    cols = points[:, 1] - float(origin_col)
+    canvas_rows, canvas_cols = (
+        int(v) for v in scene.blueprint.belief_canvas.shape
+    )
+    inside = (
+        (rows >= -0.5)
+        & (rows <= float(canvas_rows) - 0.5)
+        & (cols >= -0.5)
+        & (cols <= float(canvas_cols) - 0.5)
+    )
+    if not bool(np.all(inside)):
+        raise RuntimeError("executed trajectory falls outside the shared canvas")
+    return rows, cols
 
 
 def _clean_map_axis(ax, shape: tuple[int, int]) -> None:
@@ -400,28 +374,55 @@ def _clean_map_axis(ax, shape: tuple[int, int]) -> None:
     ax.set_axis_off()
 
 
-def _draw_position_marker(ax, *, row: float, col: float, gid_prefix: str) -> None:
-    body = Circle(
-        (float(col), float(row)),
-        radius=0.38,
-        facecolor="#5185C0",
-        edgecolor="white",
-        linewidth=1.0,
-        zorder=8,
+def _create_shared_map_axis(
+    scene: Fig3OverviewScene,
+    *,
+    transparent: bool,
+) -> tuple[plt.Figure, object]:
+    """Create the Figure 2-aligned canvas used by all three shared assets."""
+
+    canvas_shape = tuple(int(v) for v in scene.blueprint.belief_canvas.shape)
+    workflow_style = OnlineWorkflowStyle()
+    facecolor = "none" if transparent else "white"
+    fig = plt.figure(
+        figsize=_figure_size(canvas_shape, workflow_style),
+        frameon=False,
     )
-    body.set_gid(f"{gid_prefix}_robot_marker")
-    ax.add_patch(body)
-    for dx in (-0.43, 0.43):
-        wheel = Rectangle(
-            (float(col) + dx - 0.08, float(row) - 0.27),
-            0.16,
-            0.54,
-            facecolor="#233746",
-            edgecolor="none",
-            zorder=7,
-        )
-        wheel.set_gid(f"{gid_prefix}_robot_wheel")
-        ax.add_patch(wheel)
+    fig.patch.set_facecolor(facecolor)
+    if transparent:
+        fig.patch.set_alpha(0.0)
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+    ax.set_facecolor(facecolor)
+    _clean_map_axis(ax, canvas_shape)
+    return fig, ax
+
+
+def _draw_shared_trajectory(
+    ax,
+    *,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    zorder: int,
+) -> tuple[object, ...]:
+    """Draw the one trajectory layer reused by the composite and overlay PNGs."""
+
+    (line,) = ax.plot(
+        np.asarray(cols, dtype=np.float32),
+        np.asarray(rows, dtype=np.float32),
+        color=BLUE_DARK,
+        linewidth=2.0,
+        alpha=0.94,
+        marker="o",
+        markersize=3.2,
+        markerfacecolor=BLUE,
+        markeredgecolor="white",
+        markeredgewidth=0.45,
+        solid_capstyle="round",
+        solid_joinstyle="round",
+        zorder=int(zorder),
+    )
+    line.set_gid("fig3_executed_trajectory")
+    return (line,)
 
 
 def _save_pair(
@@ -430,23 +431,28 @@ def _save_pair(
     *,
     dpi: int,
     include_svg: bool,
+    tight: bool = True,
+    transparent: bool = False,
 ) -> Path | None:
     png_path.parent.mkdir(parents=True, exist_ok=True)
+    facecolor = "none" if transparent else "white"
     fig.savefig(
         png_path,
         dpi=int(dpi),
-        bbox_inches="tight",
+        bbox_inches="tight" if tight else None,
         pad_inches=0.0,
-        facecolor="white",
+        facecolor=facecolor,
+        transparent=bool(transparent),
         metadata={"Software": "DRL-path-finding fig3 deterministic exporter"},
     )
     svg_path = png_path.with_suffix(".svg") if include_svg else None
     if svg_path is not None:
         fig.savefig(
             svg_path,
-            bbox_inches="tight",
+            bbox_inches="tight" if tight else None,
             pad_inches=0.0,
-            facecolor="white",
+            facecolor=facecolor,
+            transparent=bool(transparent),
             metadata={
                 "Date": None,
                 "Creator": "DRL-path-finding fig3 deterministic exporter",
@@ -462,47 +468,74 @@ def _render_dynamic_belief(
     *,
     include_svg: bool,
 ) -> Path | None:
-    fig = plt.figure(figsize=(2.8, 2.05), frameon=False)
-    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+    background = _canonical_belief_background(scene)
+    fig, ax = _create_shared_map_axis(scene, transparent=False)
+    cmap, norm = occupancy_colormap(load_paper_figure_style())
     image = ax.imshow(
-        scene.cum_map.map,
-        cmap=_occupancy_cmap(),
-        vmin=-1,
-        vmax=1,
+        background,
+        cmap=cmap,
+        norm=norm,
         origin="upper",
         interpolation="nearest",
+        zorder=1,
     )
     image.set_gid("fig3_dynamic_cumulative_belief_raster")
-    _clean_map_axis(ax, tuple(scene.cum_map.map.shape))
+    _clean_map_axis(ax, tuple(background.shape))
     return _save_pair(
-        fig, path, dpi=int(scene.config.dpi), include_svg=include_svg
+        fig,
+        path,
+        dpi=int(scene.config.dpi),
+        include_svg=include_svg,
+        tight=False,
     )
 
 
-def _render_robot_position(
+def _render_belief_with_robot_and_history(
     scene: Fig3OverviewScene,
     path: Path,
     *,
     include_svg: bool,
 ) -> Path | None:
-    fig = plt.figure(figsize=(1.6, 1.6), frameon=False)
-    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
-    ax.imshow(
-        scene.crop_belief,
-        cmap=_occupancy_cmap(),
-        vmin=-1,
-        vmax=1,
+    background = _canonical_belief_background(scene)
+    trajectory_rows, trajectory_cols = _trajectory_world_to_shared_canvas(scene)
+    fig, ax = _create_shared_map_axis(scene, transparent=False)
+    style = load_paper_figure_style()
+    cmap, norm = occupancy_colormap(style)
+    image = ax.imshow(
+        background,
+        cmap=cmap,
+        norm=norm,
         origin="upper",
         interpolation="nearest",
-        alpha=0.82,
+        zorder=1,
     )
-    center = LOCAL_CROP_SIZE // 2
-    _draw_position_marker(
-        ax, row=float(center), col=float(center), gid_prefix="fig3_position"
+    image.set_gid("fig3_shared_cumulative_belief_raster")
+    _draw_shared_trajectory(
+        ax,
+        rows=trajectory_rows,
+        cols=trajectory_cols,
+        zorder=6,
     )
-    _clean_map_axis(ax, tuple(scene.crop_belief.shape))
+    origin_row, origin_col = (
+        int(v) for v in scene.blueprint.belief_canvas.origin_world
+    )
+    robot_parts = draw_topdown_robot(
+        ax,
+        row=float(scene.agent_world[0] - origin_row),
+        col=float(scene.agent_world[1] - origin_col),
+        heading_action=int(scene.blueprint.selected_action),
+        style=style,
+        zorder=12,
+    )
+    for part_index, part in enumerate(robot_parts):
+        part.set_gid(f"fig3_topdown_robot_part_{part_index}")
+    _clean_map_axis(ax, tuple(background.shape))
     return _save_pair(
-        fig, path, dpi=int(scene.config.dpi), include_svg=include_svg
+        fig,
+        path,
+        dpi=int(scene.config.dpi),
+        include_svg=include_svg,
+        tight=False,
     )
 
 
@@ -512,53 +545,25 @@ def _render_interaction_history(
     *,
     include_svg: bool,
 ) -> Path | None:
-    fig = plt.figure(figsize=(1.6, 1.6), frameon=False)
-    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
-    ax.imshow(
-        scene.crop_belief,
-        cmap=_occupancy_cmap(),
-        vmin=-1,
-        vmax=1,
-        origin="upper",
-        interpolation="nearest",
-        alpha=0.58,
-    )
-    points = np.asarray(scene.recent_trajectory_world, dtype=np.float32)
-    rows = points[:, 0] - float(scene.crop_bounds.world_r0)
-    cols = points[:, 1] - float(scene.crop_bounds.world_c0)
-    segment_count = max(1, len(points) - 1)
-    for index in range(len(points) - 1):
-        progress = float(index + 1) / float(segment_count)
-        (line,) = ax.plot(
-            cols[index : index + 2],
-            rows[index : index + 2],
-            color=WARM,
-            linewidth=0.9 + (1.6 * progress),
-            alpha=0.28 + (0.66 * progress),
-            solid_capstyle="round",
-            zorder=6,
-        )
-        line.set_gid(f"fig3_trajectory_segment_{index:02d}")
-        point = ax.scatter(
-            [float(cols[index])],
-            [float(rows[index])],
-            s=7.0 + (9.0 * progress),
-            c=WARM,
-            alpha=0.34 + (0.60 * progress),
-            edgecolors="white",
-            linewidths=0.35,
-            zorder=7,
-        )
-        point.set_gid(f"fig3_trajectory_point_{index:02d}")
-    _draw_position_marker(
+    rows, cols = _trajectory_world_to_shared_canvas(scene)
+    fig, ax = _create_shared_map_axis(scene, transparent=True)
+    _draw_shared_trajectory(
         ax,
-        row=float(rows[-1]),
-        col=float(cols[-1]),
-        gid_prefix="fig3_history",
+        rows=rows,
+        cols=cols,
+        zorder=6,
     )
-    _clean_map_axis(ax, tuple(scene.crop_belief.shape))
+    _clean_map_axis(
+        ax,
+        tuple(int(v) for v in scene.blueprint.belief_canvas.shape),
+    )
     return _save_pair(
-        fig, path, dpi=int(scene.config.dpi), include_svg=include_svg
+        fig,
+        path,
+        dpi=int(scene.config.dpi),
+        include_svg=include_svg,
+        tight=False,
+        transparent=True,
     )
 
 
@@ -794,15 +799,63 @@ def _asset_record(
     svg_path: Path | None,
     *,
     render_layers: Sequence[str],
+    background_mode: str,
+    expected_transparency: bool | None,
+    belief_origin_world: Sequence[int] | None = None,
+    belief_canvas_shape: Sequence[int] | None = None,
+    trajectory_positions_world: Sequence[Sequence[int]] | None = None,
 ) -> dict[str, object]:
-    return {
+    with Image.open(png_path) as image:
+        png_mode = str(image.mode)
+        width_px, height_px = (int(v) for v in image.size)
+        rgba = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    alpha = rgba[..., 3]
+    transparent_pixel_count = int(np.count_nonzero(alpha == 0))
+    nontransparent_pixel_count = int(np.count_nonzero(alpha > 0))
+    has_transparency = bool(np.any(alpha < 255))
+    if (
+        expected_transparency is not None
+        and has_transparency != bool(expected_transparency)
+    ):
+        raise RuntimeError(
+            f"{name} transparency={has_transparency} does not match "
+            f"expected {bool(expected_transparency)}"
+        )
+    record: dict[str, object] = {
         "name": name,
+        "path": str(png_path.resolve()),
         "png_path": str(png_path.resolve()),
         "svg_path": None if svg_path is None else str(svg_path.resolve()),
+        "sha256": _sha256_file(png_path),
         "png_sha256": _sha256_file(png_path),
         "svg_sha256": None if svg_path is None else _sha256_file(svg_path),
+        "width_px": width_px,
+        "height_px": height_px,
+        "png_mode": png_mode,
+        "background_mode": str(background_mode),
+        "transparent_background": has_transparency,
+        "transparent_pixel_count": transparent_pixel_count,
+        "nontransparent_pixel_count": nontransparent_pixel_count,
         "render_layers": list(render_layers),
     }
+    if belief_origin_world is not None:
+        record["belief_origin_world"] = [
+            int(v) for v in belief_origin_world
+        ]
+    if belief_canvas_shape is not None:
+        record["belief_canvas_shape"] = [
+            int(v) for v in belief_canvas_shape
+        ]
+        record["coordinate_projection"] = (
+            "canvas_rc = world_rc - belief_origin_world; "
+            "imshow origin='upper', nearest-neighbor interpolation"
+        )
+    if trajectory_positions_world is not None:
+        record["trajectory_positions_world"] = [
+            [int(v) for v in position]
+            for position in trajectory_positions_world
+        ]
+    return record
 
 
 def export_fig3_overview_assets(
@@ -822,6 +875,10 @@ def export_fig3_overview_assets(
 ) -> dict[str, object]:
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
+    for legacy_name in ("robot_position.png", "robot_position.svg"):
+        legacy_path = output_dir_path / legacy_name
+        if legacy_path.is_file():
+            legacy_path.unlink()
     scene = build_fig3_overview_scene(
         seed=int(seed),
         step=int(step),
@@ -837,7 +894,8 @@ def export_fig3_overview_assets(
     png_paths = {
         "dynamic_cumulative_belief_map": output_dir_path
         / "dynamic_cumulative_belief_map.png",
-        "robot_position": output_dir_path / "robot_position.png",
+        "belief_map_with_robot_and_history": output_dir_path
+        / "belief_map_with_robot_and_history.png",
         "interaction_history": output_dir_path / "interaction_history.png",
         "local_occupancy_behavior_state": output_dir_path
         / "local_occupancy_behavior_state.png",
@@ -850,8 +908,12 @@ def export_fig3_overview_assets(
             png_paths["dynamic_cumulative_belief_map"],
             include_svg=include_svg,
         ),
-        "robot_position": _render_robot_position(
-            scene, png_paths["robot_position"], include_svg=include_svg
+        "belief_map_with_robot_and_history": (
+            _render_belief_with_robot_and_history(
+                scene,
+                png_paths["belief_map_with_robot_and_history"],
+                include_svg=include_svg,
+            )
         ),
         "interaction_history": _render_interaction_history(
             scene, png_paths["interaction_history"], include_svg=include_svg
@@ -890,35 +952,57 @@ def export_fig3_overview_assets(
         source_validation.get("same_belief_matrix_verified", False)
         and source_validation.get("seed_step_verified", False)
     )
-    crop = scene.crop_bounds
+    belief_origin_world = tuple(
+        int(v) for v in scene.blueprint.belief_canvas.origin_world
+    )
+    belief_canvas_shape = tuple(
+        int(v) for v in scene.blueprint.belief_canvas.shape
+    )
+    trajectory_positions_world = tuple(scene.trajectory_world)
     assets = {
         "dynamic_cumulative_belief_map": _asset_record(
             "dynamic_cumulative_belief_map",
             png_paths["dynamic_cumulative_belief_map"],
             svg_paths["dynamic_cumulative_belief_map"],
             render_layers=["cumulative_belief_occupancy"],
+            background_mode="opaque_white",
+            expected_transparency=False,
+            belief_origin_world=belief_origin_world,
+            belief_canvas_shape=belief_canvas_shape,
         ),
-        "robot_position": _asset_record(
-            "robot_position",
-            png_paths["robot_position"],
-            svg_paths["robot_position"],
-            render_layers=["cumulative_belief_crop", "robot_position_marker"],
+        "belief_map_with_robot_and_history": _asset_record(
+            "belief_map_with_robot_and_history",
+            png_paths["belief_map_with_robot_and_history"],
+            svg_paths["belief_map_with_robot_and_history"],
+            render_layers=[
+                "cumulative_belief_occupancy",
+                "executed_trajectory",
+                "topdown_robot",
+            ],
+            background_mode="opaque_white",
+            expected_transparency=False,
+            belief_origin_world=belief_origin_world,
+            belief_canvas_shape=belief_canvas_shape,
+            trajectory_positions_world=trajectory_positions_world,
         ),
         "interaction_history": _asset_record(
             "interaction_history",
             png_paths["interaction_history"],
             svg_paths["interaction_history"],
-            render_layers=[
-                "cumulative_belief_crop",
-                "executed_recent_trajectory",
-                "robot_position_marker",
-            ],
+            render_layers=["executed_trajectory"],
+            background_mode="transparent",
+            expected_transparency=True,
+            belief_origin_world=belief_origin_world,
+            belief_canvas_shape=belief_canvas_shape,
+            trajectory_positions_world=trajectory_positions_world,
         ),
         "local_occupancy_behavior_state": _asset_record(
             "local_occupancy_behavior_state",
             png_paths["local_occupancy_behavior_state"],
             svg_paths["local_occupancy_behavior_state"],
             render_layers=list(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS),
+            background_mode="existing_figure_background",
+            expected_transparency=None,
         ),
         "global_hierarchical_semantic_state": _asset_record(
             "global_hierarchical_semantic_state",
@@ -929,11 +1013,31 @@ def export_fig3_overview_assets(
                 "frontier_cluster_children",
                 "parent_child_edges",
             ],
+            background_mode="existing_figure_background",
+            expected_transparency=None,
         ),
     }
     paper_repo_path = Path(paper_repo)
+    trajectory_positions_payload = [
+        [int(v) for v in position]
+        for position in scene.trajectory_world
+    ]
+    selected_action_index = int(scene.blueprint.selected_action)
+    selected_action_key = str(ACTION_TO_KEY[selected_action_index])
+    shared_source_scene = {
+        "seed": int(scene.config.seed),
+        "requested_step": int(scene.requested_step),
+        "resolved_step": int(scene.resolved_step),
+        "agent_world_position": [int(v) for v in scene.agent_world],
+        "selected_action_index": selected_action_index,
+        "selected_action_key": selected_action_key,
+        "belief_origin_world": [int(v) for v in belief_origin_world],
+        "belief_canvas_shape": [int(v) for v in belief_canvas_shape],
+        "trajectory_length": int(len(scene.trajectory_world)),
+        "trajectory_positions_world": trajectory_positions_payload,
+    }
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "code_repo_commit": _git_head(REPO_ROOT),
         "paper_repo_commit_before_change": _git_head(paper_repo_path),
         "seed": int(scene.config.seed),
@@ -945,32 +1049,44 @@ def export_fig3_overview_assets(
         "obs_size": int(scene.config.obs_size),
         "scan_radius": int(scene.config.scan_radius),
         "agent_world_position": [int(v) for v in scene.agent_world],
-        "belief_origin_world": [
-            int(v) for v in scene.cum_map.origin_world_rc
-        ],
-        "belief_shape": [int(v) for v in scene.cum_map.map.shape],
-        "belief_matrix_sha256": _sha256_int8(scene.cum_map.map),
-        "crop_bounds": {
-            "array_half_open": [
-                int(crop.array_r0),
-                int(crop.array_r1),
-                int(crop.array_c0),
-                int(crop.array_c1),
-            ],
-            "world_half_open": [
-                int(crop.world_r0),
-                int(crop.world_r1),
-                int(crop.world_c0),
-                int(crop.world_c1),
-            ],
-            "shape": [int(v) for v in crop.shape],
-            "shared_by": ["robot_position", "interaction_history"],
-        },
+        "selected_action_index": selected_action_index,
+        "selected_action_key": selected_action_key,
+        "belief_origin_world": [int(v) for v in belief_origin_world],
+        "belief_shape": [int(v) for v in belief_canvas_shape],
+        "belief_canvas_shape": [int(v) for v in belief_canvas_shape],
+        "belief_matrix_sha256": _sha256_int8(
+            _canonical_belief_background(scene)
+        ),
+        "trajectory_length": int(len(scene.trajectory_world)),
+        "trajectory_positions_world": trajectory_positions_payload,
         "recent_trajectory_length": int(len(scene.recent_trajectory_world)),
         "recent_trajectory_positions_world": [
             [int(v) for v in position]
             for position in scene.recent_trajectory_world
         ],
+        "shared_source_scene": shared_source_scene,
+        "shared_source_assets": {
+            "dynamic_cumulative_belief_map": (
+                "Figure 2-aligned blueprint.belief_display on "
+                "blueprint.belief_canvas; occupancy only"
+            ),
+            "belief_map_with_robot_and_history": (
+                "the same B_t canvas plus scene.trajectory_world and "
+                "draw_topdown_robot at the current agent pose"
+            ),
+            "interaction_history": (
+                "the same scene.trajectory_world projected onto the same "
+                "transparent world canvas"
+            ),
+        },
+        "same_belief_background": True,
+        "same_world_canvas": True,
+        "same_coordinate_projection": True,
+        "same_trajectory_geometry": True,
+        "robot_position_asset_generated": False,
+        "robot_position_source": (
+            "manual crop from belief_map_with_robot_and_history"
+        ),
         "advantage_canvas_schema": ADVANTAGE_CANVAS_SCHEMA_FINAL_4CH_NO_FRONTIER_RASTER,
         "advantage_channel_names": list(
             FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS
@@ -1011,6 +1127,30 @@ def export_fig3_overview_assets(
             "local_state": "AdvantageStateBuilder.build",
             "global_state": "SharedSemanticLayer.analyze",
             "value_packing_validation": "ValueStateBuilder.build",
+        },
+        "figure_planning": {
+            "claim": (
+                "The dynamic belief, current robot pose, and interaction "
+                "history are synchronized views of one deterministic B_t scene."
+            ),
+            "anchor_asset": "belief_map_with_robot_and_history",
+            "asset_roles": {
+                "dynamic_cumulative_belief_map": (
+                    "methodological bridge: defines the shared B_t background"
+                ),
+                "belief_map_with_robot_and_history": (
+                    "claim-supporting anchor: shows B_t, executed history, and p_t"
+                ),
+                "interaction_history": (
+                    "claim-supporting overlay: isolates the same executed path"
+                ),
+                "local_occupancy_behavior_state": (
+                    "methodological bridge: unchanged four-channel local state"
+                ),
+                "global_hierarchical_semantic_state": (
+                    "methodological bridge: unchanged hierarchical semantic state"
+                ),
+            },
         },
         "inference_items": list(
             source_validation.get("inferred_fields", [])
