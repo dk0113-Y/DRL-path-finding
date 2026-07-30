@@ -86,7 +86,7 @@ function Set-VisioShapeFont {
     $fontId = $null
     foreach ($fontName in @($PreferredFont, $FallbackFont)) {
         try {
-            $font = $document.Fonts.ItemU($fontName)
+            $font = $document.Fonts.Item($fontName)
             $fontId = [int]$font.ID
             [void][Runtime.InteropServices.Marshal]::ReleaseComObject($font)
             break
