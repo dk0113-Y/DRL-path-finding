@@ -367,6 +367,13 @@ def _draw_local_window(ax, scene: Fig4StateConstructionScene) -> None:
     ax.add_patch(window)
 
 
+def _normalize_svg_whitespace(svg_path: Path) -> None:
+    """Remove generator-only trailing spaces without changing SVG geometry."""
+    text = svg_path.read_text(encoding="utf-8")
+    normalized = "\n".join(line.rstrip() for line in text.splitlines()) + "\n"
+    svg_path.write_text(normalized, encoding="utf-8", newline="\n")
+
+
 def _save_pair(
     fig: plt.Figure,
     png_path: Path,
@@ -396,6 +403,7 @@ def _save_pair(
                 "Creator": "DRL-path-finding fig4 deterministic exporter",
             },
         )
+        _normalize_svg_whitespace(svg_path)
         ET.parse(svg_path)
     plt.close(fig)
     return svg_path

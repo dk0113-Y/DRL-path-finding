@@ -116,6 +116,10 @@ def test_assets_are_deterministic_openable_png_and_parseable_svg(tmp_path: Path)
         with Image.open(png_path) as image:
             image.verify()
         ET.parse(svg_path)
+        assert all(
+            line == line.rstrip()
+            for line in svg_path.read_text(encoding="utf-8").splitlines()
+        )
 
     manifest_path = tmp_path / "first" / MANIFEST_FILENAME
     parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
