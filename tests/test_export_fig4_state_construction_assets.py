@@ -13,6 +13,7 @@ from tools.export_fig4_state_construction_assets import (
     MANIFEST_FILENAME,
     export_fig4_state_construction_assets,
 )
+from tools.export_online_workflow_assets import OnlineWorkflowStyle, _figure_size
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -121,6 +122,7 @@ def test_asset_layer_contracts_and_svg_gids_are_clean(tmp_path: Path) -> None:
     assert dynamic["trajectory"] is False
     assert dynamic["storage_boundary"] is False
     assert dynamic["local_window_boundary"] is False
+    assert dynamic["map_canvas_style"] == "fig3_shared_map_canvas"
 
     belief = assets["belief_map_with_robot_and_history"]["layer_contract"]
     assert belief["current_robot"] is True
@@ -131,6 +133,7 @@ def test_asset_layer_contracts_and_svg_gids_are_clean(tmp_path: Path) -> None:
     assert belief["storage_boundary"] is False
     assert belief["local_window_boundary"] is False
     assert belief["trajectory_style"] == "fig3_shared_blue"
+    assert belief["map_canvas_style"] == "fig3_shared_map_canvas"
     assert belief["belief_matrix_sha256"] == dynamic["belief_matrix_sha256"]
     assert belief["executed_trajectory_point_count"] == len(
         scene.shared.trajectory_world
@@ -155,10 +158,13 @@ def test_asset_layer_contracts_and_svg_gids_are_clean(tmp_path: Path) -> None:
     assert frontier["robot_marker"] is False
     assert frontier["trajectory"] is False
     assert frontier["semantic_analysis_box"] is False
+    assert frontier["map_canvas_style"] == "fig3_shared_map_canvas"
 
     style = manifest["trajectory_style_contract"]
     assert style == {
         "name": "fig3_shared_blue",
+        "renderer": "tools.export_fig3_overview_assets._draw_shared_trajectory",
+        "map_canvas_style": "fig3_shared_map_canvas",
         "line_color": "#315F91",
         "marker_color": "#5185C0",
         "marker_edge_color": "#FFFFFF",
@@ -170,6 +176,42 @@ def test_asset_layer_contracts_and_svg_gids_are_clean(tmp_path: Path) -> None:
         "solid_joinstyle": "round",
         "marker_size_or_alpha_gradient": False,
     }
+    canvas_contract = manifest["shared_map_canvas_contract"]
+    expected_canvas_shape = tuple(
+        int(v) for v in scene.shared.blueprint.belief_canvas.shape
+    )
+    expected_figure_size = _figure_size(expected_canvas_shape, OnlineWorkflowStyle())
+    assert canvas_contract["name"] == "fig3_shared_map_canvas"
+    assert canvas_contract["axis_renderer"] == (
+        "tools.export_fig3_overview_assets._create_shared_map_axis"
+    )
+    assert canvas_contract["figure_size_helper"] == (
+        "tools.export_online_workflow_assets._figure_size"
+    )
+    assert canvas_contract["canvas_shape"] == list(expected_canvas_shape)
+    assert np.allclose(canvas_contract["figure_size_inches"], expected_figure_size)
+    assert np.isclose(
+        canvas_contract["cell_size_inches"],
+        expected_figure_size[0] / expected_canvas_shape[1],
+    )
+
+    shared_map_records = [
+        assets[name]
+        for name in (
+            "dynamic_cumulative_belief_map",
+            "belief_map_with_robot_and_history",
+            "frontier_unknown_region_extraction",
+        )
+    ]
+    assert len({record["width_px"] for record in shared_map_records}) == 1
+    assert len({record["height_px"] for record in shared_map_records}) == 1
+    export_dpi = int(scene.shared.config.dpi)
+    assert abs(
+        (shared_map_records[0]["width_px"] / export_dpi) - expected_figure_size[0]
+    ) <= (1.0 / export_dpi)
+    assert abs(
+        (shared_map_records[0]["height_px"] / export_dpi) - expected_figure_size[1]
+    ) <= (1.0 / export_dpi)
 
     dynamic_ids = _svg_ids(Path(assets["dynamic_cumulative_belief_map"]["svg_path"]))
     belief_ids = _svg_ids(Path(assets["belief_map_with_robot_and_history"]["svg_path"]))

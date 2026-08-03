@@ -43,8 +43,16 @@ from env.value_state_builder import (  # noqa: E402
 )
 from tools.export_fig3_overview_assets import (  # noqa: E402
     Fig3OverviewScene,
+    _canonical_belief_background,
+    _create_shared_map_axis,
+    _draw_shared_trajectory,
     _replay_canonical_snapshot,
+    _trajectory_world_to_shared_canvas,
     build_fig3_overview_scene,
+)
+from tools.export_online_workflow_assets import (  # noqa: E402
+    OnlineWorkflowStyle,
+    _figure_size,
 )
 from tools.paper_figure_style import (  # noqa: E402
     draw_topdown_robot,
@@ -76,7 +84,7 @@ COOL_LIGHT = "#EEF4FA"
 GREEN = "#55966B"
 GRID = "#C7D0D8"
 
-FIG3_SHARED_TRAJECTORY_STYLE = {
+FIG3_SHARED_TRAJECTORY_STYLE_CONTRACT = {
     "line_color": COOL_DARK,
     "marker_color": COOL,
     "marker_edge_color": "#FFFFFF",
@@ -294,52 +302,16 @@ def _current_array_rc(scene: Fig4StateConstructionScene, world_rc: Sequence[int]
     return float(int(world_rc[0]) - int(origin_r)), float(int(world_rc[1]) - int(origin_c))
 
 
-def _draw_fig3_shared_blue_trajectory(
-    ax,
-    *,
-    rows: np.ndarray,
-    cols: np.ndarray,
-    gid: str,
-    zorder: int,
-) -> tuple[object, ...]:
-    """Strict Figure 3-equivalent blue trajectory with fixed marker styling."""
-
-    style = FIG3_SHARED_TRAJECTORY_STYLE
-    (line,) = ax.plot(
-        np.asarray(cols, dtype=np.float32),
-        np.asarray(rows, dtype=np.float32),
-        color=str(style["line_color"]),
-        linewidth=float(style["line_width_pt"]),
-        alpha=float(style["alpha"]),
-        marker="o",
-        markersize=float(style["marker_size_pt"]),
-        markerfacecolor=str(style["marker_color"]),
-        markeredgecolor=str(style["marker_edge_color"]),
-        markeredgewidth=float(style["marker_edge_width_pt"]),
-        solid_capstyle=str(style["solid_capstyle"]),
-        solid_joinstyle=str(style["solid_joinstyle"]),
-        zorder=int(zorder),
-    )
-    line.set_gid(gid)
-    return (line,)
-
-
 def _draw_history_and_robot(ax, scene: Fig4StateConstructionScene) -> None:
-    points = np.asarray(
-        [_current_array_rc(scene, rc) for rc in scene.shared.trajectory_world],
-        dtype=np.float32,
-    )
-    if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
-        raise RuntimeError("the Figure 4 shared trajectory needs at least two points")
-    if tuple(scene.shared.trajectory_world[-1]) != tuple(scene.shared.agent_world):
-        raise RuntimeError("the complete executed trajectory does not end at the robot")
-    _draw_fig3_shared_blue_trajectory(
+    rows, cols = _trajectory_world_to_shared_canvas(scene.shared)
+    trajectory_parts = _draw_shared_trajectory(
         ax,
-        rows=points[:, 0],
-        cols=points[:, 1],
-        gid="fig4_executed_trajectory",
+        rows=rows,
+        cols=cols,
         zorder=10,
     )
+    for part in trajectory_parts:
+        part.set_gid("fig4_executed_trajectory")
 
     agent_r, agent_c = _current_array_rc(scene, scene.shared.agent_world)
     robot_parts = draw_topdown_robot(
@@ -404,14 +376,41 @@ def _map_figure(array: np.ndarray) -> tuple[plt.Figure, object]:
     return fig, ax
 
 
+def _fig3_shared_map_figure(
+    scene: Fig4StateConstructionScene,
+) -> tuple[plt.Figure, object]:
+    """Reuse the exact Figure 3 map canvas rather than only its line parameters."""
+
+    return _create_shared_map_axis(scene.shared, transparent=False)
+
+
+def _fig3_shared_map_canvas_contract(
+    scene: Fig4StateConstructionScene,
+) -> dict[str, object]:
+    canvas_shape = tuple(int(v) for v in scene.shared.blueprint.belief_canvas.shape)
+    figure_size = _figure_size(canvas_shape, OnlineWorkflowStyle())
+    cell_width = float(figure_size[0]) / float(canvas_shape[1])
+    cell_height = float(figure_size[1]) / float(canvas_shape[0])
+    if not np.isclose(cell_width, cell_height, rtol=0.0, atol=1e-12):
+        raise RuntimeError("Figure 3 shared-map canvas does not preserve square cells")
+    return {
+        "name": "fig3_shared_map_canvas",
+        "axis_renderer": "tools.export_fig3_overview_assets._create_shared_map_axis",
+        "figure_size_helper": "tools.export_online_workflow_assets._figure_size",
+        "canvas_shape": list(canvas_shape),
+        "figure_size_inches": [float(v) for v in figure_size],
+        "cell_size_inches": cell_width,
+    }
+
+
 def _render_dynamic_map(
     scene: Fig4StateConstructionScene,
     path: Path,
     *,
     include_svg: bool,
 ) -> Path | None:
-    belief = np.asarray(scene.shared.cum_map.map, dtype=np.int8)
-    fig, ax = _map_figure(belief)
+    belief = _canonical_belief_background(scene.shared)
+    fig, ax = _fig3_shared_map_figure(scene)
     _draw_occupancy(ax, belief, gid="fig4_dynamic_cumulative_belief")
     _clean_map_axis(ax, tuple(belief.shape))
     return _save_pair(
@@ -429,8 +428,8 @@ def _render_belief_with_robot_and_history(
     *,
     include_svg: bool,
 ) -> Path | None:
-    belief = np.asarray(scene.shared.cum_map.map, dtype=np.int8)
-    fig, ax = _map_figure(belief)
+    belief = _canonical_belief_background(scene.shared)
+    fig, ax = _fig3_shared_map_figure(scene)
     _draw_occupancy(ax, belief, gid="fig4_belief_with_robot_and_history")
     _draw_history_and_robot(ax, scene)
     _clean_map_axis(ax, tuple(belief.shape))
@@ -464,13 +463,14 @@ def _render_local_window(
             [int(rc[1]) - int(agent_c) + center_c for rc in trajectory],
             dtype=np.float32,
         )
-        _draw_fig3_shared_blue_trajectory(
+        trajectory_parts = _draw_shared_trajectory(
             ax,
             rows=rows,
             cols=cols,
-            gid="fig4_local_window_recent_trajectory",
             zorder=8,
         )
+        for part in trajectory_parts:
+            part.set_gid("fig4_local_window_recent_trajectory")
     robot_parts = draw_topdown_robot(
         ax,
         row=float(center_r),
@@ -542,8 +542,8 @@ def _render_frontier_unknown_regions(
     *,
     include_svg: bool,
 ) -> Path | None:
-    belief = np.asarray(scene.shared.cum_map.map, dtype=np.int8)
-    fig, ax = _map_figure(belief)
+    belief = _canonical_belief_background(scene.shared)
+    fig, ax = _fig3_shared_map_figure(scene)
     _draw_occupancy(ax, belief, gid="fig4_frontier_overlay_belief")
     unknown_rgba = np.zeros((*belief.shape, 4), dtype=np.float32)
     frontier_rgba = np.zeros((*belief.shape, 4), dtype=np.float32)
@@ -765,6 +765,7 @@ def _asset_layer_contracts(
         "dynamic_cumulative_belief_map": {
             "cumulative_belief_occupancy": True,
             "belief_matrix_sha256": _sha256_int8(shared.cum_map.map),
+            "map_canvas_style": "fig3_shared_map_canvas",
             "robot": False,
             "trajectory": False,
             **common_clean_map_layers,
@@ -780,6 +781,7 @@ def _asset_layer_contracts(
             "previous_robot": False,
             "next_robot": False,
             "trajectory_style": "fig3_shared_blue",
+            "map_canvas_style": "fig3_shared_map_canvas",
             **common_clean_map_layers,
         },
         "robot_centered_local_window": {
@@ -795,6 +797,7 @@ def _asset_layer_contracts(
         },
         "frontier_unknown_region_extraction": {
             "cumulative_belief_occupancy": True,
+            "map_canvas_style": "fig3_shared_map_canvas",
             "unknown_region_overlay": True,
             "unknown_region_cell_count": unknown_region_cell_count,
             "frontier_cluster_overlay": True,
@@ -959,9 +962,12 @@ def export_fig4_state_construction_assets(
         "executed_trajectory_world": [list(rc) for rc in shared.trajectory_world],
         "trajectory_style_contract": {
             "name": "fig3_shared_blue",
-            **FIG3_SHARED_TRAJECTORY_STYLE,
+            "renderer": "tools.export_fig3_overview_assets._draw_shared_trajectory",
+            "map_canvas_style": "fig3_shared_map_canvas",
+            **FIG3_SHARED_TRAJECTORY_STYLE_CONTRACT,
             "marker_size_or_alpha_gradient": False,
         },
+        "shared_map_canvas_contract": _fig3_shared_map_canvas_contract(scene),
         "robot_centered_local_window_world_half_open": local_world_bounds,
         "local_window_shape": [local_h, local_w],
         "local_channel_names": list(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS),
