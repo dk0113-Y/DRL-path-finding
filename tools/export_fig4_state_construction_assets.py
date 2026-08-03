@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap
-from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
+from matplotlib.patches import FancyBboxPatch
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +76,18 @@ COOL_LIGHT = "#EEF4FA"
 GREEN = "#55966B"
 GRID = "#C7D0D8"
 
+FIG3_SHARED_TRAJECTORY_STYLE = {
+    "line_color": COOL_DARK,
+    "marker_color": COOL,
+    "marker_edge_color": "#FFFFFF",
+    "line_width_pt": 2.0,
+    "marker_size_pt": 3.2,
+    "marker_edge_width_pt": 0.45,
+    "alpha": 0.94,
+    "solid_capstyle": "round",
+    "solid_joinstyle": "round",
+}
+
 ASSET_NAMES = (
     "dynamic_cumulative_belief_map",
     "belief_map_with_robot_and_history",
@@ -111,6 +123,7 @@ def _configure_matplotlib() -> None:
             "font.sans-serif": ["Arial", "DejaVu Sans"],
             "svg.fonttype": "none",
             "svg.hashsalt": "msd-hsr-fig4-state-construction-v1",
+            "image.composite_image": False,
             "font.size": 8,
             "axes.spines.right": False,
             "axes.spines.top": False,
@@ -146,6 +159,12 @@ def _sha256_file(path: Path) -> str:
 def _sha256_int8(array: np.ndarray) -> str:
     return hashlib.sha256(
         np.ascontiguousarray(np.asarray(array, dtype=np.int8)).tobytes()
+    ).hexdigest()
+
+
+def _sha256_float32(array: np.ndarray) -> str:
+    return hashlib.sha256(
+        np.ascontiguousarray(np.asarray(array, dtype=np.float32)).tobytes()
     ).hexdigest()
 
 
@@ -275,36 +294,34 @@ def _current_array_rc(scene: Fig4StateConstructionScene, world_rc: Sequence[int]
     return float(int(world_rc[0]) - int(origin_r)), float(int(world_rc[1]) - int(origin_c))
 
 
-def _draw_storage_boundaries(ax, scene: Fig4StateConstructionScene) -> None:
-    current_shape = tuple(int(v) for v in scene.shared.cum_map.map.shape)
-    expanded = Rectangle(
-        (-0.46, -0.46),
-        float(current_shape[1]) - 0.08,
-        float(current_shape[0]) - 0.08,
-        fill=False,
-        edgecolor=COOL_DARK,
-        linewidth=1.6,
-        zorder=8,
-    )
-    expanded.set_gid("fig4_expanded_storage_boundary")
-    ax.add_patch(expanded)
+def _draw_fig3_shared_blue_trajectory(
+    ax,
+    *,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    gid: str,
+    zorder: int,
+) -> tuple[object, ...]:
+    """Strict Figure 3-equivalent blue trajectory with fixed marker styling."""
 
-    previous_top, previous_left = _current_array_rc(
-        scene,
-        scene.previous_origin_world,
+    style = FIG3_SHARED_TRAJECTORY_STYLE
+    (line,) = ax.plot(
+        np.asarray(cols, dtype=np.float32),
+        np.asarray(rows, dtype=np.float32),
+        color=str(style["line_color"]),
+        linewidth=float(style["line_width_pt"]),
+        alpha=float(style["alpha"]),
+        marker="o",
+        markersize=float(style["marker_size_pt"]),
+        markerfacecolor=str(style["marker_color"]),
+        markeredgecolor=str(style["marker_edge_color"]),
+        markeredgewidth=float(style["marker_edge_width_pt"]),
+        solid_capstyle=str(style["solid_capstyle"]),
+        solid_joinstyle=str(style["solid_joinstyle"]),
+        zorder=int(zorder),
     )
-    previous = Rectangle(
-        (previous_left - 0.46, previous_top - 0.46),
-        float(scene.previous_shape[1]) - 0.08,
-        float(scene.previous_shape[0]) - 0.08,
-        fill=False,
-        edgecolor=NEUTRAL,
-        linewidth=1.25,
-        linestyle=(0, (4, 2.5)),
-        zorder=9,
-    )
-    previous.set_gid("fig4_previous_storage_boundary")
-    ax.add_patch(previous)
+    line.set_gid(gid)
+    return (line,)
 
 
 def _draw_history_and_robot(ax, scene: Fig4StateConstructionScene) -> None:
@@ -312,30 +329,17 @@ def _draw_history_and_robot(ax, scene: Fig4StateConstructionScene) -> None:
         [_current_array_rc(scene, rc) for rc in scene.shared.trajectory_world],
         dtype=np.float32,
     )
-    rows = points[:, 0]
-    cols = points[:, 1]
-    weights = np.linspace(0.30, 1.0, len(points), dtype=np.float32)
-    line = ax.plot(
-        cols,
-        rows,
-        color=WARM,
-        linewidth=1.8,
-        alpha=0.88,
-        solid_capstyle="round",
+    if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
+        raise RuntimeError("the Figure 4 shared trajectory needs at least two points")
+    if tuple(scene.shared.trajectory_world[-1]) != tuple(scene.shared.agent_world):
+        raise RuntimeError("the complete executed trajectory does not end at the robot")
+    _draw_fig3_shared_blue_trajectory(
+        ax,
+        rows=points[:, 0],
+        cols=points[:, 1],
+        gid="fig4_executed_trajectory",
         zorder=10,
-    )[0]
-    line.set_gid("fig4_executed_trajectory")
-    markers = ax.scatter(
-        cols,
-        rows,
-        s=10.0 + (18.0 * weights),
-        c=np.repeat(np.asarray([[201 / 255, 97 / 255, 68 / 255, 1.0]]), len(points), axis=0),
-        alpha=weights,
-        edgecolors="white",
-        linewidths=0.35,
-        zorder=11,
     )
-    markers.set_gid("fig4_executed_trajectory_time_markers")
 
     agent_r, agent_c = _current_array_rc(scene, scene.shared.agent_world)
     robot_parts = draw_topdown_robot(
@@ -347,24 +351,7 @@ def _draw_history_and_robot(ax, scene: Fig4StateConstructionScene) -> None:
         zorder=14,
     )
     for index, part in enumerate(robot_parts):
-        part.set_gid(f"fig4_robot_part_{index}")
-
-
-def _draw_local_window(ax, scene: Fig4StateConstructionScene) -> None:
-    agent_r, agent_c = _current_array_rc(scene, scene.shared.agent_world)
-    h, w = (int(v) for v in scene.shared.cum_map.local_shape)
-    window = Rectangle(
-        (agent_c - (w / 2.0), agent_r - (h / 2.0)),
-        float(w),
-        float(h),
-        fill=False,
-        edgecolor=WARM,
-        linewidth=1.5,
-        linestyle=(0, (3.5, 2.0)),
-        zorder=13,
-    )
-    window.set_gid("fig4_robot_centered_local_window")
-    ax.add_patch(window)
+        part.set_gid(f"fig4_current_robot_part_{index}")
 
 
 def _normalize_svg_whitespace(svg_path: Path) -> None:
@@ -426,7 +413,6 @@ def _render_dynamic_map(
     belief = np.asarray(scene.shared.cum_map.map, dtype=np.int8)
     fig, ax = _map_figure(belief)
     _draw_occupancy(ax, belief, gid="fig4_dynamic_cumulative_belief")
-    _draw_storage_boundaries(ax, scene)
     _clean_map_axis(ax, tuple(belief.shape))
     return _save_pair(
         fig,
@@ -446,9 +432,7 @@ def _render_belief_with_robot_and_history(
     belief = np.asarray(scene.shared.cum_map.map, dtype=np.int8)
     fig, ax = _map_figure(belief)
     _draw_occupancy(ax, belief, gid="fig4_belief_with_robot_and_history")
-    _draw_storage_boundaries(ax, scene)
     _draw_history_and_robot(ax, scene)
-    _draw_local_window(ax, scene)
     _clean_map_axis(ax, tuple(belief.shape))
     return _save_pair(
         fig,
@@ -467,35 +451,36 @@ def _render_local_window(
 ) -> Path | None:
     fig, ax = _map_figure(scene.local_sampled_map)
     _draw_occupancy(ax, scene.local_sampled_map, gid="fig4_local_window_occupancy")
-    trajectory = list(scene.shared.recent_trajectory_world[:-1])
+    trajectory = list(scene.shared.recent_trajectory_world)
     center_r = int(scene.local_sampled_map.shape[0] // 2)
     center_c = int(scene.local_sampled_map.shape[1] // 2)
-    if trajectory:
+    if len(trajectory) >= 2:
         agent_r, agent_c = scene.shared.agent_world
-        rows = np.asarray([int(rc[0]) - int(agent_r) + center_r for rc in trajectory])
-        cols = np.asarray([int(rc[1]) - int(agent_c) + center_c for rc in trajectory])
-        weights = np.linspace(1.0 / len(trajectory), 1.0, len(trajectory))
-        ax.plot(cols, rows, color=WARM, linewidth=1.35, alpha=0.82, zorder=8)
-        ax.scatter(
-            cols,
-            rows,
-            s=8.0 + (16.0 * weights),
-            c=WARM,
-            alpha=weights,
-            edgecolors="white",
-            linewidths=0.3,
-            zorder=9,
+        rows = np.asarray(
+            [int(rc[0]) - int(agent_r) + center_r for rc in trajectory],
+            dtype=np.float32,
         )
-    robot = Circle(
-        (float(center_c), float(center_r)),
-        radius=0.58,
-        facecolor=COOL_DARK,
-        edgecolor="white",
-        linewidth=0.6,
+        cols = np.asarray(
+            [int(rc[1]) - int(agent_c) + center_c for rc in trajectory],
+            dtype=np.float32,
+        )
+        _draw_fig3_shared_blue_trajectory(
+            ax,
+            rows=rows,
+            cols=cols,
+            gid="fig4_local_window_recent_trajectory",
+            zorder=8,
+        )
+    robot_parts = draw_topdown_robot(
+        ax,
+        row=float(center_r),
+        col=float(center_c),
+        heading_action=int(scene.shared.blueprint.selected_action),
+        style=load_paper_figure_style(),
         zorder=12,
     )
-    robot.set_gid("fig4_local_window_robot_center")
-    ax.add_patch(robot)
+    for index, part in enumerate(robot_parts):
+        part.set_gid(f"fig4_local_window_current_robot_part_{index}")
     _clean_map_axis(ax, tuple(scene.local_sampled_map.shape))
     return _save_pair(
         fig,
@@ -514,13 +499,13 @@ def _render_local_channel(
     include_svg: bool,
 ) -> Path | None:
     cmaps = (
-        ListedColormap(["#FFFFFF", "#E99D4E"]),
+        ListedColormap(["#FFFFFF", "#99C290"]),
         ListedColormap(["#FFFFFF", "#303942"]),
         LinearSegmentedColormap.from_list(
             "fig4_visit_count", ["#FFFFFF", "#F2CB9F", WARM]
         ),
         LinearSegmentedColormap.from_list(
-            "fig4_recent_trajectory", ["#FFFFFF", "#F2CB9F", WARM]
+            "fig4_recent_trajectory", ["#FFFFFF", "#FFD3E0", WARM]
         ),
     )
     channel = np.asarray(scene.shared.advantage_canvas[channel_index], dtype=np.float32)
@@ -541,8 +526,8 @@ def _render_local_channel(
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(True)
-        spine.set_color(WARM if channel_index >= 2 else NEUTRAL)
-        spine.set_linewidth(0.9)
+        spine.set_color(GRID)
+        spine.set_linewidth(0.7)
     return _save_pair(
         fig,
         path,
@@ -560,7 +545,8 @@ def _render_frontier_unknown_regions(
     belief = np.asarray(scene.shared.cum_map.map, dtype=np.int8)
     fig, ax = _map_figure(belief)
     _draw_occupancy(ax, belief, gid="fig4_frontier_overlay_belief")
-    rgba = np.zeros((*belief.shape, 4), dtype=np.float32)
+    unknown_rgba = np.zeros((*belief.shape, 4), dtype=np.float32)
+    frontier_rgba = np.zeros((*belief.shape, 4), dtype=np.float32)
     blocks = tuple(scene.shared.semantic_snapshot.accessible_blocks)
     block_colors = (
         np.asarray([81, 133, 192, 255], dtype=np.float32) / 255.0,
@@ -569,37 +555,26 @@ def _render_frontier_unknown_regions(
     for block_slot, block in enumerate(blocks):
         color = block_colors[block_slot % len(block_colors)].copy()
         color[3] = 0.48
-        rgba[block.rows, block.cols] = color
+        unknown_rgba[block.rows, block.cols] = color
         for cluster in block.frontier_clusters:
-            rgba[cluster.rows, cluster.cols] = np.asarray(
+            frontier_rgba[cluster.rows, cluster.cols] = np.asarray(
                 [49 / 255, 95 / 255, 145 / 255, 0.98],
                 dtype=np.float32,
             )
-    overlay = ax.imshow(rgba, origin="upper", interpolation="nearest", zorder=7)
-    overlay.set_gid("fig4_unknown_regions_and_frontier_clusters")
-    agent_r, agent_c = _current_array_rc(scene, scene.shared.agent_world)
-    ax.scatter(
-        [agent_c],
-        [agent_r],
-        s=28,
-        c=WARM,
-        edgecolors="white",
-        linewidths=0.6,
-        zorder=10,
+    unknown_overlay = ax.imshow(
+        unknown_rgba,
+        origin="upper",
+        interpolation="nearest",
+        zorder=7,
     )
-    box = scene.shared.semantic_snapshot.analysis_box
-    analysis_outline = Rectangle(
-        (float(box.c0) - 0.45, float(box.r0) - 0.45),
-        float(box.c1 - box.c0) - 0.1,
-        float(box.r1 - box.r0) - 0.1,
-        fill=False,
-        edgecolor=COOL,
-        linewidth=0.9,
-        linestyle=(0, (3, 2)),
-        zorder=9,
+    unknown_overlay.set_gid("fig4_unknown_region_overlay")
+    frontier_overlay = ax.imshow(
+        frontier_rgba,
+        origin="upper",
+        interpolation="nearest",
+        zorder=8,
     )
-    analysis_outline.set_gid("fig4_semantic_analysis_box")
-    ax.add_patch(analysis_outline)
+    frontier_overlay.set_gid("fig4_frontier_cluster_overlay")
     _clean_map_axis(ax, tuple(belief.shape))
     return _save_pair(
         fig,
@@ -763,6 +738,110 @@ def _asset_record(name: str, png_path: Path, svg_path: Path | None) -> dict[str,
     }
 
 
+def _asset_layer_contracts(
+    scene: Fig4StateConstructionScene,
+) -> dict[str, dict[str, object]]:
+    shared = scene.shared
+    blocks = tuple(shared.semantic_snapshot.accessible_blocks)
+    unknown_region_cell_count = int(
+        sum(int(np.asarray(block.rows).size) for block in blocks)
+    )
+    frontier_cluster_cell_count = int(
+        sum(
+            int(np.asarray(cluster.rows).size)
+            for block in blocks
+            for cluster in block.frontier_clusters
+        )
+    )
+    common_clean_map_layers = {
+        "storage_boundary": False,
+        "previous_storage_boundary": False,
+        "local_window_boundary": False,
+        "text": False,
+        "legend": False,
+        "arrows": False,
+    }
+    contracts: dict[str, dict[str, object]] = {
+        "dynamic_cumulative_belief_map": {
+            "cumulative_belief_occupancy": True,
+            "belief_matrix_sha256": _sha256_int8(shared.cum_map.map),
+            "robot": False,
+            "trajectory": False,
+            **common_clean_map_layers,
+        },
+        "belief_map_with_robot_and_history": {
+            "cumulative_belief_occupancy": True,
+            "belief_matrix_sha256": _sha256_int8(shared.cum_map.map),
+            "executed_trajectory": True,
+            "executed_trajectory_point_count": len(shared.trajectory_world),
+            "executed_trajectory_endpoint_world": list(shared.trajectory_world[-1]),
+            "current_robot": True,
+            "current_robot_count": 1,
+            "previous_robot": False,
+            "next_robot": False,
+            "trajectory_style": "fig3_shared_blue",
+            **common_clean_map_layers,
+        },
+        "robot_centered_local_window": {
+            "local_sampled_occupancy": True,
+            "recent_history": True,
+            "recent_history_point_count": len(shared.recent_trajectory_world),
+            "trajectory_style": "fig3_shared_blue",
+            "current_robot": True,
+            "current_robot_count": 1,
+            "external_window_outline": False,
+            "text": False,
+            "legend": False,
+        },
+        "frontier_unknown_region_extraction": {
+            "cumulative_belief_occupancy": True,
+            "unknown_region_overlay": True,
+            "unknown_region_cell_count": unknown_region_cell_count,
+            "frontier_cluster_overlay": True,
+            "frontier_cluster_cell_count": frontier_cluster_cell_count,
+            "robot_marker": False,
+            "trajectory": False,
+            "semantic_analysis_box": False,
+            **common_clean_map_layers,
+        },
+        "compact_hierarchy": {
+            "implementation_derived_hierarchy": True,
+            "semantic_claim_changed": False,
+        },
+        "compact_packing": {
+            "implementation_derived_packing": True,
+            "semantic_claim_changed": False,
+        },
+    }
+    channel_palettes = (
+        ["#FFFFFF", "#99C290"],
+        ["#FFFFFF", "#303942"],
+        ["#FFFFFF", "#F2CB9F", "#C96144"],
+        ["#FFFFFF", "#FFD3E0", "#C96144"],
+    )
+    channel_asset_names = (
+        "local_channel_free_space",
+        "local_channel_obstacle",
+        "local_channel_visit_count",
+        "local_channel_recent_trajectory",
+    )
+    for channel_index, asset_name in enumerate(channel_asset_names):
+        channel = np.asarray(shared.advantage_canvas[channel_index], dtype=np.float32)
+        contracts[asset_name] = {
+            "source": "scene.shared.advantage_canvas",
+            "channel_index": channel_index,
+            "channel_name": FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS[channel_index],
+            "source_array_shape": list(channel.shape),
+            "source_array_sha256_float32": _sha256_float32(channel),
+            "render_palette": channel_palettes[channel_index],
+            "robot": False,
+            "window_outline": False,
+            "text": False,
+            "legend": False,
+        }
+    return contracts
+
+
 def _world_bounds(origin: Sequence[int], shape: Sequence[int]) -> list[int]:
     return [
         int(origin[0]),
@@ -851,6 +930,9 @@ def export_fig4_state_construction_assets(
         name: _asset_record(name, png_paths[name], svg_paths[name])
         for name in ASSET_NAMES
     }
+    asset_layer_contracts = _asset_layer_contracts(scene)
+    for name in ASSET_NAMES:
+        asset_records[name]["layer_contract"] = asset_layer_contracts[name]
     manifest = {
         "schema_version": 1,
         "code_repo_commit": _git_head(REPO_ROOT),
@@ -869,8 +951,17 @@ def export_fig4_state_construction_assets(
         "expanded_storage_shape": list(current_shape),
         "expanded_storage_bounds_world_half_open": current_bounds,
         "storage_expansion_cells": expansion,
+        "storage_boundary_rendered": False,
+        "previous_boundary_rendered": False,
+        "local_window_boundary_rendered_in_belief_asset": False,
+        "storage_expansion_recorded_in_manifest": True,
         "robot_world_position": list(shared.agent_world),
         "executed_trajectory_world": [list(rc) for rc in shared.trajectory_world],
+        "trajectory_style_contract": {
+            "name": "fig3_shared_blue",
+            **FIG3_SHARED_TRAJECTORY_STYLE,
+            "marker_size_or_alpha_gradient": False,
+        },
         "robot_centered_local_window_world_half_open": local_world_bounds,
         "local_window_shape": [local_h, local_w],
         "local_channel_names": list(FINAL_4CH_ADVANTAGE_CANVAS_CHANNELS),
