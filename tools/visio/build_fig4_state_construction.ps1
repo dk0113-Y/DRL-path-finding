@@ -32,6 +32,18 @@ $script:Green = "#55966B"
 $script:GreenLight = "#EEF7F0"
 $script:Neutral = "#607487"
 $script:NeutralLight = "#F4F7F9"
+$script:ElementOf = [char]0x2208
+$script:Times = [char]0x00D7
+$script:Delta = [char]0x0394
+$script:RightArrow = [char]0x2192
+$script:LocalTensorText = ("S_t^loc {0} R^(4{1}21{1}21)" -f $script:ElementOf, $script:Times)
+$script:BlockTensorText = ("B_t {0} R^(16{1}2)" -f $script:ElementOf, $script:Times)
+$script:EntryTensorText = ("E_t {0} R^(16{1}8{1}4)" -f $script:ElementOf, $script:Times)
+$script:BlockMaskText = ("M_t^B {0} {{0,1}}^16" -f $script:ElementOf)
+$script:EntryMaskText = ("M_t^E {0} {{0,1}}^(16{1}8)" -f $script:ElementOf, $script:Times)
+$script:HistoryWeightingText = ("older  {0}  newer (linear weighting)" -f $script:RightArrow)
+$script:EntranceFeatureText = ("e_(t,i,j) = [{0}r/H, {0}c/W, frontier-cluster scale, obstacle density]" -f $script:Delta)
+$script:InterfaceSummaryText = ("Local fixed window + global hierarchical semantic abstraction`n{0} five fixed-dimensional inputs" -f $script:RightArrow)
 
 function Resolve-AbsolutePath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -443,8 +455,8 @@ try {
         $null = Add-Fig4Asset -Page $page -Name "asset_channel_$($card.Name)" -Path ([string]$assetPaths[[string]$card.Key]) -CenterX ([double]$card.X) -CenterY ([double]$card.Y) -MaxWidth 0.43 -MaxHeight 0.43
     }
     $null = Add-Fig4Line -Page $page -Name "connector_local_crop_to_channels" -BeginX 2.31 -BeginY 2.35 -EndX 2.43 -EndY 2.35 -Color $script:Warm -WeightPt 1.05 -Arrow $true
-    $null = Add-Fig4Rect -Page $page -Name "local_tensor_output" -Left 1.84 -Bottom 0.54 -Right 3.29 -Top 1.04 -Fill "#FFFFFF" -Line $script:Warm -LineWeightPt 0.9 -RoundingIn 0.05 -Text "S_t^loc ∈ R^(4×21×21)" -FontSizePt 7.0 -Bold $true -FontName $script:MathFontName
-    $null = Add-Fig4Text -Page $page -Name "local_history_note" -Text "older  →  newer (linear weighting)" -CenterX 2.98 -CenterY 1.25 -Width 0.90 -Height 0.16 -FontSizePt 4.5 -Color $script:Warm
+    $null = Add-Fig4Rect -Page $page -Name "local_tensor_output" -Left 1.84 -Bottom 0.54 -Right 3.29 -Top 1.04 -Fill "#FFFFFF" -Line $script:Warm -LineWeightPt 0.9 -RoundingIn 0.05 -Text $script:LocalTensorText -FontSizePt 7.0 -Bold $true -FontName $script:MathFontName
+    $null = Add-Fig4Text -Page $page -Name "local_history_note" -Text $script:HistoryWeightingText -CenterX 2.98 -CenterY 1.25 -Width 0.90 -Height 0.16 -FontSizePt 4.5 -Color $script:Warm
 
     # A visible shared-source split without implying local-to-global causation.
     $junction = $page.DrawOval(1.455, 2.05, 1.505, 2.10)
@@ -475,7 +487,7 @@ try {
     $null = Add-Fig4Line -Page $page -Name "connector_global_step_2_to_3" -BeginX 5.15 -BeginY 2.05 -EndX 5.20 -EndY 2.05 -Color $script:Cool -WeightPt 0.9 -Arrow $true
     $null = Add-Fig4Rect -Page $page -Name "global_feature_summary" -Left 3.76 -Bottom 0.22 -Right 5.78 -Top 1.02 -Fill "#FFFFFF" -Line $script:Cool -LineWeightPt 0.75 -RoundingIn 0.035
     $null = Add-Fig4Text -Page $page -Name "block_feature_equation" -Text "b_(t,i) = [relative area, number of entrances]" -CenterX 4.77 -CenterY 0.77 -Width 1.86 -Height 0.18 -FontSizePt 5.0 -FontName $script:MathFontName
-    $null = Add-Fig4Text -Page $page -Name "entrance_feature_equation" -Text "e_(t,i,j) = [Δr/H, Δc/W, frontier-cluster scale, obstacle density]" -CenterX 4.77 -CenterY 0.49 -Width 1.92 -Height 0.28 -FontSizePt 4.7 -FontName $script:MathFontName
+    $null = Add-Fig4Text -Page $page -Name "entrance_feature_equation" -Text $script:EntranceFeatureText -CenterX 4.77 -CenterY 0.49 -Width 1.92 -Height 0.28 -FontSizePt 4.7 -FontName $script:MathFontName
 
     # Global branch rail from the same snapshot, kept outside Panel (b) content.
     $null = Add-Fig4Line -Page $page -Name "connector_split_global_drop" -BeginX 1.48 -BeginY 2.075 -EndX 1.48 -EndY 0.12 -Color $script:Cool -WeightPt 0.95
@@ -486,11 +498,11 @@ try {
     # Panel (d): one compact interface object, not five oversized cards.
     $null = Add-Fig4Rect -Page $page -Name "fixed_interface_group" -Left 6.14 -Bottom 0.72 -Right 7.06 -Top 2.88 -Fill "#FFFFFF" -Line $script:Green -LineWeightPt 0.95 -RoundingIn 0.055
     $interfaceRows = @(
-        @{ Name = "interface_local"; Text = "S_t^loc ∈ R^(4×21×21)"; Fill = $script:WarmLight; Line = $script:Warm },
-        @{ Name = "interface_block"; Text = "B_t ∈ R^(16×2)"; Fill = $script:CoolLight; Line = $script:Cool },
-        @{ Name = "interface_entry"; Text = "E_t ∈ R^(16×8×4)"; Fill = $script:CoolLight; Line = $script:Cool },
-        @{ Name = "interface_block_mask"; Text = "M_t^B ∈ {0,1}^16"; Fill = $script:GreenLight; Line = $script:Green },
-        @{ Name = "interface_entry_mask"; Text = "M_t^E ∈ {0,1}^(16×8)"; Fill = $script:GreenLight; Line = $script:Green }
+        @{ Name = "interface_local"; Text = $script:LocalTensorText; Fill = $script:WarmLight; Line = $script:Warm },
+        @{ Name = "interface_block"; Text = $script:BlockTensorText; Fill = $script:CoolLight; Line = $script:Cool },
+        @{ Name = "interface_entry"; Text = $script:EntryTensorText; Fill = $script:CoolLight; Line = $script:Cool },
+        @{ Name = "interface_block_mask"; Text = $script:BlockMaskText; Fill = $script:GreenLight; Line = $script:Green },
+        @{ Name = "interface_entry_mask"; Text = $script:EntryMaskText; Fill = $script:GreenLight; Line = $script:Green }
     )
     for ($index = 0; $index -lt $interfaceRows.Count; $index++) {
         $top = 2.72 - (0.37 * $index)
@@ -511,7 +523,7 @@ try {
             -FontName $script:MathFontName
     }
     $null = Add-Fig4Text -Page $page -Name "interface_key_note" -Text "five policy inputs" -CenterX 6.60 -CenterY 0.88 -Width 0.80 -Height 0.16 -FontSizePt 5.0 -Bold $true -Color $script:Green
-    $null = Add-Fig4Text -Page $page -Name "map_size_decoupling_summary" -Text "Local fixed window + global hierarchical semantic abstraction`n→ five fixed-dimensional inputs" -CenterX 6.60 -CenterY 0.36 -Width 0.94 -Height 0.42 -FontSizePt 4.5 -Color $script:Neutral
+    $null = Add-Fig4Text -Page $page -Name "map_size_decoupling_summary" -Text $script:InterfaceSummaryText -CenterX 6.60 -CenterY 0.36 -Width 0.94 -Height 0.42 -FontSizePt 4.5 -Color $script:Neutral
     $null = Add-Fig4Line -Page $page -Name "connector_global_to_interface" -BeginX 5.96 -BeginY 1.72 -EndX 6.14 -EndY 1.72 -Color $script:Green -WeightPt 1.05 -Arrow $true
 
     $document.SaveAs($vsdxPath)
@@ -556,6 +568,13 @@ try {
         }
     }
     $joinedText = [string]::Join("`n", $allText)
+    $allowedUnicodeCodePoints = @(0x00D7, 0x0394, 0x2192, 0x2208)
+    $unexpectedUnicode = @($joinedText.ToCharArray() | Where-Object {
+        ([int]$_ -gt 0x7F) -and ([int]$_ -notin $allowedUnicodeCodePoints)
+    })
+    if ($unexpectedUnicode.Count -gt 0) {
+        throw "Figure 4 contains unexpected Unicode text after reopen; check script encoding and formula labels."
+    }
     foreach ($required in @(
         "Dynamic cumulative belief map",
         "previous boundary",
@@ -574,7 +593,15 @@ try {
         "B_t",
         "E_t",
         "M_t^B",
-        "M_t^E"
+        "M_t^E",
+        $script:LocalTensorText,
+        $script:BlockTensorText,
+        $script:EntryTensorText,
+        $script:BlockMaskText,
+        $script:EntryMaskText,
+        ([string]$script:Delta + "r/H"),
+        ("older  {0}  newer" -f $script:RightArrow),
+        ([string]$script:RightArrow + " five fixed-dimensional inputs")
     )) {
         if (-not $joinedText.Contains($required)) {
             throw "Required Figure 4 text fragment was not found after reopen: $required"
