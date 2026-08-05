@@ -515,6 +515,8 @@ def export_online_workflow_assets(
     normal_width = float(style.paper.rendering["normal_action_linewidth_pt"])
     manifest = {
         **blueprint_manifest(blueprint),
+        "dpi": int(base.dpi),
+        "include_svg": bool(include_svg),
         "chosen_action_index": int(assets.action_index),
         "chosen_action_key": str(assets.action_key),
         "chosen_action_delta_row_col": list(expected_delta),

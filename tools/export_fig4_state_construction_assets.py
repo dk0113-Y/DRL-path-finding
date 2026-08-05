@@ -145,15 +145,25 @@ def _configure_matplotlib() -> None:
 _configure_matplotlib()
 
 
-def _git_head(repo: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
+def _git_head(repo: Path) -> str | None:
+    """Return a repository commit without making optional repositories mandatory."""
+
+    repo_path = Path(repo)
+    if not repo_path.is_dir():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def _sha256_file(path: Path) -> str:
@@ -936,10 +946,15 @@ def export_fig4_state_construction_assets(
     asset_layer_contracts = _asset_layer_contracts(scene)
     for name in ASSET_NAMES:
         asset_records[name]["layer_contract"] = asset_layer_contracts[name]
+    paper_repo_path = Path(paper_repo)
     manifest = {
         "schema_version": 1,
         "code_repo_commit": _git_head(REPO_ROOT),
-        "paper_repo_commit_before_change": _git_head(Path(paper_repo)),
+        "paper_repo_commit_before_change": _git_head(paper_repo_path),
+        "paper_repo_path": str(paper_repo_path.resolve()),
+        "paper_repo_available": paper_repo_path.is_dir(),
+        "dpi": int(shared.config.dpi),
+        "include_svg": bool(include_svg),
         "scene_source": "tools.export_fig3_overview_assets.build_fig3_overview_scene",
         "seed": int(shared.config.seed),
         "requested_step": int(shared.requested_step),

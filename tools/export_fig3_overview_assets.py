@@ -130,15 +130,25 @@ def _configure_matplotlib() -> None:
 _configure_matplotlib()
 
 
-def _git_head(repo: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip()
+def _git_head(repo: Path) -> str | None:
+    """Return a repository commit without making optional repositories mandatory."""
+
+    repo_path = Path(repo)
+    if not repo_path.is_dir():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def _sha256_file(path: Path) -> str:
@@ -725,6 +735,13 @@ def _validate_source_manifest(
             if source_manifest_path is None
             else str(source_manifest_path.resolve()),
             "manifest_verified": False,
+            "validation_status": "skipped",
+            "validation_skipped": True,
+            "skip_reason": (
+                "source_manifest_not_provided"
+                if source_manifest_path is None
+                else "source_manifest_not_found"
+            ),
             "seed_step_verified": False,
             "same_belief_matrix_verified": False,
             "source_png_exists": False,
@@ -763,6 +780,9 @@ def _validate_source_manifest(
         "manifest_path": str(source_manifest_path.resolve()),
         "manifest_sha256": _sha256_file(source_manifest_path),
         "manifest_verified": manifest_verified,
+        "validation_status": "verified" if manifest_verified else "failed",
+        "validation_skipped": False,
+        "skip_reason": None,
         "seed_step_verified": seed_step_match,
         "same_belief_matrix_verified": matrix_match,
         "source_png_path": str(source_png.resolve()) if source_png else "",
@@ -1040,6 +1060,10 @@ def export_fig3_overview_assets(
         "schema_version": 2,
         "code_repo_commit": _git_head(REPO_ROOT),
         "paper_repo_commit_before_change": _git_head(paper_repo_path),
+        "paper_repo_path": str(paper_repo_path.resolve()),
+        "paper_repo_available": paper_repo_path.is_dir(),
+        "dpi": int(scene.config.dpi),
+        "include_svg": bool(include_svg),
         "seed": int(scene.config.seed),
         "requested_step": int(scene.requested_step),
         "resolved_step": int(scene.resolved_step),
