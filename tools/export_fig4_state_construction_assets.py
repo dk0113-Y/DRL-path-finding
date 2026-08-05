@@ -535,9 +535,7 @@ def _render_local_channel(
     ax.set_xticks([])
     ax.set_yticks([])
     for spine in ax.spines.values():
-        spine.set_visible(True)
-        spine.set_color(GRID)
-        spine.set_linewidth(0.7)
+        spine.set_visible(False)
     return _save_pair(
         fig,
         path,
